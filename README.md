@@ -32,7 +32,7 @@ Application Electron cross-platform pour gérer les sauvegardes automatisées et
 
 1. **Cloner le projet**
 ```bash
-git clone <url>
+git clone https://github.com/poup-s/bbdump
 cd bbdump
 ```
 
@@ -217,7 +217,6 @@ Chaque base de données peut avoir son propre niveau de sécurité :
 ☑ Chiffrer le mot de passe (recommandé)
 ```
 
-Cochez cette case pour activer le chiffrement (activé par défaut). Voir [CHIFFREMENT_OPTIONNEL.md](CHIFFREMENT_OPTIONNEL.md) pour plus de détails.
 
 ### Fichier de clé
 
@@ -247,8 +246,6 @@ Un onglet **⚙️ Paramètres** est disponible dans l'application pour gérer f
 - Permet de synchroniser plusieurs instances de l'application
 
 🎯 **Cas d'usage** : Si vous utilisez l'application sur plusieurs machines (PC bureau + laptop), exportez la clé depuis la première et importez-la sur la seconde pour partager la même configuration.
-
-Pour plus de détails sur la sécurité, consultez [SECURITY.md](SECURITY.md).
 
 ## 📝 Logs
 

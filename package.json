@@ -32,12 +32,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/YOUR_USERNAME/bbdump.git"
+    "url": "https://github.com/poup-s/bbdump.git"
   },
   "bugs": {
-    "url": "https://github.com/YOUR_USERNAME/bbdump/issues"
+    "url": "https://github.com/poup-s/bbdump/issues"
   },
-  "homepage": "https://github.com/YOUR_USERNAME/bbdump#readme",
+  "homepage": "https://github.com/poup-s/bbdump#readme",
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@types/node-cron": "^3.0.11",
