@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>bbdump - PostgreSQL Backup Manager</title>
+  <link rel="icon" type="image/png" href="logo.png">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    }
+    
+    .dark {
+      background-color: #1a202c;
+      color: #e2e8f0;
+    }
+
+    .dark .bg-white {
+      background-color: #2d3748;
+    }
+
+    .dark .bg-gray-50 {
+      background-color: #2d3748;
+    }
+
+    .dark .bg-gray-100 {
+      background-color: #374151;
+    }
+
+    .dark .text-gray-900 {
+      color: #e2e8f0;
+    }
+
+    .dark .text-gray-700 {
+      color: #cbd5e0;
+    }
+
+    .dark .text-gray-600 {
+      color: #a0aec0;
+    }
+
+    .dark .border-gray-300 {
+      border-color: #4a5568;
+    }
+
+    .dark input,
+    .dark select {
+      background-color: #374151;
+      color: #e2e8f0;
+      border-color: #4a5568;
+    }
+
+    /* Toast animations */
+    .toast-enter-active,
+    .toast-leave-active {
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    .toast-enter-from {
+      transform: translateX(120%) scale(0.95);
+      opacity: 0;
+    }
+    
+    .toast-leave-to {
+      transform: translateX(120%) scale(0.95);
+      opacity: 0;
+    }
+    
+    .toast-move {
+      transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script src="./app.js"></script>
+
+</html>
+

@@ -1,0 +1,103 @@
+{
+  "name": "bbdump",
+  "version": "1.8.2",
+  "description": "Cross-platform PostgreSQL backup manager with automated scheduling, encryption, and modern UI",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "build": "tsc && npm run copy-renderer",
+    "copy-renderer": "cp src/renderer/index.html dist/renderer/ && cp src/renderer/app.js dist/renderer/ && cp src/renderer/logo.png dist/renderer/",
+    "dev": "npm run build && electron .",
+    "dist": "npm run build && electron-builder",
+    "dmg": "npm run build && electron-builder --mac dmg",
+    "dmg:universal": "npm run build && electron-builder --mac --universal dmg",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "dist:all": "npm run build && electron-builder --mac --win --linux",
+    "start": "electron ."
+  },
+  "keywords": [
+    "electron",
+    "postgresql",
+    "backup",
+    "pg_dump",
+    "database",
+    "automation",
+    "cron",
+    "encryption",
+    "cross-platform",
+    "bbdump"
+  ],
+  "author": "Poups <your-email@example.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR_USERNAME/bbdump.git"
+  },
+  "bugs": {
+    "url": "https://github.com/YOUR_USERNAME/bbdump/issues"
+  },
+  "homepage": "https://github.com/YOUR_USERNAME/bbdump#readme",
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/node-cron": "^3.0.11",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "node-cron": "^3.0.3",
+    "vue": "^3.3.13"
+  },
+  "build": {
+    "appId": "com.bbdump.app",
+    "productName": "bbdump",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "config.json",
+      "backups/**/*",
+      "logs/**/*",
+      "logo.png"
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": "dmg",
+      "icon": "logo.png"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64", "ia32"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "logo.png",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "sign": null,
+      "verifyUpdateCodeSignature": false
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "deb",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "category": "Utility",
+      "icon": "logo.png",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    }
+  }
+}
+

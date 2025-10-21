@@ -1,0 +1,100 @@
+# Dependencies
+node_modules/
+jspm_packages/
+
+# Build output
+dist/
+dist-electron/
+build/
+release/
+out/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+app.log
+
+# Backups (user data - DO NOT COMMIT)
+backups/
+*.backup
+*.dump
+
+# Configuration (contains encrypted passwords - DO NOT COMMIT)
+config.json
+
+# Encryption key (CRITICAL - DO NOT COMMIT)
+.encryption.key
+.encryption.key.backup-*
+encryption.key
+bbdump-encryption.key
+*.key
+
+# OS files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+Desktop.ini
+$RECYCLE.BIN/
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+
+# Temporary files
+*.tmp
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Optional cache
+.npm
+.eslintcache
+.stylelintcache
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Package files
+*.tgz
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# Electron builder
+electron-builder.yml
+
