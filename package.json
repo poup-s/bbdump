@@ -46,7 +46,9 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
+    "@types/pg": "^8.15.6",
     "node-cron": "^3.0.3",
+    "pg": "^8.16.3",
     "vue": "^3.3.13"
   },
   "build": {
@@ -71,11 +73,16 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64", "ia32"]
+          "arch": [
+            "x64",
+            "ia32"
+          ]
         },
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "logo.png",
@@ -87,11 +94,17 @@
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         },
         {
           "target": "deb",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "category": "Utility",
@@ -100,4 +113,3 @@
     }
   }
 }
-

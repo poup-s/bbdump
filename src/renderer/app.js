@@ -37,7 +37,8 @@ const translations = {
       tableActions: 'Actions',
       statusActive: '⏸ ACTIVE',
       statusPaused: '▶ PAUSED',
-      statusManual: 'Manual'
+      statusManual: 'Manual',
+      viewDatabase: 'View Database'
     },
     backups: {
       title: 'Performed backups',
@@ -271,7 +272,8 @@ const translations = {
       tableActions: 'Actions',
       statusActive: '⏸ ACTIF',
       statusPaused: '▶ PAUSE',
-      statusManual: 'Manuel'
+      statusManual: 'Manuel',
+      viewDatabase: 'Voir la base'
     },
     backups: {
       title: 'Sauvegardes réalisées',
@@ -484,6 +486,28 @@ createApp({
       showEditModal: false,
       isBackingUp: {},
       openMenuDb: null, // Pour tracker quel menu database est ouvert
+      showDbViewer: false,
+      viewerDb: null,
+      dbTables: [],
+      selectedTable: null,
+      tableSchema: null,
+      tableData: [],
+      tableDataTotal: 0,
+      tableDataOffset: 0,
+      tableDataHasMore: false,
+      tableRelations: [],
+      loadingTables: false,
+      loadingTableData: false,
+      loadingMoreData: false,
+      viewerSections: {
+        schema: false,
+        relations: false,
+        data: true
+      },
+      tableDataSearch: '',
+      searchDebounceTimer: null,
+      visibleColumns: [],
+      showColumnsMenu: false,
       useUrl: false,
       connectionUrl: '',
       editingDb: null,
@@ -550,9 +574,10 @@ createApp({
     this.loadBackups();
     this.checkEncryptionKey();
 
-    // Fermer le menu database quand on clique ailleurs
+    // Fermer les menus quand on clique ailleurs
     document.addEventListener('click', () => {
       this.openMenuDb = null;
+      this.showColumnsMenu = false;
     });
     
     // Écouter les événements de backup automatique
@@ -573,6 +598,19 @@ createApp({
     });
   },
   
+  watch: {
+    tableDataSearch(newValue) {
+      // Debounce la recherche pour ne pas faire trop de requêtes
+      if (this.searchDebounceTimer) {
+        clearTimeout(this.searchDebounceTimer);
+      }
+
+      this.searchDebounceTimer = setTimeout(() => {
+        this.performSearch();
+      }, 500); // Attendre 500ms après la dernière frappe
+    }
+  },
+
   computed: {
     // i18n translation function
     t() {
@@ -678,6 +716,175 @@ createApp({
   methods: {
     toggleDbMenu(dbName) {
       this.openMenuDb = this.openMenuDb === dbName ? null : dbName;
+    },
+
+    toggleColumn(columnName) {
+      const index = this.visibleColumns.indexOf(columnName);
+      if (index > -1) {
+        // Empêcher de décocher si c'est la dernière colonne visible
+        if (this.visibleColumns.length > 1) {
+          this.visibleColumns.splice(index, 1);
+        }
+      } else {
+        this.visibleColumns.push(columnName);
+      }
+    },
+
+    selectAllColumns() {
+      if (this.tableData.length > 0) {
+        this.visibleColumns = Object.keys(this.tableData[0]);
+      }
+    },
+
+    deselectAllColumns() {
+      // Garder au moins une colonne visible (la première)
+      if (this.tableData.length > 0) {
+        this.visibleColumns = [Object.keys(this.tableData[0])[0]];
+      }
+    },
+
+    async openDatabaseViewer(db) {
+      this.viewerDb = db;
+      this.showDbViewer = true;
+      this.selectedTable = null;
+      this.tableSchema = null;
+      this.tableData = [];
+      this.tableRelations = [];
+      await this.loadDatabaseTables();
+    },
+
+    closeDatabaseViewer() {
+      this.showDbViewer = false;
+      this.viewerDb = null;
+      this.dbTables = [];
+      this.selectedTable = null;
+    },
+
+    async loadDatabaseTables() {
+      if (!this.viewerDb) return;
+
+      this.loadingTables = true;
+      try {
+        const result = await ipcRenderer.invoke('get-database-tables', {
+          host: this.viewerDb.host,
+          port: this.viewerDb.port,
+          user: this.viewerDb.user,
+          password: this.viewerDb.password,
+          database: this.viewerDb.name,
+          connectionString: this.viewerDb.connectionString
+        });
+        this.dbTables = result.tables;
+      } catch (error) {
+        console.error('Error loading tables:', error);
+        alert('Error loading database tables: ' + error.message);
+      } finally {
+        this.loadingTables = false;
+      }
+    },
+
+    async selectTable(tableName) {
+      this.selectedTable = tableName;
+      this.tableDataSearch = ''; // Reset search when changing table
+      this.tableDataOffset = 0;
+      this.loadingTableData = true;
+
+      try {
+        // Charger le schéma
+        const schemaResult = await ipcRenderer.invoke('get-table-schema', {
+          host: this.viewerDb.host,
+          port: this.viewerDb.port,
+          user: this.viewerDb.user,
+          password: this.viewerDb.password,
+          database: this.viewerDb.name,
+          connectionString: this.viewerDb.connectionString,
+          table: tableName
+        });
+        this.tableSchema = schemaResult;
+
+        // Charger un aperçu des données
+        await this.loadTableData(false);
+
+        // Initialiser toutes les colonnes comme visibles
+        if (this.tableData.length > 0) {
+          this.visibleColumns = Object.keys(this.tableData[0]);
+        }
+
+        // Charger les relations
+        const relationsResult = await ipcRenderer.invoke('get-table-relations', {
+          host: this.viewerDb.host,
+          port: this.viewerDb.port,
+          user: this.viewerDb.user,
+          password: this.viewerDb.password,
+          database: this.viewerDb.name,
+          connectionString: this.viewerDb.connectionString,
+          table: this.selectedTable
+        });
+        this.tableRelations = relationsResult.relations;
+      } catch (error) {
+        console.error('Error loading table data:', error);
+        alert('Error loading table: ' + error.message);
+      } finally {
+        this.loadingTableData = false;
+      }
+    },
+
+    async loadTableData(append = false) {
+      if (!this.selectedTable) return;
+
+      try {
+        const dataResult = await ipcRenderer.invoke('get-table-data', {
+          host: this.viewerDb.host,
+          port: this.viewerDb.port,
+          user: this.viewerDb.user,
+          password: this.viewerDb.password,
+          database: this.viewerDb.name,
+          connectionString: this.viewerDb.connectionString,
+          table: this.selectedTable,
+          limit: 100,
+          offset: append ? this.tableDataOffset : 0,
+          search: this.tableDataSearch || undefined
+        });
+
+        if (append) {
+          this.tableData = [...this.tableData, ...dataResult.rows];
+        } else {
+          this.tableData = dataResult.rows;
+        }
+
+        this.tableDataTotal = dataResult.total;
+        this.tableDataOffset = dataResult.offset + dataResult.rows.length;
+        this.tableDataHasMore = dataResult.hasMore;
+      } catch (error) {
+        console.error('Error loading table data:', error);
+        throw error;
+      }
+    },
+
+    async loadMoreData() {
+      if (!this.tableDataHasMore || this.loadingMoreData) return;
+
+      this.loadingMoreData = true;
+      try {
+        await this.loadTableData(true);
+      } catch (error) {
+        alert('Error loading more data: ' + error.message);
+      } finally {
+        this.loadingMoreData = false;
+      }
+    },
+
+    async performSearch() {
+      if (!this.selectedTable) return;
+
+      this.tableDataOffset = 0;
+      this.loadingTableData = true;
+      try {
+        await this.loadTableData(false);
+      } catch (error) {
+        alert('Error searching data: ' + error.message);
+      } finally {
+        this.loadingTableData = false;
+      }
     },
 
     async loadConfig() {
@@ -1670,6 +1877,16 @@ createApp({
                       @click.stop
                       class="absolute right-0 mt-2 w-48 bg-white border border-gray-200 shadow-lg z-50 rounded-sm overflow-hidden"
                     >
+                      <button
+                        @click="openDatabaseViewer(db); openMenuDb = null"
+                        class="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 flex items-center gap-3 transition-colors border-b border-gray-100"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                        </svg>
+                        <span>{{ t('databases.viewDatabase') }}</span>
+                      </button>
                       <button
                         @click="backupNow(db.name); openMenuDb = null"
                         :disabled="isBackingUp[db.name]"
@@ -3087,6 +3304,315 @@ createApp({
             </div>
           </div>
         </transition-group>
+      </div>
+
+      <!-- Database Viewer Modal (Fullscreen) -->
+      <div v-if="showDbViewer" class="fixed inset-0 bg-white z-50 flex flex-col">
+        <!-- Header -->
+        <div class="bg-black text-white px-6 py-4 flex items-center justify-between">
+          <div class="flex items-center gap-4">
+            <h2 class="text-lg font-medium">{{ viewerDb ? getDbDisplayName(viewerDb) : '' }}</h2>
+            <span v-if="viewerDb" class="text-sm text-gray-400 font-mono">
+              {{ viewerDb.host }}:{{ viewerDb.port }} / {{ viewerDb.name }}
+            </span>
+          </div>
+          <button
+            @click="closeDatabaseViewer"
+            class="text-white hover:text-gray-300 text-xl px-3 py-1"
+          >
+            ✕
+          </button>
+        </div>
+
+        <!-- Main Content -->
+        <div class="flex-1 flex overflow-hidden">
+          <!-- Sidebar: List of Tables -->
+          <div class="w-64 bg-gray-50 border-r border-gray-200 overflow-y-auto">
+            <div class="p-4">
+              <h3 class="text-sm font-medium text-gray-700 uppercase tracking-wide mb-3">Tables</h3>
+
+              <div v-if="loadingTables" class="text-center py-8 text-gray-500 text-sm">
+                Loading tables...
+              </div>
+
+              <div v-else-if="dbTables.length === 0" class="text-center py-8 text-gray-400 text-sm">
+                No tables found
+              </div>
+
+              <div v-else class="space-y-1">
+                <button
+                  v-for="table in dbTables"
+                  :key="table.name"
+                  @click="selectTable(table.name)"
+                  :class="[
+                    'w-full text-left px-3 py-2 text-sm transition-colors flex items-center justify-between',
+                    selectedTable === table.name
+                      ? 'bg-black text-white'
+                      : 'hover:bg-gray-200 text-gray-700'
+                  ]"
+                >
+                  <span>{{ table.name }}</span>
+                  <span v-if="table.row_count" class="text-xs opacity-60">{{ table.row_count }}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Main Panel: Table Details -->
+          <div class="flex-1 overflow-auto bg-white">
+            <div v-if="!selectedTable" class="flex items-center justify-center h-full text-gray-400">
+              <div class="text-center">
+                <svg class="w-16 h-16 mx-auto mb-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/>
+                </svg>
+                <p class="text-sm">Select a table to view its structure and data</p>
+              </div>
+            </div>
+
+            <div v-else-if="loadingTableData" class="flex items-center justify-center h-full">
+              <div class="text-center text-gray-500">
+                <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-black mx-auto mb-4"></div>
+                <p>Loading table data...</p>
+              </div>
+            </div>
+
+            <div v-else class="p-6 space-y-6">
+              <!-- Table Name -->
+              <div>
+                <h3 class="text-2xl font-bold text-gray-900 mb-2">{{ selectedTable }}</h3>
+                <p v-if="tableSchema" class="text-sm text-gray-500">{{ tableSchema.columns.length }} columns</p>
+              </div>
+
+              <!-- Schema Section -->
+              <div v-if="tableSchema">
+                <button
+                  @click="viewerSections.schema = !viewerSections.schema"
+                  class="w-full flex items-center justify-between py-2 hover:bg-gray-50 transition-colors"
+                >
+                  <h4 class="text-sm font-medium text-gray-700 uppercase tracking-wide">
+                    Schema
+                    <span class="text-gray-400 text-xs ml-2">({{ tableSchema.columns.length }} columns)</span>
+                  </h4>
+                  <svg
+                    class="w-5 h-5 text-gray-500 transition-transform"
+                    :class="{ 'rotate-180': viewerSections.schema }"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                  </svg>
+                </button>
+                <div v-show="viewerSections.schema" class="border border-gray-200 rounded mt-3">
+                  <table class="min-w-full">
+                    <thead class="bg-gray-50">
+                      <tr>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Column</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Nullable</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Default</th>
+                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Key</th>
+                      </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                      <tr v-for="col in tableSchema.columns" :key="col.column_name">
+                        <td class="px-4 py-2 text-sm font-mono text-gray-900">{{ col.column_name }}</td>
+                        <td class="px-4 py-2 text-sm font-mono text-gray-600">{{ col.data_type }}</td>
+                        <td class="px-4 py-2 text-sm text-gray-600">{{ col.is_nullable }}</td>
+                        <td class="px-4 py-2 text-sm font-mono text-gray-600">{{ col.column_default || '—' }}</td>
+                        <td class="px-4 py-2 text-sm">
+                          <span v-if="col.is_primary" class="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs font-mono">PK</span>
+                          <span v-if="col.is_foreign" class="px-2 py-0.5 bg-blue-100 text-blue-800 text-xs font-mono">FK</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Relations Section -->
+              <div v-if="tableRelations && tableRelations.length > 0">
+                <button
+                  @click="viewerSections.relations = !viewerSections.relations"
+                  class="w-full flex items-center justify-between py-2 hover:bg-gray-50 transition-colors"
+                >
+                  <h4 class="text-sm font-medium text-gray-700 uppercase tracking-wide">
+                    Relations
+                    <span class="text-gray-400 text-xs ml-2">({{ tableRelations.length }})</span>
+                  </h4>
+                  <svg
+                    class="w-5 h-5 text-gray-500 transition-transform"
+                    :class="{ 'rotate-180': viewerSections.relations }"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                  </svg>
+                </button>
+                <div v-show="viewerSections.relations" class="space-y-2 mt-3">
+                  <div v-for="rel in tableRelations" :key="rel.constraint_name" class="border border-gray-200 rounded p-3 bg-gray-50">
+                    <div class="flex items-center gap-2 text-sm">
+                      <span class="font-mono text-gray-900">{{ rel.column_name }}</span>
+                      <span class="text-gray-400">→</span>
+                      <span class="font-mono text-blue-600">{{ rel.foreign_table_name }}.{{ rel.foreign_column_name }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Data Preview Section -->
+              <div v-if="tableData && tableData.length > 0">
+                <button
+                  @click="viewerSections.data = !viewerSections.data"
+                  class="w-full flex items-center justify-between py-2 hover:bg-gray-50 transition-colors"
+                >
+                  <h4 class="text-sm font-medium text-gray-700 uppercase tracking-wide">
+                    Data Preview
+                    <span class="text-gray-400 text-xs ml-2">
+                      ({{ tableData.length }} / {{ tableDataTotal }} rows{{ tableDataSearch ? ' matching' : '' }})
+                    </span>
+                  </h4>
+                  <svg
+                    class="w-5 h-5 text-gray-500 transition-transform"
+                    :class="{ 'rotate-180': viewerSections.data }"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                  </svg>
+                </button>
+                <div v-show="viewerSections.data" class="mt-3 space-y-3">
+                  <!-- Toolbar: Search + Columns -->
+                  <div class="flex gap-2">
+                    <!-- Search Box -->
+                    <div class="flex-1 flex items-center gap-2 bg-gray-50 border border-gray-200 rounded px-3 py-2">
+                      <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                      </svg>
+                      <input
+                        v-model="tableDataSearch"
+                        type="text"
+                        placeholder="Search in data..."
+                        class="flex-1 bg-transparent outline-none text-sm text-gray-700 placeholder-gray-400"
+                      />
+                      <button
+                        v-if="tableDataSearch"
+                        @click="tableDataSearch = ''"
+                        class="text-gray-400 hover:text-gray-600 text-sm"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    <!-- Columns Selector -->
+                    <div class="relative">
+                      <button
+                        @click.stop="showColumnsMenu = !showColumnsMenu"
+                        class="px-4 py-2 bg-gray-50 border border-gray-200 rounded hover:bg-gray-100 transition-colors flex items-center gap-2 text-sm font-medium text-gray-700"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/>
+                        </svg>
+                        Columns
+                        <span class="text-xs text-gray-500">({{ visibleColumns.length }})</span>
+                      </button>
+
+                      <!-- Dropdown Menu -->
+                      <div
+                        v-if="showColumnsMenu && tableData.length > 0"
+                        @click.stop
+                        class="absolute right-0 mt-2 w-64 bg-white border border-gray-200 shadow-lg rounded z-50 max-h-96 overflow-y-auto"
+                      >
+                        <!-- Header -->
+                        <div class="sticky top-0 bg-gray-50 border-b border-gray-200 px-3 py-2 flex items-center justify-between">
+                          <span class="text-xs font-medium text-gray-700 uppercase">Select Columns</span>
+                          <div class="flex gap-2">
+                            <button
+                              @click="selectAllColumns"
+                              class="text-xs text-blue-600 hover:text-blue-800"
+                            >
+                              All
+                            </button>
+                            <button
+                              @click="deselectAllColumns"
+                              class="text-xs text-gray-600 hover:text-gray-800"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        </div>
+
+                        <!-- Column Checkboxes -->
+                        <div class="py-1">
+                          <label
+                            v-for="column in Object.keys(tableData[0])"
+                            :key="column"
+                            class="flex items-center px-3 py-2 hover:bg-gray-50 cursor-pointer transition-colors"
+                          >
+                            <input
+                              type="checkbox"
+                              :checked="visibleColumns.includes(column)"
+                              @change="toggleColumn(column)"
+                              class="w-4 h-4 cursor-pointer"
+                            />
+                            <span class="ml-3 text-sm font-mono text-gray-700">{{ column }}</span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Table -->
+                  <div class="border border-gray-200 rounded overflow-x-auto">
+                  <table class="min-w-full">
+                    <thead class="bg-gray-50">
+                      <tr>
+                        <th v-for="key in visibleColumns" :key="key" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                          {{ key }}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                      <tr v-if="tableData.length === 0 && tableDataSearch">
+                        <td :colspan="visibleColumns.length" class="px-4 py-8 text-center text-gray-400 text-sm">
+                          No results found for "{{ tableDataSearch }}"
+                        </td>
+                      </tr>
+                      <tr v-for="(row, idx) in tableData" :key="idx" class="hover:bg-gray-50">
+                        <td v-for="key in visibleColumns" :key="key" class="px-4 py-2 text-sm font-mono text-gray-600 max-w-xs truncate">
+                          {{ row[key] !== null && row[key] !== undefined ? row[key] : '—' }}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  </div>
+
+                  <!-- Load More Button -->
+                  <div v-if="tableDataHasMore" class="flex justify-center py-4">
+                    <button
+                      @click="loadMoreData"
+                      :disabled="loadingMoreData"
+                      class="px-6 py-2 bg-black text-white hover:bg-gray-800 disabled:bg-gray-400 transition-colors text-sm font-medium"
+                    >
+                      {{ loadingMoreData ? 'Loading...' : 'Load More (100 rows)' }}
+                    </button>
+                  </div>
+
+                  <!-- Info Footer -->
+                  <div class="text-center text-xs text-gray-500 py-2">
+                    Showing {{ tableData.length }} of {{ tableDataTotal }} total rows
+                  </div>
+                </div>
+              </div>
+
+              <div v-else-if="selectedTable && !loadingTableData">
+                <p class="text-gray-400 text-center py-8">No data in this table</p>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   `

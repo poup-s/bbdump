@@ -8,6 +8,7 @@ import { logger } from './logger';
 import { encryptionManager } from './encryption';
 import { fileEncryptionManager } from './fileEncryption';
 import { pathManager } from './paths';
+import * as dbViewer from './dbViewer';
 
 const CONFIG_PATH = pathManager.configPath;
 
@@ -423,6 +424,47 @@ ipcMain.handle('restore-backup', async (_, payload: { backupFile: string; target
       timestamp: new Date().toISOString(),
       error: `Unexpected error: ${error}`
     };
+  }
+});
+
+// Database Viewer Handlers
+ipcMain.handle('get-database-tables', async (_, params: { host: string; port: number; user: string; password: string; database: string; connectionString?: string }) => {
+  try {
+    logger.info(`Getting tables for database: ${params.database}`);
+    return await dbViewer.getDatabaseTables(params);
+  } catch (error) {
+    logger.error(`Error getting database tables: ${error}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('get-table-schema', async (_, params: { host: string; port: number; user: string; password: string; database: string; connectionString?: string; table: string }) => {
+  try {
+    logger.info(`Getting schema for table: ${params.table}`);
+    return await dbViewer.getTableSchema(params);
+  } catch (error) {
+    logger.error(`Error getting table schema: ${error}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('get-table-relations', async (_, params: { host: string; port: number; user: string; password: string; database: string; connectionString?: string; table: string }) => {
+  try {
+    logger.info(`Getting relations for table: ${params.table}`);
+    return await dbViewer.getTableRelations(params);
+  } catch (error) {
+    logger.error(`Error getting table relations: ${error}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('get-table-data', async (_, params: { host: string; port: number; user: string; password: string; database: string; connectionString?: string; table: string; limit: number }) => {
+  try {
+    logger.info(`Getting data for table: ${params.table} (limit: ${params.limit})`);
+    return await dbViewer.getTableData(params);
+  } catch (error) {
+    logger.error(`Error getting table data: ${error}`);
+    throw error;
   }
 });
 
