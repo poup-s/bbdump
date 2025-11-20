@@ -468,6 +468,32 @@ ipcMain.handle('get-table-data', async (_, params: { host: string; port: number;
   }
 });
 
+ipcMain.handle('update-table-data', async (_, params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+  connectionString?: string;
+  table: string;
+  changes: Array<{
+    rowId?: any;
+    primaryKeyColumn?: string;
+    rowData?: any;
+    column: string;
+    oldValue: any;
+    newValue: any;
+  }>;
+}) => {
+  try {
+    logger.info(`Updating table data: ${params.table} (${params.changes.length} changes)`);
+    return await dbViewer.updateTableData(params);
+  } catch (error) {
+    logger.error(`Error updating table data: ${error}`);
+    throw error;
+  }
+});
+
 // Événements de l'application
 app.on('ready', () => {
   logger.info('Application started');

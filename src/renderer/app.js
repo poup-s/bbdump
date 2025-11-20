@@ -504,6 +504,9 @@ createApp({
       searchDebounceTimer: null,
       visibleColumns: [],
       showColumnsMenu: false,
+      editModeEnabled: false,
+      editingCells: {},
+      showChangesDetails: false,
       useUrl: false,
       connectionUrl: '',
       editingDb: null,
@@ -704,11 +707,19 @@ createApp({
     },
     
     someSelected() {
-      return this.selectedBackups.length > 0 && 
+      return this.selectedBackups.length > 0 &&
              this.selectedBackups.length < this.filteredBackups.length;
+    },
+
+    hasPendingChanges() {
+      return Object.keys(this.editingCells).length > 0;
+    },
+
+    pendingChangesCount() {
+      return Object.keys(this.editingCells).length;
     }
   },
-  
+
   methods: {
     toggleDbMenu(dbName) {
       this.openMenuDb = this.openMenuDb === dbName ? null : dbName;
@@ -739,6 +750,98 @@ createApp({
       }
     },
 
+    updateCellValue(row, columnKey, event) {
+      const newValue = event.target.textContent.trim();
+      const oldValue = row[columnKey];
+
+      // Si la valeur a changé
+      if (newValue !== String(oldValue)) {
+        // Identifier la ligne avec sa clé primaire ou toutes les colonnes
+        const primaryKey = this.getPrimaryKeyColumn();
+        const rowId = primaryKey && row[primaryKey] ? row[primaryKey] : null;
+
+        // Marquer la cellule comme modifiée
+        const cellId = `${rowId || JSON.stringify(row)}_${columnKey}`;
+        this.editingCells[cellId] = {
+          rowId: rowId,
+          primaryKeyColumn: primaryKey,
+          rowData: rowId ? null : { ...row }, // N'envoyer rowData que si pas de PK
+          column: columnKey,
+          oldValue: oldValue,
+          newValue: newValue === '' ? null : newValue
+        };
+
+        // Mettre à jour visuellement
+        row[columnKey] = newValue === '' ? null : newValue;
+        event.target.style.backgroundColor = '#fef3c7'; // yellow-100
+      }
+    },
+
+    getPrimaryKeyColumn() {
+      // Chercher la colonne de clé primaire dans le schéma
+      if (this.tableSchema && this.tableSchema.columns) {
+        const pkColumn = this.tableSchema.columns.find(col => col.is_primary);
+        return pkColumn ? pkColumn.column_name : null;
+      }
+      return null;
+    },
+
+    cancelChanges() {
+      // Réinitialiser les cellules modifiées
+      this.editingCells = {};
+      this.showChangesDetails = false;
+
+      // Recharger les données pour restaurer les valeurs originales
+      this.loadTableData(false);
+    },
+
+    async saveChanges() {
+      if (!this.hasPendingChanges) return;
+
+      try {
+        // Préparer les changements pour l'envoi au backend
+        // Convertir les objets Proxy Vue en objets simples pour IPC
+        const changes = JSON.parse(JSON.stringify(Object.values(this.editingCells)));
+
+        console.log('Saving changes:', changes);
+
+        // Appeler le backend pour sauvegarder les modifications
+        const result = await ipcRenderer.invoke('update-table-data', {
+          host: this.viewerDb.host,
+          port: this.viewerDb.port,
+          user: this.viewerDb.user,
+          password: this.viewerDb.password,
+          database: this.viewerDb.name,
+          connectionString: this.viewerDb.connectionString,
+          table: this.selectedTable,
+          changes: changes
+        });
+
+        if (result.success) {
+          // Afficher un message de succès
+          const rowsAffected = result.results.reduce((sum, r) => sum + (r.rowsAffected || 0), 0);
+          alert(`✓ Changes saved successfully!\n${rowsAffected} row(s) updated.`);
+
+          // Réinitialiser les cellules modifiées
+          this.editingCells = {};
+          this.showChangesDetails = false;
+
+          // Recharger les données
+          await this.loadTableData(false);
+        } else {
+          // Afficher les erreurs
+          const errors = result.results
+            .filter(r => !r.success)
+            .map(r => `${r.column}: ${r.error}`)
+            .join('\n');
+          alert(`⚠ Some changes failed:\n${errors}`);
+        }
+      } catch (error) {
+        console.error('Error saving changes:', error);
+        alert('✗ Error saving changes:\n' + error.message);
+      }
+    },
+
     async openDatabaseViewer(db) {
       this.viewerDb = db;
       this.showDbViewer = true;
@@ -754,6 +857,8 @@ createApp({
       this.viewerDb = null;
       this.dbTables = [];
       this.selectedTable = null;
+      this.editModeEnabled = false;
+      this.editingCells = {};
     },
 
     async loadDatabaseTables() {
@@ -782,6 +887,7 @@ createApp({
       this.selectedTable = tableName;
       this.tableDataSearch = ''; // Reset search when changing table
       this.tableDataOffset = 0;
+      this.editingCells = {}; // Reset pending changes when changing table
       this.loadingTableData = true;
 
       try {
@@ -3375,7 +3481,28 @@ createApp({
             <div v-else class="flex flex-col h-full">
               <!-- Table Name & Tabs -->
               <div class="px-6 pt-6 pb-0">
-                <h3 class="text-2xl font-bold text-gray-900 mb-4">{{ selectedTable }}</h3>
+                <div class="flex items-center justify-between mb-4">
+                  <h3 class="text-2xl font-bold text-gray-900">{{ selectedTable }}</h3>
+
+                  <!-- Edit Mode Toggle -->
+                  <div class="flex items-center gap-3">
+                    <span class="text-sm font-medium text-gray-700">Edit Mode</span>
+                    <button
+                      @click="editModeEnabled = !editModeEnabled"
+                      :class="[
+                        editModeEnabled ? 'bg-black' : 'bg-gray-200',
+                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none'
+                      ]"
+                    >
+                      <span
+                        :class="[
+                          editModeEnabled ? 'translate-x-6' : 'translate-x-1',
+                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform'
+                        ]"
+                      ></span>
+                    </button>
+                  </div>
+                </div>
 
                 <!-- Tabs Navigation -->
                 <div class="border-b border-gray-200">
@@ -3427,6 +3554,67 @@ createApp({
                 <!-- Data Preview Tab -->
                 <div v-if="viewerActiveTab === 'data'" class="p-6 space-y-3">
                 <div v-if="tableData && tableData.length > 0">
+                  <!-- Save Changes Bar -->
+                  <div v-if="editModeEnabled && hasPendingChanges" class="bg-yellow-50 border border-yellow-200 rounded-lg mb-6">
+                    <!-- Header -->
+                    <div class="p-4 flex items-center justify-between">
+                      <button
+                        @click="showChangesDetails = !showChangesDetails"
+                        class="flex items-center gap-2 hover:opacity-80 transition-opacity"
+                      >
+                        <svg class="w-5 h-5 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                        </svg>
+                        <span class="text-sm font-medium text-gray-700">
+                          {{ pendingChangesCount }} cell(s) modified
+                        </span>
+                        <svg
+                          class="w-4 h-4 text-gray-500 transition-transform"
+                          :class="{ 'rotate-180': showChangesDetails }"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                        </svg>
+                      </button>
+                      <div class="flex gap-2">
+                        <button
+                          @click="cancelChanges"
+                          class="px-4 py-2 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors text-sm font-medium rounded"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          @click="saveChanges"
+                          class="px-4 py-2 bg-black text-white hover:bg-gray-800 transition-colors text-sm font-medium rounded"
+                        >
+                          Save Changes
+                        </button>
+                      </div>
+                    </div>
+
+                    <!-- Changes Details -->
+                    <div v-if="showChangesDetails" class="border-t border-yellow-200 px-4 py-3 space-y-2 max-h-60 overflow-auto">
+                      <div
+                        v-for="(change, cellId) in editingCells"
+                        :key="cellId"
+                        class="bg-white rounded border border-yellow-200 p-3 text-sm"
+                      >
+                        <div class="flex items-start gap-2">
+                          <span class="font-mono font-medium text-gray-700">{{ change.column }}:</span>
+                          <div class="flex-1">
+                            <div class="flex items-center gap-2">
+                              <span class="text-gray-500 line-through">{{ change.oldValue !== null ? change.oldValue : '(null)' }}</span>
+                              <span class="text-gray-400">→</span>
+                              <span class="text-green-600 font-medium">{{ change.newValue !== null ? change.newValue : '(null)' }}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
                   <!-- Toolbar: Search + Columns -->
                   <div class="flex gap-2">
                     <!-- Search Box -->
@@ -3524,8 +3712,20 @@ createApp({
                         </td>
                       </tr>
                       <tr v-for="(row, idx) in tableData" :key="idx" class="hover:bg-gray-50">
-                        <td v-for="key in visibleColumns" :key="key" class="px-4 py-2 text-sm font-mono text-gray-600 max-w-xs truncate">
-                          {{ row[key] !== null && row[key] !== undefined ? row[key] : '—' }}
+                        <td
+                          v-for="key in visibleColumns"
+                          :key="key"
+                          class="px-4 py-2 text-sm font-mono text-gray-600 max-w-xs"
+                          :class="editModeEnabled ? 'cursor-text' : 'truncate'"
+                        >
+                          <div
+                            v-if="editModeEnabled"
+                            :contenteditable="true"
+                            @blur="updateCellValue(row, key, $event)"
+                            @keydown.enter.prevent="$event.target.blur()"
+                            class="outline-none focus:bg-yellow-50 px-1 py-0.5 rounded min-h-[20px]"
+                          >{{ row[key] !== null && row[key] !== undefined ? row[key] : '' }}</div>
+                          <span v-else class="truncate block">{{ row[key] !== null && row[key] !== undefined ? row[key] : '—' }}</span>
                         </td>
                       </tr>
                     </tbody>

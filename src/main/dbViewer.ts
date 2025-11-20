@@ -208,14 +208,16 @@ export async function getTableData(params: ConnectionParams & { table: string; l
       const columnsResult = await client.query(columnsQuery, [params.table]);
       const columns = columnsResult.rows.map(row => row.column_name);
 
-      // Construire la clause WHERE : (col1::text ILIKE $1 OR col2::text ILIKE $1 OR ...)
-      const whereConditions = columns.map(col => `"${col}"::text ILIKE $3`).join(' OR ');
+      // Construire la clause WHERE pour la requête principale
+      const whereConditionsMain = columns.map(col => `"${col}"::text ILIKE $3`).join(' OR ');
+      // Construire la clause WHERE pour la requête COUNT
+      const whereConditionsCount = columns.map(col => `"${col}"::text ILIKE $1`).join(' OR ');
 
-      query = `SELECT * FROM "${params.table}" WHERE ${whereConditions} LIMIT $1 OFFSET $2`;
+      query = `SELECT * FROM "${params.table}" WHERE ${whereConditionsMain} LIMIT $1 OFFSET $2`;
       queryParams = [params.limit, offset, `%${params.search}%`];
 
       // Compter le total de résultats pour la recherche
-      countQuery = `SELECT COUNT(*) FROM "${params.table}" WHERE ${whereConditions}`;
+      countQuery = `SELECT COUNT(*) FROM "${params.table}" WHERE ${whereConditionsCount}`;
       countParams = [`%${params.search}%`];
     } else {
       // Pas de recherche, juste SELECT avec LIMIT et OFFSET
@@ -241,6 +243,106 @@ export async function getTableData(params: ConnectionParams & { table: string; l
       offset: offset,
       hasMore: offset + result.rows.length < totalCount
     };
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * Met à jour les données d'une table
+ */
+export async function updateTableData(params: ConnectionParams & {
+  table: string;
+  changes: Array<{
+    rowId?: any;
+    primaryKeyColumn?: string;
+    rowData?: any;
+    column: string;
+    oldValue: any;
+    newValue: any;
+  }>;
+}) {
+  const client = await createConnection(params);
+
+  try {
+    // Commencer une transaction
+    await client.query('BEGIN');
+
+    const results = [];
+
+    for (const change of params.changes) {
+      let whereClause = '';
+      let whereValues: any[] = [];
+      let paramIndex = 1;
+
+      // Utiliser la clé primaire si disponible
+      if (change.rowId && change.primaryKeyColumn) {
+        whereClause = `"${change.primaryKeyColumn}" = $${paramIndex}`;
+        whereValues = [change.rowId];
+        paramIndex++;
+      }
+      // Sinon, utiliser toutes les colonnes de la ligne
+      else if (change.rowData) {
+        const whereConditions: string[] = [];
+        for (const [key, value] of Object.entries(change.rowData)) {
+          if (key !== change.column) {
+            if (value === null) {
+              whereConditions.push(`"${key}" IS NULL`);
+            } else {
+              whereConditions.push(`"${key}" = $${paramIndex}`);
+              whereValues.push(value);
+              paramIndex++;
+            }
+          }
+        }
+        whereClause = whereConditions.join(' AND ');
+      } else {
+        results.push({
+          success: false,
+          column: change.column,
+          error: 'No row identifier provided'
+        });
+        continue;
+      }
+
+      // Construire la requête UPDATE
+      const updateQuery = `
+        UPDATE "${params.table}"
+        SET "${change.column}" = $${paramIndex}
+        WHERE ${whereClause}
+      `;
+
+      const values = [...whereValues, change.newValue];
+
+      try {
+        const result = await client.query(updateQuery, values);
+        results.push({
+          success: true,
+          column: change.column,
+          rowsAffected: result.rowCount
+        });
+      } catch (error: any) {
+        results.push({
+          success: false,
+          column: change.column,
+          error: error.message
+        });
+      }
+    }
+
+    // Vérifier si tous les updates ont réussi
+    const allSuccess = results.every(r => r.success);
+
+    if (allSuccess) {
+      await client.query('COMMIT');
+      return { success: true, results };
+    } else {
+      await client.query('ROLLBACK');
+      return { success: false, results };
+    }
+  } catch (error: any) {
+    await client.query('ROLLBACK');
+    throw new Error(`Failed to update table data: ${error.message}`);
   } finally {
     await client.end();
   }
