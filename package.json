@@ -1,11 +1,11 @@
 {
   "name": "bbdump",
-  "version": "1.8.2",
+  "version": "1.8.3",
   "description": "Cross-platform PostgreSQL backup manager with automated scheduling, encryption, and modern UI",
   "main": "dist/main/main.js",
   "scripts": {
     "build": "tsc && npm run copy-renderer",
-    "copy-renderer": "cp src/renderer/index.html dist/renderer/ && cp src/renderer/app.js dist/renderer/ && cp src/renderer/logo.png dist/renderer/",
+    "copy-renderer": "mkdir -p dist/renderer && cp src/renderer/index.html dist/renderer/ && cp src/renderer/app.js dist/renderer/ && cp src/renderer/logo.png dist/renderer/",
     "dev": "npm run build && electron .",
     "dist": "npm run build && electron-builder",
     "dmg": "npm run build && electron-builder --mac dmg",

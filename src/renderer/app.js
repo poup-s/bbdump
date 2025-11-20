@@ -28,7 +28,16 @@ const translations = {
       enableSchedule: 'Enable scheduled tasks',
       encrypted: 'PASS',
       encryptedBackup: 'BACKUP',
-      deleteConfirm: 'Are you sure you want to delete the database "{name}"?'
+      deleteConfirm: 'Are you sure you want to delete the database "{name}"?',
+      tableDatabase: 'Database',
+      tableHost: 'Host / Connection',
+      tableSchedule: 'Schedule',
+      tableEncryption: 'Encryption',
+      tableBackup: 'Backup',
+      tableActions: 'Actions',
+      statusActive: '⏸ ACTIVE',
+      statusPaused: '▶ PAUSED',
+      statusManual: 'Manual'
     },
     backups: {
       title: 'Performed backups',
@@ -242,18 +251,27 @@ const translations = {
       about: 'About'
     },
     databases: {
-      title: 'CONFIGURED DATABASES',
-      addButton: 'Add Database',
-      noData: 'NO DATABASES CONFIGURED',
+      title: 'BASES DE DONNÉES CONFIGURÉES',
+      addButton: 'Ajouter une base',
+      noData: 'AUCUNE BASE DE DONNÉES CONFIGURÉE',
       backup: 'Backup',
-      running: 'Running...',
-      edit: 'Edit',
-      delete: 'Delete',
+      running: 'En cours...',
+      edit: 'Modifier',
+      delete: 'Supprimer',
       pauseSchedule: 'Pause les tâches planifiées',
       enableSchedule: 'Activer les tâches planifiées',
       encrypted: 'PASS',
       encryptedBackup: 'BACKUP',
-      deleteConfirm: 'Êtes-vous sûr de vouloir supprimer la base "{name}" ?'
+      deleteConfirm: 'Êtes-vous sûr de vouloir supprimer la base "{name}" ?',
+      tableDatabase: 'Base de données',
+      tableHost: 'Hôte / Connexion',
+      tableSchedule: 'Planification',
+      tableEncryption: 'Chiffrement',
+      tableBackup: 'Backup',
+      tableActions: 'Actions',
+      statusActive: '⏸ ACTIF',
+      statusPaused: '▶ PAUSE',
+      statusManual: 'Manuel'
     },
     backups: {
       title: 'Sauvegardes réalisées',
@@ -465,6 +483,7 @@ createApp({
       showAddModal: false,
       showEditModal: false,
       isBackingUp: {},
+      openMenuDb: null, // Pour tracker quel menu database est ouvert
       useUrl: false,
       connectionUrl: '',
       editingDb: null,
@@ -506,7 +525,7 @@ createApp({
       },
       encryptionKeyExists: false,
       encryptionKeyPath: '',
-      appVersion: '1.8.2',
+      appVersion: '1.8.3',
       appAuthor: 'Poups',
       checkingUpdate: false,
       updateAvailable: false,
@@ -530,6 +549,11 @@ createApp({
     this.loadScheduledTasks();
     this.loadBackups();
     this.checkEncryptionKey();
+
+    // Fermer le menu database quand on clique ailleurs
+    document.addEventListener('click', () => {
+      this.openMenuDb = null;
+    });
     
     // Écouter les événements de backup automatique
     ipcRenderer.on('scheduled-backup-started', (event, data) => {
@@ -652,6 +676,10 @@ createApp({
   },
   
   methods: {
+    toggleDbMenu(dbName) {
+      this.openMenuDb = this.openMenuDb === dbName ? null : dbName;
+    },
+
     async loadConfig() {
       try {
         this.config = await ipcRenderer.invoke('get-config');
@@ -863,21 +891,27 @@ createApp({
         alert('URL PostgreSQL invalide. Format attendu: postgresql://user:password@host:port/database');
         return;
       }
-      
+
       const confirmMsg = `Êtes-vous sûr de vouloir restaurer "${this.restoreBackupFile}" dans la base "${parsed.name}" ?\n\n⚠️ ATTENTION : Cette opération va écraser les données existantes dans la base cible !`;
-      
+
       if (!confirm(confirmMsg)) {
         return;
       }
-      
+
       // Passer en mode exécution
       this.restoreProgress.status = 'running';
       this.restoreProgress.targetUrl = this.restoreUrl;
       this.restoreProgress.logs = [];
       this.restoreProgress.error = null;
-      
+
+      // Ajouter la connectionString complète à l'objet target
+      const target = {
+        ...parsed,
+        connectionString: this.restoreUrl
+      };
+
       // Démarrer l'exécution
-      await this.executeRestore(parsed);
+      await this.executeRestore(target);
     },
     
     async executeRestore(target) {
@@ -963,20 +997,53 @@ createApp({
     
     parsePostgresUrl(url) {
       try {
-        // Format: postgresql://user:password@host:port/database
-        const match = url.match(/postgresql:\/\/([^:]+):([^@]+)@([^:]+):(\d+)\/(.+)/);
-        if (match) {
-          return {
-            user: match[1],
-            password: match[2],
-            host: match[3],
-            port: parseInt(match[4]),
-            name: match[5]
-          };
+        console.log('=== PARSING URL ===');
+        console.log('Input URL:', url);
+
+        // Vérifier que c'est bien une URL PostgreSQL
+        if (!url.startsWith('postgresql://') && !url.startsWith('postgres://')) {
+          console.error('❌ Not a PostgreSQL URL');
+          return null;
         }
-        return null;
+
+        // L'API URL du navigateur ne reconnaît pas postgresql: comme protocole structuré
+        // On remplace temporairement par http: pour parser correctement
+        const httpUrl = url.replace(/^postgres(ql)?:\/\//, 'http://');
+        console.log('Temporary HTTP URL for parsing:', httpUrl);
+
+        const parsedUrl = new URL(httpUrl);
+        console.log('Parsed URL object:', parsedUrl);
+        console.log('Username:', parsedUrl.username);
+        console.log('Password:', parsedUrl.password ? '***' : 'EMPTY');
+        console.log('Hostname:', parsedUrl.hostname);
+        console.log('Port:', parsedUrl.port);
+        console.log('Pathname:', parsedUrl.pathname);
+
+        // Extraire le nom de la base de données (sans les query parameters)
+        const pathname = parsedUrl.pathname;
+        const dbName = pathname.startsWith('/') ? pathname.substring(1) : pathname;
+        console.log('DB Name extracted:', dbName);
+
+        if (!parsedUrl.username || !parsedUrl.password || !parsedUrl.hostname || !dbName) {
+          console.error('❌ Required fields missing:');
+          console.error('  - username:', parsedUrl.username || 'MISSING');
+          console.error('  - password:', parsedUrl.password ? 'OK' : 'MISSING');
+          console.error('  - hostname:', parsedUrl.hostname || 'MISSING');
+          console.error('  - dbName:', dbName || 'MISSING');
+          return null;
+        }
+
+        const result = {
+          user: decodeURIComponent(parsedUrl.username),
+          password: decodeURIComponent(parsedUrl.password),
+          host: parsedUrl.hostname,
+          port: parseInt(parsedUrl.port || '5432'),
+          name: dbName
+        };
+        console.log('✅ Parse successful:', result);
+        return result;
       } catch (error) {
-        console.error('Erreur lors du parsing de l\'URL:', error);
+        console.error('❌ Exception during parsing:', error);
         return null;
       }
     },
@@ -994,6 +1061,7 @@ createApp({
           }
           dbConfig = {
             ...dbConfig,
+            connectionString: this.connectionUrl,
             name: parsed.name,
             host: parsed.host,
             port: parsed.port,
@@ -1078,6 +1146,7 @@ createApp({
           }
           dbConfig = {
             ...dbConfig,
+            connectionString: this.connectionUrl,
             name: parsed.name,
             host: parsed.host,
             port: parsed.port,
@@ -1485,73 +1554,156 @@ createApp({
             <p class="text-gray-400 text-sm tracking-wide">{{ t('databases.noData') }}</p>
           </div>
 
-          <div v-else class="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            <div
-              v-for="db in config.databases"
-              :key="db.name"
-              class="bg-white   p-6 hover:border border-gray-200 transition-"
-            >
-              <div class="mb-6">
-                <div class="flex items-center gap-2 mb-2">
-                  <h3 class="text-sm font-medium tracking-wide uppercase text-black">{{ getDbDisplayName(db) }}</h3>
-                  <span
-                    v-if="db.encrypted !== false"
-                    class="px-2 py-0.5 bg-black text-white text-[10px] font-mono"
-                    :title="t('databases.encrypted')"
-                  >
-                    🔒 {{ t('databases.encrypted') }}
-                  </span>
-                  <span
-                    v-if="db.encryptBackups"
-                    class="px-2 py-0.5 bg-gray-700 text-white text-[10px] font-mono"
-                    :title="t('databases.encryptedBackup')"
-                  >
-                    🔒 {{ t('databases.encryptedBackup') }}
-                  </span>
-                </div>
-                <p v-if="db.displayName && db.displayName.trim() !== ''" class="text-xs text-gray-400 mb-3 font-mono">{{ db.name }}</p>
-                <div class="space-y-1 text-xs text-gray-500 font-mono">
-                  <p>{{ db.host }}:{{ db.port }}</p>
-                  <p>{{ db.user }}</p>
-                  <p v-if="db.cron">{{ db.cron }}</p>
-                </div>
-              </div>
+          <div v-else class="border border-gray-200">
+            <table class="min-w-full">
+              <thead class="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {{ t('databases.tableDatabase') }}
+                  </th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {{ t('databases.tableHost') }}
+                  </th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {{ t('databases.tableSchedule') }}
+                  </th>
+                  <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {{ t('databases.tableEncryption') }}
+                  </th>
+                  <th class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {{ t('databases.tableBackup') }}
+                  </th>
+                  <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {{ t('databases.tableActions') }}
+                  </th>
+                </tr>
+              </thead>
+              <tbody class="bg-white divide-y divide-gray-200">
+                <tr
+                  v-for="db in config.databases"
+                  :key="db.name"
+                  class="hover:bg-gray-50"
+                >
+                  <!-- Database name -->
+                  <td class="px-6 py-4 whitespace-nowrap">
+                    <div class="text-sm font-medium text-gray-900">{{ getDbDisplayName(db) }}</div>
+                    <div v-if="db.displayName && db.displayName.trim() !== ''" class="text-xs text-gray-500 font-mono">{{ db.name }}</div>
+                  </td>
 
-              <div class="flex gap-2">
-                <button
-                  @click="backupNow(db.name)"
-                  :disabled="isBackingUp[db.name]"
-                  class="flex-1 px-3 py-2 bg-black text-white hover:bg-gray-800 disabled:bg-gray-400 transition-colors text-sm"
-                >
-                  {{ isBackingUp[db.name] ? t('databases.running') : t('databases.backup') }}
-                </button>
-                <button
-                  v-if="db.cron && db.cron.trim() !== ''"
-                  @click="toggleSchedule(db.name)"
-                  :class="[
-                    'px-3 py-2 text-white transition-colors text-sm w-10 flex items-center justify-center',
-                    db.enabled !== false ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-500 hover:bg-gray-600'
-                  ]"
-                  :title="db.enabled !== false ? t('databases.pauseSchedule') : t('databases.enableSchedule')"
-                >
-                  {{ db.enabled !== false ? '⏸' : '▶' }}
-                </button>
-                <button
-                  @click="openEditModal(db)"
-                  class="px-3 py-2 bg-black text-white hover:bg-gray-800 transition-colors text-sm"
-                  :title="t('databases.edit')"
-                >
-                  {{ t('databases.edit') }}
-                </button>
-                <button
-                  @click="removeDatabase(db.name)"
-                  class="px-3 py-2 bg-gray-900 text-white hover:bg-black transition-colors text-sm"
-                  :title="t('databases.delete')"
-                >
-                  {{ t('databases.delete') }}
-                </button>
-              </div>
-            </div>
+                  <!-- Host/Connection -->
+                  <td class="px-6 py-4">
+                    <div class="flex items-center gap-2">
+                      <div class="text-xs text-gray-600 font-mono">
+                        {{ db.host }}:{{ db.port }}
+                      </div>
+                      <span
+                        v-if="db.connectionString"
+                        class="inline-flex items-center px-2 py-0.5 bg-blue-100 text-blue-800 text-[10px] font-mono"
+                        title="Using PostgreSQL connection string"
+                      >
+                        URL
+                      </span>
+                    </div>
+                  </td>
+
+                  <!-- Schedule -->
+                  <td class="px-6 py-4 whitespace-nowrap">
+                    <div v-if="db.cron" class="text-xs text-gray-600 font-mono">{{ db.cron }}</div>
+                    <div v-else class="text-xs text-gray-400">—</div>
+                  </td>
+
+                  <!-- Encryption -->
+                  <td class="px-6 py-4 whitespace-nowrap text-center">
+                    <div class="flex items-center justify-center gap-1 flex-wrap">
+                      <!-- Warning si mot de passe NON chiffré (rare et dangereux) -->
+                      <span
+                        v-if="db.encrypted === false"
+                        class="inline-flex items-center px-2 py-0.5 bg-red-600 text-white text-[10px] font-mono"
+                        title="⚠️ Password stored in plain text (not recommended)"
+                      >
+                        🔓 PWD
+                      </span>
+                      <!-- Badge si backups chiffrés -->
+                      <span
+                        v-if="db.encryptBackups"
+                        class="inline-flex items-center px-2 py-0.5 bg-black text-white text-[10px] font-mono"
+                        :title="t('databases.encryptedBackup')"
+                      >
+                        🔒 BAK
+                      </span>
+                      <!-- Si rien de spécial -->
+                      <span v-if="!db.encryptBackups && db.encrypted !== false" class="text-gray-400 text-xs">—</span>
+                    </div>
+                  </td>
+
+                  <!-- Status -->
+                  <td class="px-6 py-4 whitespace-nowrap text-center">
+                    <button
+                      v-if="db.cron && db.cron.trim() !== ''"
+                      @click="toggleSchedule(db.name)"
+                      :class="[
+                        'inline-flex items-center px-3 py-1 text-white text-xs font-medium',
+                        db.enabled !== false ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-500 hover:bg-gray-600'
+                      ]"
+                      :title="db.enabled !== false ? t('databases.pauseSchedule') : t('databases.enableSchedule')"
+                    >
+                      {{ db.enabled !== false ? t('databases.statusActive') : t('databases.statusPaused') }}
+                    </button>
+                    <span v-else class="text-gray-400 text-xs">{{ t('databases.statusManual') }}</span>
+                  </td>
+
+                  <!-- Actions -->
+                  <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium relative">
+                    <button
+                      @click.stop="toggleDbMenu(db.name)"
+                      class="p-2 hover:bg-gray-100 rounded transition-colors"
+                      :title="t('databases.tableActions')"
+                    >
+                      <svg class="w-5 h-5 text-gray-600" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z"/>
+                      </svg>
+                    </button>
+
+                    <!-- Dropdown Menu -->
+                    <div
+                      v-if="openMenuDb === db.name"
+                      @click.stop
+                      class="absolute right-0 mt-2 w-48 bg-white border border-gray-200 shadow-lg z-50 rounded-sm overflow-hidden"
+                    >
+                      <button
+                        @click="backupNow(db.name); openMenuDb = null"
+                        :disabled="isBackingUp[db.name]"
+                        class="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 disabled:bg-gray-50 disabled:text-gray-400 disabled:cursor-not-allowed flex items-center gap-3 transition-colors border-b border-gray-100"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                        </svg>
+                        <span>{{ isBackingUp[db.name] ? t('databases.running') : t('databases.backup') }}</span>
+                      </button>
+                      <button
+                        @click="openEditModal(db); openMenuDb = null"
+                        class="w-full text-left px-4 py-3 text-sm hover:bg-gray-50 flex items-center gap-3 transition-colors border-b border-gray-100"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                        </svg>
+                        <span>{{ t('databases.edit') }}</span>
+                      </button>
+                      <button
+                        @click="removeDatabase(db.name); openMenuDb = null"
+                        class="w-full text-left px-4 py-3 text-sm text-red-600 hover:bg-red-50 flex items-center gap-3 transition-colors"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                        </svg>
+                        <span>{{ t('databases.delete') }}</span>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
 

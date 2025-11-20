@@ -19,9 +19,47 @@ export class BackupManager {
     this.pgDumpPath = this.findPostgresCommand('pg_dump');
     this.pgRestorePath = this.findPostgresCommand('pg_restore');
     this.ensureBackupDir();
-    
+
     logger.info(`pg_dump found: ${this.pgDumpPath}`);
     logger.info(`pg_restore found: ${this.pgRestorePath}`);
+  }
+
+  /**
+   * Nettoie la connection string en retirant les paramètres non supportés par pg_dump
+   */
+  private cleanConnectionString(connectionString: string): string {
+    try {
+      // Liste des paramètres non supportés ou problématiques avec pg_dump
+      const unsupportedParams = [
+        'channel_binding',
+        'target_session_attrs'
+      ];
+
+      // Parser l'URL
+      const url = new URL(connectionString);
+
+      // Nettoyer les paramètres
+      let cleaned = false;
+      unsupportedParams.forEach(param => {
+        if (url.searchParams.has(param)) {
+          const value = url.searchParams.get(param);
+          logger.info(`Removing unsupported parameter from connection string: ${param}=${value}`);
+          url.searchParams.delete(param);
+          cleaned = true;
+        }
+      });
+
+      if (cleaned) {
+        const cleanedUrl = url.toString();
+        logger.info(`Cleaned connection string`);
+        return cleanedUrl;
+      }
+
+      return connectionString;
+    } catch (error) {
+      logger.warn(`Failed to parse connection string, using as-is: ${error}`);
+      return connectionString;
+    }
   }
 
   private findPostgresCommand(command: string): string {
@@ -140,21 +178,35 @@ export class BackupManager {
     try {
       // Utiliser psql pour obtenir la taille de la base de données
       const args = [
-        '-h', db.host,
-        '-p', db.port.toString(),
-        '-U', db.user,
-        '-d', db.name,
         '-t', // Mode tuples seulement (sans en-têtes)
         '-c', `SELECT pg_database_size('${db.name.replace(/'/g, "''")}');`
       ];
 
+      // Si une connection string est fournie, l'utiliser
+      if (db.connectionString) {
+        const cleanedConnectionString = this.cleanConnectionString(db.connectionString);
+        args.unshift('-d', cleanedConnectionString);
+      } else {
+        // Sinon, utiliser les paramètres individuels
+        args.unshift('-h', db.host);
+        args.unshift('-p', db.port.toString());
+        args.unshift('-U', db.user);
+        args.unshift('-d', db.name);
+      }
+
+      const env: NodeJS.ProcessEnv = {
+        ...process.env
+      };
+
+      // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string
+      if (!db.connectionString && db.password) {
+        env.PGPASSWORD = db.password;
+      }
+
       const { stdout } = await execAsync(
         `"${this.findPostgresCommand('psql')}" ${args.map(arg => `"${arg}"`).join(' ')}`,
         {
-          env: {
-            ...process.env,
-            PGPASSWORD: db.password
-          },
+          env,
           timeout: 10000 // 10 secondes de timeout
         }
       );
@@ -481,14 +533,23 @@ export class BackupManager {
     return new Promise((resolve) => {
       // Construire les arguments pg_dump
       const args = [
-        '-h', db.host,
-        '-p', db.port.toString(),
-        '-U', db.user,
         '-F', 'c',
         '-b',
         '-v',
         '-f', timestampedPath,
       ];
+
+      // Si une connection string est fournie, l'utiliser
+      if (db.connectionString) {
+        const cleanedConnectionString = this.cleanConnectionString(db.connectionString);
+        args.push('-d', cleanedConnectionString);
+      } else {
+        // Sinon, utiliser les paramètres individuels
+        args.push('-h', db.host);
+        args.push('-p', db.port.toString());
+        args.push('-U', db.user);
+        args.push(db.name);
+      }
 
       // Ajouter le niveau de compression si > 0
       if (compressionLevel > 0) {
@@ -500,17 +561,18 @@ export class BackupManager {
         args.push('--jobs', jobs.toString());
       }
 
-      // Ajouter le nom de la base de données
-      args.push(db.name);
-
       logger.info(`Command: ${this.pgDumpPath} ${args.join(' ')}`, db.name);
 
-      const pgDump = spawn(this.pgDumpPath, args, {
-        env: {
-          ...process.env,
-          PGPASSWORD: db.password
-        }
-      });
+      const env: NodeJS.ProcessEnv = {
+        ...process.env
+      };
+
+      // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string
+      if (!db.connectionString && db.password) {
+        env.PGPASSWORD = db.password;
+      }
+
+      const pgDump = spawn(this.pgDumpPath, args, { env });
 
       let errorOutput = '';
       let isTimedOut = false;
@@ -712,7 +774,7 @@ export class BackupManager {
     }
   }
 
-  async restoreBackup(backupFile: string, target: { name: string; host: string; port: number; user: string; password: string }): Promise<BackupResult> {
+  async restoreBackup(backupFile: string, target: { name: string; host: string; port: number; user: string; password: string; connectionString?: string }): Promise<BackupResult> {
     const timestamp = new Date().toISOString();
     logger.info(`Starting restore of ${backupFile} to ${target.name}`, target.name);
 
@@ -777,23 +839,36 @@ export class BackupManager {
         }
       };
       const args = [
-        '-h', target.host,
-        '-p', target.port.toString(),
-        '-U', target.user,
-        '-d', target.name,
         '-v',
         '-c', // Clean (drop) database objects before recreating
-        actualBackupPath
       ];
+
+      // Si une connection string est fournie, l'utiliser
+      if (target.connectionString) {
+        const cleanedConnectionString = this.cleanConnectionString(target.connectionString);
+        args.push('-d', cleanedConnectionString);
+      } else {
+        // Sinon, utiliser les paramètres individuels
+        args.push('-h', target.host);
+        args.push('-p', target.port.toString());
+        args.push('-U', target.user);
+        args.push('-d', target.name);
+      }
+
+      args.push(actualBackupPath);
 
       logger.info(`Command: ${this.pgRestorePath} ${args.join(' ')}`, target.name);
 
-      const pgRestore = spawn(this.pgRestorePath, args, {
-        env: {
-          ...process.env,
-          PGPASSWORD: target.password
-        }
-      });
+      const env: NodeJS.ProcessEnv = {
+        ...process.env
+      };
+
+      // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string
+      if (!target.connectionString && target.password) {
+        env.PGPASSWORD = target.password;
+      }
+
+      const pgRestore = spawn(this.pgRestorePath, args, { env });
 
       let errorOutput = '';
       let stdoutOutput = '';

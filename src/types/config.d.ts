@@ -1,6 +1,9 @@
 export interface DatabaseConfig {
   name: string;
   displayName?: string;
+  // Connection string PostgreSQL (ex: postgresql://user:pass@host:port/db?sslmode=require)
+  // Si fourni, il sera utilisé à la place de host, port, user, password
+  connectionString?: string;
   host: string;
   port: number;
   user: string;
