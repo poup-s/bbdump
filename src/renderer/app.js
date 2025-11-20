@@ -499,11 +499,7 @@ createApp({
       loadingTables: false,
       loadingTableData: false,
       loadingMoreData: false,
-      viewerSections: {
-        schema: false,
-        relations: false,
-        data: true
-      },
+      viewerActiveTab: 'data', // 'data', 'relations', 'schema'
       tableDataSearch: '',
       searchDebounceTimer: null,
       visibleColumns: [],
@@ -3376,114 +3372,61 @@ createApp({
               </div>
             </div>
 
-            <div v-else class="p-6 space-y-6">
-              <!-- Table Name -->
-              <div>
-                <h3 class="text-2xl font-bold text-gray-900 mb-2">{{ selectedTable }}</h3>
-                <p v-if="tableSchema" class="text-sm text-gray-500">{{ tableSchema.columns.length }} columns</p>
-              </div>
+            <div v-else class="flex flex-col h-full">
+              <!-- Table Name & Tabs -->
+              <div class="px-6 pt-6 pb-0">
+                <h3 class="text-2xl font-bold text-gray-900 mb-4">{{ selectedTable }}</h3>
 
-              <!-- Schema Section -->
-              <div v-if="tableSchema">
-                <button
-                  @click="viewerSections.schema = !viewerSections.schema"
-                  class="w-full flex items-center justify-between py-2 hover:bg-gray-50 transition-colors"
-                >
-                  <h4 class="text-sm font-medium text-gray-700 uppercase tracking-wide">
-                    Schema
-                    <span class="text-gray-400 text-xs ml-2">({{ tableSchema.columns.length }} columns)</span>
-                  </h4>
-                  <svg
-                    class="w-5 h-5 text-gray-500 transition-transform"
-                    :class="{ 'rotate-180': viewerSections.schema }"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                  </svg>
-                </button>
-                <div v-show="viewerSections.schema" class="border border-gray-200 rounded mt-3">
-                  <table class="min-w-full">
-                    <thead class="bg-gray-50">
-                      <tr>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Column</th>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Nullable</th>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Default</th>
-                        <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Key</th>
-                      </tr>
-                    </thead>
-                    <tbody class="bg-white divide-y divide-gray-200">
-                      <tr v-for="col in tableSchema.columns" :key="col.column_name">
-                        <td class="px-4 py-2 text-sm font-mono text-gray-900">{{ col.column_name }}</td>
-                        <td class="px-4 py-2 text-sm font-mono text-gray-600">{{ col.data_type }}</td>
-                        <td class="px-4 py-2 text-sm text-gray-600">{{ col.is_nullable }}</td>
-                        <td class="px-4 py-2 text-sm font-mono text-gray-600">{{ col.column_default || '—' }}</td>
-                        <td class="px-4 py-2 text-sm">
-                          <span v-if="col.is_primary" class="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs font-mono">PK</span>
-                          <span v-if="col.is_foreign" class="px-2 py-0.5 bg-blue-100 text-blue-800 text-xs font-mono">FK</span>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
+                <!-- Tabs Navigation -->
+                <div class="border-b border-gray-200">
+                  <nav class="flex gap-6">
+                    <button
+                      @click="viewerActiveTab = 'data'"
+                      :class="[
+                        viewerActiveTab === 'data'
+                          ? 'border-black text-black'
+                          : 'border-transparent text-gray-400 hover:text-gray-600',
+                        'py-3 border-b-2 font-medium text-sm uppercase tracking-wide transition-colors'
+                      ]"
+                    >
+                      Data Preview
+                      <span class="text-xs ml-1">({{ tableData.length }} / {{ tableDataTotal }})</span>
+                    </button>
+                    <button
+                      v-if="tableRelations && tableRelations.length > 0"
+                      @click="viewerActiveTab = 'relations'"
+                      :class="[
+                        viewerActiveTab === 'relations'
+                          ? 'border-black text-black'
+                          : 'border-transparent text-gray-400 hover:text-gray-600',
+                        'py-3 border-b-2 font-medium text-sm uppercase tracking-wide transition-colors'
+                      ]"
+                    >
+                      Relations
+                      <span class="text-xs ml-1">({{ tableRelations.length }})</span>
+                    </button>
+                    <button
+                      v-if="tableSchema"
+                      @click="viewerActiveTab = 'schema'"
+                      :class="[
+                        viewerActiveTab === 'schema'
+                          ? 'border-black text-black'
+                          : 'border-transparent text-gray-400 hover:text-gray-600',
+                        'py-3 border-b-2 font-medium text-sm uppercase tracking-wide transition-colors'
+                      ]"
+                    >
+                      Schema
+                      <span class="text-xs ml-1">({{ tableSchema.columns.length }})</span>
+                    </button>
+                  </nav>
                 </div>
               </div>
 
-              <!-- Relations Section -->
-              <div v-if="tableRelations && tableRelations.length > 0">
-                <button
-                  @click="viewerSections.relations = !viewerSections.relations"
-                  class="w-full flex items-center justify-between py-2 hover:bg-gray-50 transition-colors"
-                >
-                  <h4 class="text-sm font-medium text-gray-700 uppercase tracking-wide">
-                    Relations
-                    <span class="text-gray-400 text-xs ml-2">({{ tableRelations.length }})</span>
-                  </h4>
-                  <svg
-                    class="w-5 h-5 text-gray-500 transition-transform"
-                    :class="{ 'rotate-180': viewerSections.relations }"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                  </svg>
-                </button>
-                <div v-show="viewerSections.relations" class="space-y-2 mt-3">
-                  <div v-for="rel in tableRelations" :key="rel.constraint_name" class="border border-gray-200 rounded p-3 bg-gray-50">
-                    <div class="flex items-center gap-2 text-sm">
-                      <span class="font-mono text-gray-900">{{ rel.column_name }}</span>
-                      <span class="text-gray-400">→</span>
-                      <span class="font-mono text-blue-600">{{ rel.foreign_table_name }}.{{ rel.foreign_column_name }}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Data Preview Section -->
-              <div v-if="tableData && tableData.length > 0">
-                <button
-                  @click="viewerSections.data = !viewerSections.data"
-                  class="w-full flex items-center justify-between py-2 hover:bg-gray-50 transition-colors"
-                >
-                  <h4 class="text-sm font-medium text-gray-700 uppercase tracking-wide">
-                    Data Preview
-                    <span class="text-gray-400 text-xs ml-2">
-                      ({{ tableData.length }} / {{ tableDataTotal }} rows{{ tableDataSearch ? ' matching' : '' }})
-                    </span>
-                  </h4>
-                  <svg
-                    class="w-5 h-5 text-gray-500 transition-transform"
-                    :class="{ 'rotate-180': viewerSections.data }"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                  </svg>
-                </button>
-                <div v-show="viewerSections.data" class="mt-3 space-y-3">
+              <!-- Tab Content -->
+              <div class="flex-1 overflow-auto">
+                <!-- Data Preview Tab -->
+                <div v-if="viewerActiveTab === 'data'" class="p-6 space-y-3">
+                <div v-if="tableData && tableData.length > 0">
                   <!-- Toolbar: Search + Columns -->
                   <div class="flex gap-2">
                     <!-- Search Box -->
@@ -3565,7 +3508,7 @@ createApp({
                   </div>
 
                   <!-- Table -->
-                  <div class="border border-gray-200 rounded overflow-x-auto">
+                  <div class="border border-gray-200 rounded overflow-auto max-h-[500px] mt-6">
                   <table class="min-w-full">
                     <thead class="bg-gray-50">
                       <tr>
@@ -3605,10 +3548,60 @@ createApp({
                     Showing {{ tableData.length }} of {{ tableDataTotal }} total rows
                   </div>
                 </div>
-              </div>
 
-              <div v-else-if="selectedTable && !loadingTableData">
-                <p class="text-gray-400 text-center py-8">No data in this table</p>
+                <div v-else class="text-gray-400 text-center py-8">
+                  No data in this table
+                </div>
+                </div>
+
+                <!-- Relations Tab -->
+                <div v-else-if="viewerActiveTab === 'relations'" class="p-6">
+                  <div v-if="tableRelations && tableRelations.length > 0" class="space-y-3">
+                    <div v-for="rel in tableRelations" :key="rel.constraint_name" class="border border-gray-200 rounded p-4 bg-gray-50">
+                      <div class="flex items-center gap-2 text-sm">
+                        <span class="font-mono text-gray-900 font-medium">{{ rel.column_name }}</span>
+                        <span class="text-gray-400">→</span>
+                        <span class="font-mono text-blue-600">{{ rel.foreign_table_name }}.{{ rel.foreign_column_name }}</span>
+                      </div>
+                      <div class="text-xs text-gray-500 mt-1">{{ rel.constraint_name }}</div>
+                    </div>
+                  </div>
+                  <div v-else class="text-gray-400 text-center py-8">
+                    No foreign key relations found
+                  </div>
+                </div>
+
+                <!-- Schema Tab -->
+                <div v-else-if="viewerActiveTab === 'schema'" class="p-6">
+                  <div v-if="tableSchema" class="border border-gray-200 rounded overflow-hidden">
+                    <table class="min-w-full">
+                      <thead class="bg-gray-50">
+                        <tr>
+                          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Column</th>
+                          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Nullable</th>
+                          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Default</th>
+                          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Key</th>
+                        </tr>
+                      </thead>
+                      <tbody class="bg-white divide-y divide-gray-200">
+                        <tr v-for="col in tableSchema.columns" :key="col.column_name" class="hover:bg-gray-50">
+                          <td class="px-4 py-3 text-sm font-mono text-gray-900 font-medium">{{ col.column_name }}</td>
+                          <td class="px-4 py-3 text-sm font-mono text-gray-600">{{ col.data_type }}</td>
+                          <td class="px-4 py-3 text-sm text-gray-600">{{ col.is_nullable }}</td>
+                          <td class="px-4 py-3 text-sm font-mono text-gray-600">{{ col.column_default || '—' }}</td>
+                          <td class="px-4 py-3 text-sm">
+                            <span v-if="col.is_primary" class="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs font-mono rounded">PK</span>
+                            <span v-if="col.is_foreign" class="px-2 py-1 bg-blue-100 text-blue-800 text-xs font-mono rounded ml-1">FK</span>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div v-else class="text-gray-400 text-center py-8">
+                    No schema information available
+                  </div>
+                </div>
               </div>
             </div>
           </div>
