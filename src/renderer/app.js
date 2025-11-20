@@ -40,6 +40,36 @@ const translations = {
       statusManual: 'Manual',
       viewDatabase: 'View Database'
     },
+    viewer: {
+      editMode: 'Edit Mode',
+      exportCSV: 'Export CSV',
+      saveChanges: 'Save Changes',
+      cancel: 'Cancel',
+      cellsModified: '{count} cell(s) modified',
+      confirmSave: 'Are you sure you want to save {count} change(s) to the database?\nThis action cannot be undone.',
+      saveSuccess: 'Changes saved successfully!\n{count} row(s) updated.',
+      saveError: 'Some changes failed:\n\n{errors}',
+      exportConfirm: 'Do you want to export {rows} row(s) and {cols} column(s) from "{table}"?\n\nThe file will be downloaded to your Downloads folder.',
+      exportSuccess: 'Successfully exported {count} rows to:\n{filename}',
+      exportError: 'No data to export',
+      exitEditMode: 'Exit Edit Mode',
+      exitEditConfirm: 'You have unsaved changes. Are you sure you want to exit edit mode?\nAll changes will be lost.',
+      validationError: 'Validation Error',
+      validationIntRequired: 'Column "{column}" requires an integer value',
+      validationNumRequired: 'Column "{column}" requires a numeric value',
+      validationBoolRequired: 'Column "{column}" requires a boolean value (true/false)',
+      validationNullNotAllowed: 'Column "{column}" cannot be NULL',
+      deleteRow: 'Delete Row',
+      deleteRowConfirm: 'Are you sure you want to delete this row?\nThis action cannot be undone.',
+      deleteRowSuccess: 'Row deleted successfully',
+      addRow: 'Add Row',
+      addRowTitle: 'Add New Row',
+      addRowSuccess: 'Row added successfully',
+      selectRelation: 'Select a related record',
+      editRow: 'Edit',
+      editRowTitle: 'Edit Row',
+      editRowSuccess: 'Row updated successfully'
+    },
     backups: {
       title: 'Performed backups',
       stats: '{count} backup(s) displayed • {size}',
@@ -275,6 +305,36 @@ const translations = {
       statusManual: 'Manuel',
       viewDatabase: 'Voir la base'
     },
+    viewer: {
+      editMode: 'Mode édition',
+      exportCSV: 'Exporter CSV',
+      saveChanges: 'Sauvegarder',
+      cancel: 'Annuler',
+      cellsModified: '{count} cellule(s) modifiée(s)',
+      confirmSave: 'Êtes-vous sûr de vouloir sauvegarder {count} modification(s) dans la base de données ?\nCette action est irréversible.',
+      saveSuccess: 'Modifications sauvegardées avec succès !\n{count} ligne(s) mise(s) à jour.',
+      saveError: 'Certaines modifications ont échoué :\n\n{errors}',
+      exportConfirm: 'Voulez-vous exporter {rows} ligne(s) et {cols} colonne(s) de "{table}" ?\n\nLe fichier sera téléchargé dans votre dossier Téléchargements.',
+      exportSuccess: '{count} lignes exportées avec succès vers :\n{filename}',
+      exportError: 'Aucune donnée à exporter',
+      exitEditMode: 'Quitter le mode édition',
+      exitEditConfirm: 'Vous avez des modifications non sauvegardées. Êtes-vous sûr de vouloir quitter le mode édition ?\nToutes les modifications seront perdues.',
+      validationError: 'Erreur de validation',
+      validationIntRequired: 'La colonne "{column}" requiert une valeur entière',
+      validationNumRequired: 'La colonne "{column}" requiert une valeur numérique',
+      validationBoolRequired: 'La colonne "{column}" requiert une valeur booléenne (true/false)',
+      validationNullNotAllowed: 'La colonne "{column}" ne peut pas être NULL',
+      deleteRow: 'Supprimer la ligne',
+      deleteRowConfirm: 'Êtes-vous sûr de vouloir supprimer cette ligne ?\nCette action est irréversible.',
+      deleteRowSuccess: 'Ligne supprimée avec succès',
+      addRow: 'Ajouter une ligne',
+      addRowTitle: 'Ajouter une nouvelle ligne',
+      addRowSuccess: 'Ligne ajoutée avec succès',
+      selectRelation: 'Sélectionner un enregistrement lié',
+      editRow: 'Éditer',
+      editRowTitle: 'Éditer la ligne',
+      editRowSuccess: 'Ligne modifiée avec succès'
+    },
     backups: {
       title: 'Sauvegardes réalisées',
       stats: '{count} sauvegarde(s) affichée(s) • {size}',
@@ -507,6 +567,22 @@ createApp({
       editModeEnabled: false,
       editingCells: {},
       showChangesDetails: false,
+      showAddRowModal: false,
+      newRowData: {},
+      showEditRowModal: false,
+      editRowData: {},
+      editRowOriginal: {},
+      enumValues: {}, // { columnName: [values] }
+      foreignKeyData: {}, // { columnName: [{id, display}] }
+      confirmModal: {
+        show: false,
+        title: '',
+        message: '',
+        confirmText: 'Confirm',
+        cancelText: 'Cancel',
+        onConfirm: null,
+        type: 'warning' // 'warning', 'success', 'error'
+      },
       useUrl: false,
       connectionUrl: '',
       editingDb: null,
@@ -578,7 +654,55 @@ createApp({
       this.openMenuDb = null;
       this.showColumnsMenu = false;
     });
-    
+
+    // Raccourcis clavier pour le mode édition
+    document.addEventListener('keydown', (e) => {
+      // Cmd/Ctrl + S: Sauvegarder
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        if (this.editModeEnabled) {
+          e.preventDefault();
+          // Forcer le blur sur l'élément actif pour enregistrer la modification en cours
+          if (document.activeElement && document.activeElement.contentEditable === 'true') {
+            document.activeElement.blur();
+          }
+          // Attendre un peu que le blur se déclenche
+          setTimeout(() => {
+            if (this.hasPendingChanges) {
+              this.saveChanges();
+            }
+          }, 10);
+        }
+      }
+
+      // Cmd/Ctrl + Z: Annuler
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
+        if (this.editModeEnabled && this.hasPendingChanges) {
+          e.preventDefault();
+          this.cancelChanges();
+        }
+      }
+
+      // Escape: Quitter le mode édition ou fermer le modal
+      if (e.key === 'Escape') {
+        if (this.confirmModal.show) {
+          this.hideConfirmModal();
+        } else if (this.editModeEnabled && this.hasPendingChanges) {
+          e.preventDefault();
+          this.showConfirmModal(
+            this.t('viewer.exitEditMode'),
+            this.t('viewer.exitEditConfirm'),
+            () => {
+              this.editModeEnabled = false;
+              this.cancelChanges();
+            },
+            'warning'
+          );
+        } else if (this.editModeEnabled) {
+          this.editModeEnabled = false;
+        }
+      }
+    });
+
     // Écouter les événements de backup automatique
     ipcRenderer.on('scheduled-backup-started', (event, data) => {
       const displayName = this.getDbDisplayNameByName(data.database);
@@ -756,6 +880,14 @@ createApp({
 
       // Si la valeur a changé
       if (newValue !== String(oldValue)) {
+        // Valider le type de données
+        const validationError = this.validateCellValue(columnKey, newValue);
+        if (validationError) {
+          this.showConfirmModal(this.t('viewer.validationError'), validationError, null, 'error');
+          event.target.textContent = oldValue !== null && oldValue !== undefined ? oldValue : '';
+          return;
+        }
+
         // Identifier la ligne avec sa clé primaire ou toutes les colonnes
         const primaryKey = this.getPrimaryKeyColumn();
         const rowId = primaryKey && row[primaryKey] ? row[primaryKey] : null;
@@ -773,8 +905,47 @@ createApp({
 
         // Mettre à jour visuellement
         row[columnKey] = newValue === '' ? null : newValue;
-        event.target.style.backgroundColor = '#fef3c7'; // yellow-100
       }
+    },
+
+    validateCellValue(columnKey, value) {
+      if (!this.tableSchema || !this.tableSchema.columns) return null;
+
+      const column = this.tableSchema.columns.find(col => col.column_name === columnKey);
+      if (!column) return null;
+
+      // Si la valeur est vide et la colonne n'accepte pas NULL
+      if (value === '' && column.is_nullable === 'NO') {
+        return this.t('viewer.validationNullNotAllowed', { column: columnKey });
+      }
+
+      // Validation basée sur le type
+      const dataType = column.data_type.toLowerCase();
+
+      if (value !== '' && value !== null) {
+        // Types numériques
+        if (dataType.includes('int') || dataType.includes('serial')) {
+          if (!/^-?\d+$/.test(value)) {
+            return this.t('viewer.validationIntRequired', { column: columnKey });
+          }
+        }
+
+        // Types décimaux
+        if (dataType.includes('numeric') || dataType.includes('decimal') || dataType.includes('float') || dataType.includes('double')) {
+          if (!/^-?\d+\.?\d*$/.test(value)) {
+            return this.t('viewer.validationNumRequired', { column: columnKey });
+          }
+        }
+
+        // Boolean
+        if (dataType.includes('bool')) {
+          if (!['true', 'false', 't', 'f', '1', '0', 'yes', 'no'].includes(value.toLowerCase())) {
+            return this.t('viewer.validationBoolRequired', { column: columnKey });
+          }
+        }
+      }
+
+      return null;
     },
 
     getPrimaryKeyColumn() {
@@ -786,6 +957,533 @@ createApp({
       return null;
     },
 
+    isCellModified(row, columnKey) {
+      const primaryKey = this.getPrimaryKeyColumn();
+      const rowId = primaryKey && row[primaryKey] ? row[primaryKey] : null;
+      const cellId = `${rowId || JSON.stringify(row)}_${columnKey}`;
+      return !!this.editingCells[cellId];
+    },
+
+    exportToCSV() {
+      if (!this.tableData || this.tableData.length === 0) {
+        this.showConfirmModal(this.t('viewer.validationError'), this.t('viewer.exportError'), null, 'error');
+        return;
+      }
+
+      // Montrer la confirmation avant l'export
+      const rowCount = this.tableData.length;
+      const colCount = this.visibleColumns.length;
+      this.showConfirmModal(
+        this.t('viewer.exportCSV'),
+        this.t('viewer.exportConfirm', { rows: rowCount, cols: colCount, table: this.selectedTable }),
+        () => this.performExportCSV(),
+        'warning'
+      );
+    },
+
+    async deleteRow(row) {
+      const primaryKey = this.getPrimaryKeyColumn();
+      if (!primaryKey) {
+        this.showConfirmModal(this.t('viewer.validationError'), 'Cannot delete row: No primary key found', null, 'error');
+        return;
+      }
+
+      const rowId = row[primaryKey];
+      this.showConfirmModal(
+        this.t('viewer.deleteRow'),
+        this.t('viewer.deleteRowConfirm'),
+        async () => {
+          try {
+            await ipcRenderer.invoke('delete-table-row', {
+              host: this.viewerDb.host,
+              port: this.viewerDb.port,
+              user: this.viewerDb.user,
+              password: this.viewerDb.password,
+              database: this.viewerDb.name,
+              connectionString: this.viewerDb.connectionString,
+              table: this.selectedTable,
+              rowId: rowId,
+              primaryKeyColumn: primaryKey
+            });
+
+            this.showConfirmModal(this.t('viewer.deleteRow'), this.t('viewer.deleteRowSuccess'), null, 'success');
+            await this.loadTableData(false);
+          } catch (error) {
+            this.showConfirmModal(this.t('viewer.validationError'), error.message, null, 'error');
+          }
+        },
+        'warning'
+      );
+    },
+
+    async openAddRowModal() {
+      if (!this.tableSchema || !this.tableSchema.columns) {
+        this.showConfirmModal(this.t('viewer.validationError'), 'Schema not loaded', null, 'error');
+        return;
+      }
+
+      // Initialiser newRowData avec des valeurs intelligentes
+      this.newRowData = {};
+      this.enumValues = {};
+      this.foreignKeyData = {};
+
+      // Charger les valeurs ENUM pour les colonnes USER-DEFINED
+      const enumPromises = [];
+      const fkPromises = [];
+      this.tableSchema.columns.forEach(col => {
+        const dataType = (col.data_type || '').toUpperCase();
+        if (dataType === 'USER-DEFINED' && col.udt_name) {
+          // Extraire le nom du type depuis udt_name
+          const typeName = col.udt_name;
+          const promise = ipcRenderer.invoke('get-enum-values', {
+            host: this.viewerDb.host,
+            port: this.viewerDb.port,
+            user: this.viewerDb.user,
+            password: this.viewerDb.password,
+            database: this.viewerDb.name,
+            connectionString: this.viewerDb.connectionString,
+            typeName: typeName
+          }).then(result => {
+            this.enumValues[col.column_name] = result.values;
+          }).catch(err => {
+            console.error(`Failed to load enum values for ${col.column_name}:`, err);
+            this.enumValues[col.column_name] = [];
+          });
+          enumPromises.push(promise);
+        }
+      });
+
+      // Charger les données pour les Foreign Keys
+      if (this.tableRelations && this.tableRelations.length > 0) {
+        this.tableRelations.forEach(rel => {
+          const promise = ipcRenderer.invoke('get-table-data', {
+            host: this.viewerDb.host,
+            port: this.viewerDb.port,
+            user: this.viewerDb.user,
+            password: this.viewerDb.password,
+            database: this.viewerDb.name,
+            connectionString: this.viewerDb.connectionString,
+            table: rel.foreign_table_name,
+            limit: 100,
+            offset: 0
+          }).then(result => {
+            // Stocker les données FK avec un format display intelligent
+            this.foreignKeyData[rel.column_name] = result.rows.map(row => {
+              const id = row[rel.foreign_column_name];
+
+              // Chercher des champs descriptifs communs (ordre de priorité)
+              const descriptiveFields = ['name', 'title', 'label', 'email', 'username', 'firstname', 'lastname', 'description'];
+              const rowKeys = Object.keys(row);
+
+              // Trouver le premier champ descriptif disponible
+              let displayField = null;
+              for (const field of descriptiveFields) {
+                if (rowKeys.some(key => key.toLowerCase() === field)) {
+                  displayField = rowKeys.find(key => key.toLowerCase() === field);
+                  break;
+                }
+              }
+
+              // Si on a trouvé un champ descriptif
+              if (displayField && row[displayField]) {
+                return {
+                  id: id,
+                  display: `${id} - ${row[displayField]}`
+                };
+              }
+
+              // Sinon, afficher les 2-3 premiers champs non-ID
+              const otherFields = rowKeys
+                .filter(key =>
+                  key !== rel.foreign_column_name &&
+                  !key.toLowerCase().includes('password') &&
+                  !key.toLowerCase().includes('token') &&
+                  !key.toLowerCase().includes('secret') &&
+                  row[key] !== null &&
+                  row[key] !== undefined
+                )
+                .slice(0, 3);
+
+              if (otherFields.length > 0) {
+                const values = otherFields.map(key => `${key}: ${row[key]}`).join(', ');
+                return {
+                  id: id,
+                  display: `${id} - ${values}`
+                };
+              }
+
+              // Dernière option: juste l'ID
+              return {
+                id: id,
+                display: `${id}`
+              };
+            });
+          }).catch(err => {
+            console.error(`Failed to load FK data for ${rel.column_name}:`, err);
+            this.foreignKeyData[rel.column_name] = [];
+          });
+          fkPromises.push(promise);
+        });
+      }
+
+      // Attendre que toutes les valeurs ENUM et FK soient chargées
+      await Promise.all([...enumPromises, ...fkPromises]);
+
+      // Initialiser les valeurs
+      this.tableSchema.columns.forEach(col => {
+        const dataType = col.data_type.toLowerCase();
+        const columnDefault = (col.column_default || '').toLowerCase();
+
+        // Détecter les champs AUTO (séquences, serial, auto-increment)
+        // 1. Type SERIAL ou nextval (PostgreSQL auto-increment)
+        const isAutoIncrement =
+          dataType.includes('serial') ||
+          columnDefault.includes('nextval');
+
+        // 2. Champ "id" TEXT qui est PK (UUID/CUID - généré côté app)
+        const isTextIdPrimary =
+          col.is_primary &&
+          col.column_name.toLowerCase() === 'id' &&
+          (dataType === 'text' || dataType === 'varchar' || dataType === 'character varying') &&
+          !col.column_default;
+
+        if (isAutoIncrement) {
+          this.newRowData[col.column_name] = 'AUTO';
+        }
+        else if (isTextIdPrimary) {
+          // Générer un UUID v4 pour les IDs textuels
+          this.newRowData[col.column_name] = 'UUID';
+        }
+        // Auto-fill timestamps
+        else if (dataType.includes('timestamp') &&
+            (col.column_name.toLowerCase().includes('createdat') ||
+             col.column_name.toLowerCase().includes('updatedat') ||
+             col.column_name.toLowerCase().includes('created_at') ||
+             col.column_name.toLowerCase().includes('updated_at'))) {
+          this.newRowData[col.column_name] = 'CURRENT_TIMESTAMP';
+        }
+        // Use default value if available (clean PostgreSQL syntax)
+        else if (col.column_default) {
+          // Nettoyer les valeurs par défaut PostgreSQL
+          let cleanValue = col.column_default;
+
+          // Pour les ARRAY vides : ARRAY[]::type[] -> null
+          if (cleanValue.match(/^ARRAY\[\]/i)) {
+            cleanValue = null;
+          } else {
+            // Supprimer les casts PostgreSQL : 'value'::type ou value::type
+            cleanValue = cleanValue.replace(/::[\w\[\]]+$/g, '');
+
+            // Extraire la valeur entre quotes si présente : 'value' -> value
+            const quotedMatch = cleanValue.match(/^'([^']*)'$/);
+            if (quotedMatch) {
+              cleanValue = quotedMatch[1];
+            }
+
+            // Si c'est vide ou juste des espaces, utiliser null
+            if (!cleanValue || cleanValue.trim() === '') {
+              cleanValue = null;
+            }
+          }
+
+          this.newRowData[col.column_name] = cleanValue;
+        }
+        // Pour les ENUM, utiliser la première valeur
+        else if (this.enumValues[col.column_name] && this.enumValues[col.column_name].length > 0) {
+          this.newRowData[col.column_name] = this.enumValues[col.column_name][0];
+        }
+        // Pour les boolean, utiliser false par défaut
+        else if (dataType.includes('bool')) {
+          this.newRowData[col.column_name] = 'false';
+        }
+        else {
+          this.newRowData[col.column_name] = null;
+        }
+      });
+
+      this.showAddRowModal = true;
+    },
+
+    async openEditRowModal(row) {
+      if (!this.tableSchema || !this.tableSchema.columns) {
+        this.showConfirmModal(this.t('viewer.validationError'), 'Schema not loaded', null, 'error');
+        return;
+      }
+
+      // Copier les données de la ligne
+      this.editRowOriginal = JSON.parse(JSON.stringify(row));
+      this.editRowData = JSON.parse(JSON.stringify(row));
+      this.enumValues = {};
+      this.foreignKeyData = {};
+
+      // Charger les valeurs ENUM et FK (même logique que pour Add)
+      const enumPromises = [];
+      const fkPromises = [];
+
+      this.tableSchema.columns.forEach(col => {
+        const dataType = (col.data_type || '').toUpperCase();
+        if (dataType === 'USER-DEFINED' && col.udt_name) {
+          const typeName = col.udt_name;
+          const promise = ipcRenderer.invoke('get-enum-values', {
+            host: this.viewerDb.host,
+            port: this.viewerDb.port,
+            user: this.viewerDb.user,
+            password: this.viewerDb.password,
+            database: this.viewerDb.name,
+            connectionString: this.viewerDb.connectionString,
+            typeName: typeName
+          }).then(result => {
+            this.enumValues[col.column_name] = result.values;
+          }).catch(err => {
+            console.error(`Failed to load enum values for ${col.column_name}:`, err);
+            this.enumValues[col.column_name] = [];
+          });
+          enumPromises.push(promise);
+        }
+      });
+
+      // Charger les données pour les Foreign Keys
+      if (this.tableRelations && this.tableRelations.length > 0) {
+        this.tableRelations.forEach(rel => {
+          const promise = ipcRenderer.invoke('get-table-data', {
+            host: this.viewerDb.host,
+            port: this.viewerDb.port,
+            user: this.viewerDb.user,
+            password: this.viewerDb.password,
+            database: this.viewerDb.name,
+            connectionString: this.viewerDb.connectionString,
+            table: rel.foreign_table_name,
+            limit: 100,
+            offset: 0
+          }).then(result => {
+            this.foreignKeyData[rel.column_name] = result.rows.map(row => {
+              const id = row[rel.foreign_column_name];
+              const descriptiveFields = ['name', 'title', 'label', 'email', 'username', 'firstname', 'lastname', 'description'];
+              const rowKeys = Object.keys(row);
+              let displayField = null;
+              for (const field of descriptiveFields) {
+                if (rowKeys.some(key => key.toLowerCase() === field)) {
+                  displayField = rowKeys.find(key => key.toLowerCase() === field);
+                  break;
+                }
+              }
+              if (displayField && row[displayField]) {
+                return { id: id, display: `${id} - ${row[displayField]}` };
+              }
+              const otherFields = rowKeys.filter(key =>
+                key !== rel.foreign_column_name &&
+                !key.toLowerCase().includes('password') &&
+                !key.toLowerCase().includes('token') &&
+                !key.toLowerCase().includes('secret') &&
+                row[key] !== null &&
+                row[key] !== undefined
+              ).slice(0, 3);
+              if (otherFields.length > 0) {
+                const values = otherFields.map(key => `${key}: ${row[key]}`).join(', ');
+                return { id: id, display: `${id} - ${values}` };
+              }
+              return { id: id, display: `${id}` };
+            });
+          }).catch(err => {
+            console.error(`Failed to load FK data for ${rel.column_name}:`, err);
+            this.foreignKeyData[rel.column_name] = [];
+          });
+          fkPromises.push(promise);
+        });
+      }
+
+      await Promise.all([...enumPromises, ...fkPromises]);
+
+      this.showEditRowModal = true;
+    },
+
+    generateUUID() {
+      // Générer un UUID v4 simple
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+    },
+
+    async addNewRow() {
+      try {
+        // Préparer les données en excluant les champs AUTO et en convertissant les valeurs spéciales
+        const rowData = {};
+        Object.keys(this.newRowData).forEach(key => {
+          const value = this.newRowData[key];
+
+          // Exclure les champs AUTO (générés par la DB avec DEFAULT)
+          if (value === 'AUTO') {
+            return;
+          }
+
+          // Générer un UUID pour les champs UUID
+          if (value === 'UUID') {
+            rowData[key] = this.generateUUID();
+            return;
+          }
+
+          // Générer la date actuelle pour CURRENT_TIMESTAMP
+          if (value === 'CURRENT_TIMESTAMP') {
+            rowData[key] = new Date().toISOString();
+            return;
+          }
+
+          // Convertir les chaînes vides en null
+          if (value === '' || value === null || value === 'NULL') {
+            rowData[key] = null;
+          }
+          // Convertir les booléens string en vrais booléens
+          else if (value === 'true') {
+            rowData[key] = true;
+          }
+          else if (value === 'false') {
+            rowData[key] = false;
+          }
+          else {
+            rowData[key] = value;
+          }
+        });
+
+        const result = await ipcRenderer.invoke('insert-table-row', {
+          host: this.viewerDb.host,
+          port: this.viewerDb.port,
+          user: this.viewerDb.user,
+          password: this.viewerDb.password,
+          database: this.viewerDb.name,
+          connectionString: this.viewerDb.connectionString,
+          table: this.selectedTable,
+          rowData: rowData
+        });
+
+        this.showAddRowModal = false;
+        this.showConfirmModal(this.t('viewer.addRow'), this.t('viewer.addRowSuccess'), null, 'success');
+        await this.loadTableData(false);
+      } catch (error) {
+        this.showConfirmModal(this.t('viewer.validationError'), error.message, null, 'error');
+      }
+    },
+
+    async saveEditedRow() {
+      try {
+        // Trouver la clé primaire
+        const primaryKey = this.tableSchema.columns.find(col => col.is_primary);
+        if (!primaryKey) {
+          this.showConfirmModal(this.t('viewer.validationError'), 'No primary key found', null, 'error');
+          return;
+        }
+
+        const rowId = this.editRowOriginal[primaryKey.column_name];
+
+        // Détecter les changements
+        const changes = [];
+        Object.keys(this.editRowData).forEach(columnName => {
+          const oldValue = this.editRowOriginal[columnName];
+          const newValue = this.editRowData[columnName];
+
+          // Comparer les valeurs
+          if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
+            changes.push({
+              rowId: rowId,
+              primaryKeyColumn: primaryKey.column_name,
+              column: columnName,
+              oldValue: oldValue,
+              newValue: newValue
+            });
+          }
+        });
+
+        if (changes.length === 0) {
+          this.showConfirmModal(this.t('viewer.validationError'), 'No changes detected', null, 'error');
+          return;
+        }
+
+        // Envoyer les modifications au backend
+        await ipcRenderer.invoke('update-table-data', {
+          host: this.viewerDb.host,
+          port: this.viewerDb.port,
+          user: this.viewerDb.user,
+          password: this.viewerDb.password,
+          database: this.viewerDb.name,
+          connectionString: this.viewerDb.connectionString,
+          table: this.selectedTable,
+          changes: changes
+        });
+
+        this.showEditRowModal = false;
+        this.showConfirmModal(this.t('viewer.editRow'), this.t('viewer.editRowSuccess'), null, 'success');
+        await this.loadTableData(false);
+      } catch (error) {
+        this.showConfirmModal(this.t('viewer.validationError'), error.message, null, 'error');
+      }
+    },
+
+    performExportCSV() {
+      // Créer le CSV
+      const columns = this.visibleColumns;
+      const csvRows = [];
+
+      // Header
+      csvRows.push(columns.map(col => `"${col}"`).join(','));
+
+      // Data rows
+      this.tableData.forEach(row => {
+        const values = columns.map(col => {
+          const value = row[col];
+          if (value === null || value === undefined) return '""';
+          return `"${String(value).replace(/"/g, '""')}"`;
+        });
+        csvRows.push(values.join(','));
+      });
+
+      const csvContent = csvRows.join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+
+      const timestamp = new Date().toISOString().replace(/:/g, '-').split('.')[0];
+      const filename = `${this.selectedTable}_${timestamp}.csv`;
+
+      link.setAttribute('href', url);
+      link.setAttribute('download', filename);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      this.showConfirmModal(
+        this.t('viewer.exportCSV'),
+        this.t('viewer.exportSuccess', { count: this.tableData.length, filename }),
+        null,
+        'success'
+      );
+    },
+
+    showConfirmModal(title, message, onConfirm, type = 'warning') {
+      this.confirmModal = {
+        show: true,
+        title,
+        message,
+        confirmText: type === 'success' || type === 'error' ? 'OK' : 'Confirm',
+        cancelText: 'Cancel',
+        onConfirm,
+        type
+      };
+    },
+
+    hideConfirmModal() {
+      this.confirmModal.show = false;
+      this.confirmModal.onConfirm = null;
+    },
+
+    confirmModalAction() {
+      if (this.confirmModal.onConfirm) {
+        this.confirmModal.onConfirm();
+      }
+      this.hideConfirmModal();
+    },
+
     cancelChanges() {
       // Réinitialiser les cellules modifiées
       this.editingCells = {};
@@ -795,9 +1493,20 @@ createApp({
       this.loadTableData(false);
     },
 
-    async saveChanges() {
+    saveChanges() {
       if (!this.hasPendingChanges) return;
 
+      // Montrer le modal de confirmation
+      const changesCount = this.pendingChangesCount;
+      this.showConfirmModal(
+        this.t('viewer.saveChanges'),
+        this.t('viewer.confirmSave', { count: changesCount }),
+        () => this.performSaveChanges(),
+        'warning'
+      );
+    },
+
+    async performSaveChanges() {
       try {
         // Préparer les changements pour l'envoi au backend
         // Convertir les objets Proxy Vue en objets simples pour IPC
@@ -820,7 +1529,12 @@ createApp({
         if (result.success) {
           // Afficher un message de succès
           const rowsAffected = result.results.reduce((sum, r) => sum + (r.rowsAffected || 0), 0);
-          alert(`✓ Changes saved successfully!\n${rowsAffected} row(s) updated.`);
+          this.showConfirmModal(
+            this.t('viewer.saveChanges'),
+            this.t('viewer.saveSuccess', { count: rowsAffected }),
+            null,
+            'success'
+          );
 
           // Réinitialiser les cellules modifiées
           this.editingCells = {};
@@ -832,13 +1546,23 @@ createApp({
           // Afficher les erreurs
           const errors = result.results
             .filter(r => !r.success)
-            .map(r => `${r.column}: ${r.error}`)
+            .map(r => `• ${r.column}: ${r.error}`)
             .join('\n');
-          alert(`⚠ Some changes failed:\n${errors}`);
+          this.showConfirmModal(
+            this.t('viewer.validationError'),
+            this.t('viewer.saveError', { errors }),
+            null,
+            'error'
+          );
         }
       } catch (error) {
         console.error('Error saving changes:', error);
-        alert('✗ Error saving changes:\n' + error.message);
+        this.showConfirmModal(
+          this.t('viewer.validationError'),
+          `${error.message}`,
+          null,
+          'error'
+        );
       }
     },
 
@@ -3484,23 +4208,49 @@ createApp({
                 <div class="flex items-center justify-between mb-4">
                   <h3 class="text-2xl font-bold text-gray-900">{{ selectedTable }}</h3>
 
-                  <!-- Edit Mode Toggle -->
-                  <div class="flex items-center gap-3">
-                    <span class="text-sm font-medium text-gray-700">Edit Mode</span>
+                  <!-- Actions -->
+                  <div class="flex items-center gap-4">
+                    <!-- Add Row Button (visible only in edit mode) -->
                     <button
-                      @click="editModeEnabled = !editModeEnabled"
-                      :class="[
-                        editModeEnabled ? 'bg-black' : 'bg-gray-200',
-                        'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none'
-                      ]"
+                      v-if="editModeEnabled"
+                      @click="openAddRowModal"
+                      class="px-3 py-1.5 bg-green-100 hover:bg-green-200 text-green-700 text-sm font-medium rounded transition-colors flex items-center gap-2"
                     >
-                      <span
-                        :class="[
-                          editModeEnabled ? 'translate-x-6' : 'translate-x-1',
-                          'inline-block h-4 w-4 transform rounded-full bg-white transition-transform'
-                        ]"
-                      ></span>
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                      </svg>
+                      {{ t('viewer.addRow') }}
                     </button>
+
+                    <!-- Export CSV Button -->
+                    <button
+                      @click="exportToCSV"
+                      class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded transition-colors flex items-center gap-2"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                      </svg>
+                      {{ t('viewer.exportCSV') }}
+                    </button>
+
+                    <!-- Edit Mode Toggle -->
+                    <div class="flex items-center gap-3">
+                      <span class="text-sm font-medium text-gray-700">{{ t('viewer.editMode') }}</span>
+                      <button
+                        @click="editModeEnabled = !editModeEnabled"
+                        :class="[
+                          editModeEnabled ? 'bg-black' : 'bg-gray-200',
+                          'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none'
+                        ]"
+                      >
+                        <span
+                          :class="[
+                            editModeEnabled ? 'translate-x-6' : 'translate-x-1',
+                            'inline-block h-4 w-4 transform rounded-full bg-white transition-transform'
+                          ]"
+                        ></span>
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -3566,7 +4316,7 @@ createApp({
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
                         </svg>
                         <span class="text-sm font-medium text-gray-700">
-                          {{ pendingChangesCount }} cell(s) modified
+                          {{ t('viewer.cellsModified', { count: pendingChangesCount }) }}
                         </span>
                         <svg
                           class="w-4 h-4 text-gray-500 transition-transform"
@@ -3583,13 +4333,13 @@ createApp({
                           @click="cancelChanges"
                           class="px-4 py-2 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors text-sm font-medium rounded"
                         >
-                          Cancel
+                          {{ t('viewer.cancel') }}
                         </button>
                         <button
                           @click="saveChanges"
                           class="px-4 py-2 bg-black text-white hover:bg-gray-800 transition-colors text-sm font-medium rounded"
                         >
-                          Save Changes
+                          {{ t('viewer.saveChanges') }}
                         </button>
                       </div>
                     </div>
@@ -3700,6 +4450,7 @@ createApp({
                   <table class="min-w-full">
                     <thead class="bg-gray-50">
                       <tr>
+                        <th v-if="editModeEnabled" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase w-20">Actions</th>
                         <th v-for="key in visibleColumns" :key="key" class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
                           {{ key }}
                         </th>
@@ -3707,11 +4458,33 @@ createApp({
                     </thead>
                     <tbody class="bg-white divide-y divide-gray-200">
                       <tr v-if="tableData.length === 0 && tableDataSearch">
-                        <td :colspan="visibleColumns.length" class="px-4 py-8 text-center text-gray-400 text-sm">
+                        <td :colspan="editModeEnabled ? visibleColumns.length + 1 : visibleColumns.length" class="px-4 py-8 text-center text-gray-400 text-sm">
                           No results found for "{{ tableDataSearch }}"
                         </td>
                       </tr>
                       <tr v-for="(row, idx) in tableData" :key="idx" class="hover:bg-gray-50">
+                        <td v-if="editModeEnabled" class="px-4 py-2">
+                          <div class="flex items-center gap-2">
+                            <button
+                              @click="openEditRowModal(row)"
+                              class="text-blue-600 hover:text-blue-800 transition-colors"
+                              :title="t('viewer.editRow')"
+                            >
+                              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                              </svg>
+                            </button>
+                            <button
+                              @click="deleteRow(row)"
+                              class="text-red-600 hover:text-red-800 transition-colors"
+                              :title="t('viewer.deleteRow')"
+                            >
+                              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                              </svg>
+                            </button>
+                          </div>
+                        </td>
                         <td
                           v-for="key in visibleColumns"
                           :key="key"
@@ -3723,7 +4496,12 @@ createApp({
                             :contenteditable="true"
                             @blur="updateCellValue(row, key, $event)"
                             @keydown.enter.prevent="$event.target.blur()"
-                            class="outline-none focus:bg-yellow-50 px-1 py-0.5 rounded min-h-[20px]"
+                            :class="[
+                              'outline-none px-1 py-0.5 rounded min-h-[20px] transition-all',
+                              isCellModified(row, key)
+                                ? 'bg-yellow-50 border-2 border-yellow-400 shadow-sm'
+                                : 'focus:bg-yellow-50 border-2 border-transparent'
+                            ]"
                           >{{ row[key] !== null && row[key] !== undefined ? row[key] : '' }}</div>
                           <span v-else class="truncate block">{{ row[key] !== null && row[key] !== undefined ? row[key] : '—' }}</span>
                         </td>
@@ -3805,6 +4583,274 @@ createApp({
               </div>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Confirmation Modal -->
+    <div v-if="confirmModal.show" class="fixed inset-0 z-[100] flex items-center justify-center bg-black bg-opacity-50" @click.self="hideConfirmModal">
+      <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 overflow-hidden">
+        <!-- Header -->
+        <div :class="[
+          'px-6 py-4 flex items-center gap-3',
+          confirmModal.type === 'success' ? 'bg-green-50' : confirmModal.type === 'error' ? 'bg-red-50' : 'bg-yellow-50'
+        ]">
+          <svg v-if="confirmModal.type === 'warning'" class="w-6 h-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+          <svg v-else-if="confirmModal.type === 'success'" class="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          <svg v-else-if="confirmModal.type === 'error'" class="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          <h3 class="text-lg font-semibold text-gray-900">{{ confirmModal.title }}</h3>
+        </div>
+
+        <!-- Body -->
+        <div class="px-6 py-4">
+          <p class="text-gray-700 whitespace-pre-line">{{ confirmModal.message }}</p>
+        </div>
+
+        <!-- Footer -->
+        <div class="px-6 py-4 bg-gray-50 flex justify-end gap-3">
+          <button
+            v-if="confirmModal.onConfirm"
+            @click="hideConfirmModal"
+            class="px-4 py-2 border border-gray-300 rounded text-gray-700 hover:bg-gray-100 transition-colors"
+          >
+            {{ confirmModal.cancelText }}
+          </button>
+          <button
+            @click="confirmModalAction"
+            :class="[
+              'px-4 py-2 rounded transition-colors',
+              confirmModal.type === 'success' ? 'bg-green-600 hover:bg-green-700 text-white' :
+              confirmModal.type === 'error' ? 'bg-red-600 hover:bg-red-700 text-white' :
+              'bg-yellow-600 hover:bg-yellow-700 text-white'
+            ]"
+          >
+            {{ confirmModal.confirmText }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add Row Modal -->
+    <div v-if="showAddRowModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" @click.self="showAddRowModal = false">
+      <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col">
+        <!-- Header -->
+        <div class="px-6 py-4 bg-green-50 border-b border-green-200">
+          <h3 class="text-lg font-semibold text-gray-900">{{ t('viewer.addRowTitle') }}</h3>
+        </div>
+
+        <!-- Body -->
+        <div class="px-6 py-4 overflow-y-auto flex-1">
+          <div class="space-y-4">
+            <div v-for="column in tableSchema.columns" :key="column.column_name" class="flex flex-col">
+              <label class="text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+                {{ column.column_name }}
+                <span v-if="column.is_nullable === 'NO'" class="text-red-500">*</span>
+                <span class="text-xs text-gray-500">({{ column.data_type }})</span>
+                <span v-if="column.is_primary" class="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs font-mono rounded">PK</span>
+                <span v-if="column.is_foreign" class="px-2 py-0.5 bg-blue-100 text-blue-800 text-xs font-mono rounded">FK</span>
+              </label>
+
+              <!-- AUTO-generated field -->
+              <div v-if="newRowData[column.column_name] === 'AUTO'" class="px-3 py-2 bg-gray-100 border border-gray-300 rounded text-sm text-gray-600 flex items-center gap-2">
+                <svg class="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+                Auto-generated by database
+              </div>
+
+              <!-- TIMESTAMP field -->
+              <div v-else-if="newRowData[column.column_name] === 'CURRENT_TIMESTAMP'" class="px-3 py-2 bg-blue-50 border border-blue-300 rounded text-sm text-blue-700 flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                Current timestamp (auto)
+              </div>
+
+              <!-- UUID field -->
+              <div v-else-if="newRowData[column.column_name] === 'UUID'" class="px-3 py-2 bg-purple-50 border border-purple-300 rounded text-sm text-purple-700 flex items-center gap-2">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/>
+                </svg>
+                UUID auto-generated
+              </div>
+
+              <!-- ENUM dropdown -->
+              <select
+                v-else-if="enumValues[column.column_name] && enumValues[column.column_name].length > 0"
+                v-model="newRowData[column.column_name]"
+                class="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-green-500 text-sm bg-white"
+              >
+                <option v-for="val in enumValues[column.column_name]" :key="val" :value="val">
+                  {{ val }}
+                </option>
+              </select>
+
+              <!-- Boolean dropdown -->
+              <select
+                v-else-if="column.data_type.toLowerCase().includes('bool')"
+                v-model="newRowData[column.column_name]"
+                class="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-green-500 text-sm bg-white"
+              >
+                <option value="true">true</option>
+                <option value="false">false</option>
+                <option v-if="column.is_nullable === 'YES'" :value="null">NULL</option>
+              </select>
+
+              <!-- Foreign Key dropdown -->
+              <select
+                v-else-if="foreignKeyData[column.column_name] && foreignKeyData[column.column_name].length > 0"
+                v-model="newRowData[column.column_name]"
+                class="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-green-500 text-sm bg-white"
+              >
+                <option :value="null">-- {{ t('viewer.selectRelation') }} --</option>
+                <option v-for="item in foreignKeyData[column.column_name]" :key="item.id" :value="item.id">
+                  {{ item.display }}
+                </option>
+              </select>
+
+              <!-- Regular input field -->
+              <div v-else>
+                <input
+                  v-model="newRowData[column.column_name]"
+                  type="text"
+                  :placeholder="
+                    column.data_type === 'ARRAY' ? '{value1, value2}' :
+                    (column.data_type.toLowerCase().includes('json')) ? '{}' :
+                    (column.is_nullable === 'YES' ? 'NULL (optional)' : 'Required')
+                  "
+                  class="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-green-500 text-sm w-full"
+                />
+                <p v-if="column.data_type === 'ARRAY'" class="text-xs text-gray-500 mt-1">
+                  Format PostgreSQL: {val1, val2} ou laissez vide pour un tableau vide
+                </p>
+                <p v-if="column.data_type.toLowerCase().includes('json')" class="text-xs text-gray-500 mt-1">
+                  Format JSON valide: {"key": "value"} ou {} pour un objet vide
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="px-6 py-4 bg-gray-50 flex justify-end gap-3 border-t border-gray-200">
+          <button
+            @click="showAddRowModal = false"
+            class="px-4 py-2 border border-gray-300 rounded text-gray-700 hover:bg-gray-100 transition-colors"
+          >
+            {{ t('viewer.cancel') }}
+          </button>
+          <button
+            @click="addNewRow"
+            class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition-colors"
+          >
+            {{ t('viewer.addRow') }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Edit Row Modal -->
+    <div v-if="showEditRowModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50" @click.self="showEditRowModal = false">
+      <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col">
+        <!-- Header -->
+        <div class="px-6 py-4 bg-blue-50 border-b border-blue-200">
+          <h3 class="text-lg font-semibold text-gray-900">{{ t('viewer.editRowTitle') }}</h3>
+        </div>
+
+        <!-- Body -->
+        <div class="px-6 py-4 overflow-y-auto flex-1">
+          <div class="space-y-4">
+            <div v-for="column in tableSchema.columns" :key="column.column_name" class="flex flex-col">
+              <label class="text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
+                {{ column.column_name }}
+                <span v-if="column.is_nullable === 'NO'" class="text-red-500">*</span>
+                <span class="text-xs text-gray-500">({{ column.data_type }})</span>
+                <span v-if="column.is_primary" class="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs font-mono rounded">PK</span>
+                <span v-if="column.is_foreign" class="px-2 py-0.5 bg-blue-100 text-blue-800 text-xs font-mono rounded">FK</span>
+              </label>
+
+              <!-- Read-only PK field -->
+              <div v-if="column.is_primary" class="px-3 py-2 bg-gray-50 border border-gray-300 rounded text-sm text-gray-500">
+                {{ editRowData[column.column_name] }}
+              </div>
+
+              <!-- ENUM dropdown -->
+              <select
+                v-else-if="enumValues[column.column_name] && enumValues[column.column_name].length > 0"
+                v-model="editRowData[column.column_name]"
+                class="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+              >
+                <option v-for="val in enumValues[column.column_name]" :key="val" :value="val">
+                  {{ val }}
+                </option>
+              </select>
+
+              <!-- Boolean dropdown -->
+              <select
+                v-else-if="column.data_type.toLowerCase().includes('bool')"
+                v-model="editRowData[column.column_name]"
+                class="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+              >
+                <option :value="true">true</option>
+                <option :value="false">false</option>
+                <option v-if="column.is_nullable === 'YES'" :value="null">NULL</option>
+              </select>
+
+              <!-- Foreign Key dropdown -->
+              <select
+                v-else-if="foreignKeyData[column.column_name] && foreignKeyData[column.column_name].length > 0"
+                v-model="editRowData[column.column_name]"
+                class="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm bg-white"
+              >
+                <option :value="null">-- {{ t('viewer.selectRelation') }} --</option>
+                <option v-for="item in foreignKeyData[column.column_name]" :key="item.id" :value="item.id">
+                  {{ item.display }}
+                </option>
+              </select>
+
+              <!-- Regular input field -->
+              <div v-else>
+                <input
+                  v-model="editRowData[column.column_name]"
+                  type="text"
+                  :placeholder="
+                    column.data_type === 'ARRAY' ? '{value1, value2}' :
+                    (column.data_type.toLowerCase().includes('json')) ? '{}' :
+                    (column.is_nullable === 'YES' ? 'NULL (optional)' : 'Required')
+                  "
+                  class="px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm w-full"
+                />
+                <p v-if="column.data_type === 'ARRAY'" class="text-xs text-gray-500 mt-1">
+                  Format PostgreSQL: {val1, val2} ou laissez vide pour un tableau vide
+                </p>
+                <p v-if="column.data_type.toLowerCase().includes('json')" class="text-xs text-gray-500 mt-1">
+                  Format JSON valide: {"key": "value"} ou {} pour un objet vide
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="px-6 py-4 bg-gray-50 flex justify-end gap-3 border-t border-gray-200">
+          <button
+            @click="showEditRowModal = false"
+            class="px-4 py-2 border border-gray-300 rounded text-gray-700 hover:bg-gray-100 transition-colors"
+          >
+            {{ t('viewer.cancel') }}
+          </button>
+          <button
+            @click="saveEditedRow"
+            class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+          >
+            {{ t('viewer.saveChanges') }}
+          </button>
         </div>
       </div>
     </div>

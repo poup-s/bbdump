@@ -92,6 +92,7 @@ export async function getTableSchema(params: ConnectionParams & { table: string 
       SELECT
         column_name,
         data_type,
+        udt_name,
         is_nullable,
         column_default,
         character_maximum_length,
@@ -343,6 +344,91 @@ export async function updateTableData(params: ConnectionParams & {
   } catch (error: any) {
     await client.query('ROLLBACK');
     throw new Error(`Failed to update table data: ${error.message}`);
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * Supprime une ligne d'une table
+ */
+export async function deleteTableRow(params: ConnectionParams & {
+  table: string;
+  rowId: any;
+  primaryKeyColumn: string;
+}) {
+  const client = await createConnection(params);
+
+  try {
+    const query = `DELETE FROM "${params.table}" WHERE "${params.primaryKeyColumn}" = $1`;
+    const result = await client.query(query, [params.rowId]);
+
+    return {
+      success: true,
+      rowsAffected: result.rowCount
+    };
+  } catch (error: any) {
+    throw new Error(`Failed to delete row: ${error.message}`);
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * Ajoute une nouvelle ligne dans une table
+ */
+export async function insertTableRow(params: ConnectionParams & {
+  table: string;
+  rowData: any;
+}) {
+  const client = await createConnection(params);
+
+  try {
+    const columns = Object.keys(params.rowData);
+    const values = Object.values(params.rowData);
+    const placeholders = values.map((_, i) => `$${i + 1}`).join(', ');
+
+    const query = `
+      INSERT INTO "${params.table}" (${columns.map(c => `"${c}"`).join(', ')})
+      VALUES (${placeholders})
+      RETURNING *
+    `;
+
+    const result = await client.query(query, values);
+
+    return {
+      success: true,
+      row: result.rows[0]
+    };
+  } catch (error: any) {
+    throw new Error(`Failed to insert row: ${error.message}`);
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * Récupère les valeurs possibles d'un type ENUM
+ */
+export async function getEnumValues(params: ConnectionParams & {
+  typeName: string;
+}) {
+  const client = await createConnection(params);
+
+  try {
+    const query = `
+      SELECT e.enumlabel as value
+      FROM pg_type t
+      JOIN pg_enum e ON t.oid = e.enumtypid
+      WHERE t.typname = $1
+      ORDER BY e.enumsortorder;
+    `;
+
+    const result = await client.query(query, [params.typeName]);
+
+    return {
+      values: result.rows.map(row => row.value)
+    };
   } finally {
     await client.end();
   }

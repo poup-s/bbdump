@@ -494,6 +494,63 @@ ipcMain.handle('update-table-data', async (_, params: {
   }
 });
 
+ipcMain.handle('delete-table-row', async (_, params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+  connectionString?: string;
+  table: string;
+  rowId: any;
+  primaryKeyColumn: string;
+}) => {
+  try {
+    logger.info(`Deleting row from table: ${params.table}`);
+    return await dbViewer.deleteTableRow(params);
+  } catch (error) {
+    logger.error(`Error deleting row: ${error}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('insert-table-row', async (_, params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+  connectionString?: string;
+  table: string;
+  rowData: any;
+}) => {
+  try {
+    logger.info(`Inserting row into table: ${params.table}`);
+    return await dbViewer.insertTableRow(params);
+  } catch (error) {
+    logger.error(`Error inserting row: ${error}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('get-enum-values', async (_, params: {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+  connectionString?: string;
+  typeName: string;
+}) => {
+  try {
+    logger.info(`Getting enum values for type: ${params.typeName}`);
+    return await dbViewer.getEnumValues(params);
+  } catch (error) {
+    logger.error(`Error getting enum values: ${error}`);
+    throw error;
+  }
+});
+
 // Événements de l'application
 app.on('ready', () => {
   logger.info('Application started');
