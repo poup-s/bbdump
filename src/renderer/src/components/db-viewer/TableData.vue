@@ -84,7 +84,11 @@ const deleteRow = (row: any) => {
   }
 
   const pkValue = row[primaryKey.value];
-  
+  if (pkValue === null || pkValue === undefined) {
+    addToast('Cannot delete row: Primary key value is missing', 'error');
+    return;
+  }
+
   showConfirm({
     title: t('viewer.deleteRowTitle'),
     message: t('viewer.deleteRowConfirm'),
@@ -106,7 +110,7 @@ const deleteRow = (row: any) => {
         await ipcRenderer.invoke('delete-table-row', {
           db: dbConfig,
           table: props.table,
-          pkColumn: primaryKey.value,
+          primaryKeyColumn: primaryKey.value,
           rowId: pkValue
         });
         addToast(t('viewer.rowDeleted'), 'success');
