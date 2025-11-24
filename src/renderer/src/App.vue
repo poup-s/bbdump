@@ -18,9 +18,10 @@ import ConfirmModal from './components/ConfirmModal.vue';
 import DatabaseModal from './components/DatabaseModal.vue';
 import RestoreBackupModal from './components/RestoreBackupModal.vue';
 import DbViewer from './components/db-viewer/DbViewer.vue';
+import Onboarding from './components/Onboarding.vue';
 import ThreeBackground from './components/ThreeBackground.vue';
 
-const { t } = useI18n();
+const { t, setLanguage } = useI18n();
 const { addToast } = useToast();
 const isDark = useDark();
 const toggleDark = useToggle(isDark);
@@ -40,6 +41,15 @@ const loadConfig = async () => {
   try {
     const config = await ipcRenderer.invoke('get-config');
     store.databases = config.databases;
+    
+    // Handle onboarding state
+    store.onboardingCompleted = config.onboardingCompleted || false;
+    
+    // Handle language
+    if (config.language) {
+      store.language = config.language;
+      setLanguage(config.language);
+    }
   } catch (error) {
     console.error('Error loading config:', error);
     addToast('Error loading configuration', 'error');
@@ -95,7 +105,9 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="min-h-screen flex bg-background text-foreground font-sans overflow-hidden relative transition-colors duration-300">
+  <Onboarding v-if="!store.onboardingCompleted" />
+  
+  <div v-else class="min-h-screen flex bg-background text-foreground font-sans overflow-hidden relative transition-colors duration-300">
     <ThreeBackground />
     
     <!-- Floating Sidebar -->

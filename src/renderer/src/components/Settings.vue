@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
 import { ipcRenderer } from '../electron';
+import { store } from '../store';
 
 const { t, setLanguage } = useI18n();
 const { addToast } = useToast();
@@ -21,7 +22,7 @@ const loadSettings = async () => {
 };
 
 const saveLanguage = async () => {
-  setLanguage(currentLang.value);
+  setLanguage(currentLang.value as 'en' | 'fr');
   try {
     await ipcRenderer.invoke('save-config', { language: currentLang.value });
     addToast(t('toast.settingsSaved'), 'success');
@@ -68,6 +69,13 @@ const changeBackupLocation = async () => {
   }
 };
 
+const replayOnboarding = () => {
+  store.onboardingCompleted = false;
+  // No need to save to config immediately, as completing onboarding will save it.
+  // But if we want to persist the "reset", we could. 
+  // For now, just setting store state is enough to trigger the view.
+};
+
 onMounted(() => {
   loadSettings();
 });
@@ -84,7 +92,7 @@ onMounted(() => {
       <!-- Language -->
       <div class="bg-white dark:bg-zinc-900 rounded-2xl p-6 border border-border shadow-sm">
         <h3 class="text-lg font-semibold mb-4">{{ t('settings.general') }}</h3>
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between mb-4">
           <label class="text-gray-600">{{ t('settings.language') }}</label>
           <select
             v-model="currentLang"
@@ -94,6 +102,16 @@ onMounted(() => {
             <option value="en">English</option>
             <option value="fr">Français</option>
           </select>
+        </div>
+        
+        <div class="flex items-center justify-between pt-4 border-t border-border">
+          <div class="text-gray-600">Onboarding</div>
+          <button
+            @click="replayOnboarding"
+            class="px-4 py-2 bg-white dark:bg-zinc-800 border border-border rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-700 transition-colors text-sm font-medium"
+          >
+            {{ t('settings.replayOnboarding') || 'Replay Onboarding' }}
+          </button>
         </div>
       </div>
 

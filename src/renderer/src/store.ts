@@ -30,5 +30,7 @@ export const store = reactive({
         logs: string[];
         error: string | null;
     } | null,
-    newlyAddedDbName: null as string | null
+    newlyAddedDbName: null as string | null,
+    onboardingCompleted: false,
+    language: 'en' as 'en' | 'fr'
 });

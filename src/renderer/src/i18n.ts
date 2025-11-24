@@ -238,7 +238,8 @@ export const translations = {
             importSuccess: '✓ Key imported successfully!\n\nThe application will restart to apply the changes.',
             importError: '✗ Import error: {error}',
             copyPath: '📋 Path copied to clipboard!',
-            copyError: '✗ Error during key export'
+            copyError: '✗ Error during key export',
+            replayOnboarding: 'Replay Onboarding'
         },
         about: {
             title: 'Information',
@@ -363,6 +364,11 @@ export const translations = {
             fillRequired: 'Please fill in all required fields',
             databaseAdded: 'Database added successfully',
             databaseUpdated: 'Database updated successfully'
+        },
+        onboarding: {
+            backupLocation: 'Backup Location',
+            backupLocationDesc: 'Where should we store your database backups?',
+            getStarted: 'Get Started'
         }
     },
     fr: {
@@ -599,7 +605,8 @@ export const translations = {
             importSuccess: '✓ Clé importée avec succès !\n\nL\'application va redémarrer pour appliquer les changements.',
             importError: '✗ Erreur lors de l\'import : {error}',
             copyPath: '📋 Chemin copié dans le presse-papier !',
-            copyError: '✗ Erreur lors de l\'export de la clé'
+            copyError: '✗ Erreur lors de l\'export de la clé',
+            replayOnboarding: 'Rejouer l\'introduction'
         },
         about: {
             title: 'Informations',
@@ -724,6 +731,11 @@ export const translations = {
             fillRequired: 'Veuillez remplir tous les champs obligatoires',
             databaseAdded: 'Base de données ajoutée avec succès',
             databaseUpdated: 'Base de données mise à jour avec succès'
+        },
+        onboarding: {
+            backupLocation: 'Emplacement des sauvegardes',
+            backupLocationDesc: 'Où devons-nous stocker vos sauvegardes de base de données ?',
+            getStarted: 'Commencer'
         }
     }
 };

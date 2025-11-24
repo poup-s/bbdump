@@ -36,10 +36,21 @@ function loadConfig(): AppConfig {
       }
 
       logger.info(`Configuration loaded: ${loadedConfig.databases.length} database(s)`);
+
+      // For existing users with databases, assume onboarding is done if not specified
+      if (loadedConfig.onboardingCompleted === undefined && loadedConfig.databases.length > 0) {
+        loadedConfig.onboardingCompleted = true;
+        saveConfig(loadedConfig);
+      }
+
       return loadedConfig;
     } else {
       // Créer une configuration par défaut
-      const defaultConfig: AppConfig = { databases: [] };
+      const defaultConfig: AppConfig = {
+        databases: [],
+        onboardingCompleted: false,
+        language: 'en'
+      };
       saveConfig(defaultConfig);
       logger.info('Default configuration created');
       return defaultConfig;
@@ -139,6 +150,21 @@ ipcMain.handle('save-config', async (_, newConfig: AppConfig): Promise<void> => 
   config = newConfig;
   saveConfig(config);
   cronManager.rescheduleAll(config.databases || []);
+});
+
+ipcMain.handle('complete-onboarding', async (_, settings: { language: 'en' | 'fr', defaultBackupPath: string }) => {
+  config.onboardingCompleted = true;
+  config.language = settings.language;
+  config.defaultBackupPath = settings.defaultBackupPath;
+  saveConfig(config);
+  return config;
+});
+
+ipcMain.handle('save-settings', async (_, settings: { language?: 'en' | 'fr', defaultBackupPath?: string }) => {
+  if (settings.language) config.language = settings.language;
+  if (settings.defaultBackupPath) config.defaultBackupPath = settings.defaultBackupPath;
+  saveConfig(config);
+  return config;
 });
 
 ipcMain.handle('add-database', async (_, db: DatabaseConfig): Promise<AppConfig> => {

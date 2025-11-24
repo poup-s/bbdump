@@ -22,6 +22,9 @@ export interface DatabaseConfig {
 
 export interface AppConfig {
   databases: DatabaseConfig[];
+  onboardingCompleted?: boolean;
+  language?: 'en' | 'fr';
+  defaultBackupPath?: string;
 }
 
 export interface BackupResult {
