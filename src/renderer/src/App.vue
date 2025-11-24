@@ -1,0 +1,213 @@
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted } from 'vue';
+import { store } from './store';
+import { useI18n } from './composables/useI18n';
+import { useToast } from './composables/useToast';
+import { ipcRenderer } from './electron';
+import { useDark, useToggle } from '@vueuse/core';
+
+// Components
+import DatabaseList from './components/DatabaseList.vue';
+import BackupList from './components/BackupList.vue';
+import LogViewer from './components/LogViewer.vue';
+import ScheduledTasks from './components/ScheduledTasks.vue';
+import Settings from './components/Settings.vue';
+import About from './components/About.vue';
+import ToastNotification from './components/ToastNotification.vue';
+import ConfirmModal from './components/ConfirmModal.vue';
+import DatabaseModal from './components/DatabaseModal.vue';
+import RestoreBackupModal from './components/RestoreBackupModal.vue';
+import DbViewer from './components/db-viewer/DbViewer.vue';
+import ThreeBackground from './components/ThreeBackground.vue';
+
+const { t } = useI18n();
+const { addToast } = useToast();
+const isDark = useDark();
+const toggleDark = useToggle(isDark);
+
+const activeTab = ref('databases');
+
+const tabs = [
+  { id: 'databases', label: 'nav.databases', icon: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4' },
+  { id: 'backups', label: 'nav.backups', icon: 'M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2' },
+  { id: 'logs', label: 'nav.logs', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
+  { id: 'tasks', label: 'nav.tasks', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
+  { id: 'settings', label: 'nav.settings', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z' },
+  { id: 'about', label: 'nav.about', icon: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z' }
+];
+
+const loadConfig = async () => {
+  try {
+    const config = await ipcRenderer.invoke('get-config');
+    store.databases = config.databases;
+  } catch (error) {
+    console.error('Error loading config:', error);
+    addToast('Error loading configuration', 'error');
+  }
+};
+
+const loadAppInfo = async () => {
+  try {
+    const version = await ipcRenderer.invoke('get-app-version');
+    store.appVersion = version;
+  } catch (error) {
+    console.error('Error loading app info:', error);
+  }
+};
+
+// IPC Listeners
+const setupListeners = () => {
+  ipcRenderer.on('backup-complete', (_: any, result: any) => {
+    store.isBackingUp = false;
+    if (result.success) {
+      addToast(t('backup.success', { db: result.database }), 'success');
+      // Update last backup time in store
+      const db = store.databases.find(d => d.name === result.database);
+      if (db) db.lastBackup = result.timestamp;
+    } else {
+      addToast(t('backup.error', { db: result.database, error: result.error }), 'error');
+    }
+    store.backupProgress = null;
+  });
+
+  ipcRenderer.on('backup-progress', (_: any, data: any) => {
+    store.backupProgress = data;
+  });
+
+  ipcRenderer.on('backup-started', (_: any, dbName: string) => {
+    store.isBackingUp = true;
+    store.backupProgress = { status: 'starting', dbName, logs: [], error: null };
+    addToast(t('backup.started', { db: dbName }), 'info');
+  });
+};
+
+onMounted(() => {
+  loadConfig();
+  loadAppInfo();
+  setupListeners();
+});
+
+onUnmounted(() => {
+  ipcRenderer.removeAllListeners('backup-complete');
+  ipcRenderer.removeAllListeners('backup-progress');
+  ipcRenderer.removeAllListeners('backup-started');
+});
+</script>
+
+<template>
+  <div class="min-h-screen flex bg-background text-foreground font-sans overflow-hidden relative transition-colors duration-300">
+    <ThreeBackground />
+    
+    <!-- Floating Sidebar -->
+    <nav class="w-20 m-4 flex flex-col items-center bg-surface/80 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl z-10 perspective-1000">
+      <div class="p-6 mb-4">
+        <div class="w-8 h-8 bg-foreground rounded-full flex items-center justify-center text-background font-bold text-xl shadow-lg shadow-foreground/20">B</div>
+      </div>
+      
+      <div class="flex-1 w-full flex flex-col items-center gap-6">
+        <button
+          v-for="tab in tabs"
+          :key="tab.id"
+          @click="activeTab = tab.id"
+          :class="[
+            'p-3 rounded-xl transition-all duration-500 ease-out group relative transform-style-3d',
+            activeTab === tab.id 
+              ? 'bg-foreground text-background shadow-xl shadow-foreground/20 scale-110 rotate-y-12' 
+              : 'text-gray-400 hover:text-foreground hover:bg-white/10 hover:scale-110 hover:rotate-y-12 hover:shadow-lg'
+          ]"
+        >
+          <!-- 3D Icon Container -->
+          <div class="relative transform transition-transform duration-300 group-active:scale-75">
+            <svg class="w-6 h-6 drop-shadow-md" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" :d="tab.icon" />
+            </svg>
+          </div>
+        </button>
+      </div>
+
+      <div class="p-4 mb-2">
+        <button 
+          @click="toggleDark()" 
+          class="p-3 rounded-xl text-gray-400 hover:text-foreground hover:bg-white/10 transition-all duration-300 hover:rotate-180"
+        >
+          <svg v-if="isDark" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+          </svg>
+          <svg v-else class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+          </svg>
+        </button>
+      </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="flex-1 m-4 ml-0 bg-surface/50 backdrop-blur-md border border-white/10 rounded-3xl shadow-2xl overflow-hidden relative z-10">
+      <div class="h-full overflow-y-auto p-8 scrollbar-hide">
+        <Transition
+          enter-active-class="transition duration-300 ease-out"
+          enter-from-class="transform opacity-0 translate-y-4"
+          enter-to-class="transform opacity-100 translate-y-0"
+          leave-active-class="transition duration-200 ease-in"
+          leave-from-class="transform opacity-100 translate-y-0"
+          leave-to-class="transform opacity-0 -translate-y-4"
+          mode="out-in"
+        >
+          <component :is="{
+            databases: DatabaseList,
+            backups: BackupList,
+            logs: LogViewer,
+            tasks: ScheduledTasks,
+            settings: Settings,
+            about: About
+          }[activeTab]" />
+        </Transition>
+      </div>
+    </main>
+
+    <!-- Global Components -->
+    <ToastNotification />
+    <ConfirmModal />
+    
+    <!-- Modals -->
+    <DatabaseModal />
+    <RestoreBackupModal
+      v-if="store.showRestoreModal"
+      @close="store.showRestoreModal = false; store.restoreBackupFile = null"
+    />
+    <RestoreBackupModal
+      v-if="store.showRestoreModal"
+      @close="store.showRestoreModal = false; store.restoreBackupFile = null"
+    />
+    <!-- BackupProgressModal removed in favor of card animation -->
+    <DbViewer
+      v-if="store.showDbViewer"
+      @close="store.showDbViewer = false; store.viewerDb = null"
+    />
+  </div>
+</template>
+
+<style>
+.scrollbar-hide::-webkit-scrollbar {
+    display: none;
+}
+.scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.perspective-1000 {
+  perspective: 1000px;
+}
+
+.transform-style-3d {
+  transform-style: preserve-3d;
+}
+
+.rotate-y-12 {
+  transform: rotateY(12deg);
+}
+
+.hover\:rotate-y-12:hover {
+  transform: rotateY(12deg) scale(1.1);
+}
+</style>

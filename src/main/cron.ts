@@ -50,22 +50,22 @@ export class CronManager {
     try {
       const task = cron.schedule(db.cron, async () => {
         logger.info(`Executing scheduled backup`, db.name);
-        
+
         // Notifier le début du backup
         if (this.mainWindow && !this.mainWindow.isDestroyed()) {
           this.mainWindow.webContents.send('scheduled-backup-started', {
             database: db.name
           });
         }
-        
+
         // Exécuter le backup
         const result = await backupManager.backupDatabase(db);
-        
+
         // Mettre à jour la date du dernier backup si succès
         if (result.success && this.onBackupComplete) {
           this.onBackupComplete(db.name, result.timestamp);
         }
-        
+
         // Notifier la fin du backup
         if (this.mainWindow && !this.mainWindow.isDestroyed()) {
           this.mainWindow.webContents.send('scheduled-backup-completed', {
@@ -117,11 +117,13 @@ export class CronManager {
     this.cancelAllBackups();
 
     // Planifier les nouvelles tâches
-    databases.forEach(db => {
-      if (db.cron) {
-        this.scheduleBackup(db);
-      }
-    });
+    if (databases && Array.isArray(databases)) {
+      databases.forEach(db => {
+        if (db.cron) {
+          this.scheduleBackup(db);
+        }
+      });
+    }
   }
 }
 

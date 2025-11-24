@@ -1,5 +1,7 @@
 import { Client } from 'pg';
+import format from 'pg-format';
 import { DatabaseConfig } from '../types/config';
+import { logger } from './logger';
 
 interface ConnectionParams {
   host: string;
@@ -17,19 +19,19 @@ async function createConnection(params: ConnectionParams): Promise<Client> {
   const client = new Client(
     params.connectionString
       ? {
-          connectionString: params.connectionString,
-          // Retirer channel_binding s'il est présent
-          ssl: params.connectionString.includes('sslmode=require')
-            ? { rejectUnauthorized: false }
-            : undefined
-        }
+        connectionString: params.connectionString,
+        // Retirer channel_binding s'il est présent
+        ssl: params.connectionString.includes('sslmode=require')
+          ? { rejectUnauthorized: false }
+          : undefined
+      }
       : {
-          host: params.host,
-          port: params.port,
-          user: params.user,
-          password: params.password,
-          database: params.database
-        }
+        host: params.host,
+        port: params.port,
+        user: params.user,
+        password: params.password,
+        database: params.database
+      }
   );
 
   await client.connect();
@@ -54,18 +56,20 @@ export async function getDatabaseTables(params: ConnectionParams) {
     `;
 
     const result = await client.query(query);
+    logger.info(`getDatabaseTables query result rows: ${JSON.stringify(result.rows)}`); // DEBUG LOG
 
     // Pour chaque table, récupérer le nombre de lignes
     const tablesWithCount = await Promise.all(
       result.rows.map(async (table) => {
         try {
-          const countQuery = `SELECT COUNT(*) as count FROM "${table.name}"`;
+          const countQuery = format('SELECT COUNT(*) as count FROM %I', table.name);
           const countResult = await client.query(countQuery);
           return {
             ...table,
             row_count: parseInt(countResult.rows[0].count)
           };
         } catch (error) {
+          logger.error(`Error counting rows for table ${table.name}: ${error}`); // DEBUG LOG
           return {
             ...table,
             row_count: null
@@ -74,6 +78,7 @@ export async function getDatabaseTables(params: ConnectionParams) {
       })
     );
 
+    logger.info(`getDatabaseTables returning: ${JSON.stringify(tablesWithCount)}`); // DEBUG LOG
     return { tables: tablesWithCount };
   } finally {
     await client.end();
@@ -210,23 +215,23 @@ export async function getTableData(params: ConnectionParams & { table: string; l
       const columns = columnsResult.rows.map(row => row.column_name);
 
       // Construire la clause WHERE pour la requête principale
-      const whereConditionsMain = columns.map(col => `"${col}"::text ILIKE $3`).join(' OR ');
+      const whereConditionsMain = columns.map(col => format('%I::text ILIKE $3', col)).join(' OR ');
       // Construire la clause WHERE pour la requête COUNT
-      const whereConditionsCount = columns.map(col => `"${col}"::text ILIKE $1`).join(' OR ');
+      const whereConditionsCount = columns.map(col => format('%I::text ILIKE $1', col)).join(' OR ');
 
-      query = `SELECT * FROM "${params.table}" WHERE ${whereConditionsMain} LIMIT $1 OFFSET $2`;
+      query = format('SELECT * FROM %I WHERE %s LIMIT $1 OFFSET $2', params.table, whereConditionsMain);
       queryParams = [params.limit, offset, `%${params.search}%`];
 
       // Compter le total de résultats pour la recherche
-      countQuery = `SELECT COUNT(*) FROM "${params.table}" WHERE ${whereConditionsCount}`;
+      countQuery = format('SELECT COUNT(*) FROM %I WHERE %s', params.table, whereConditionsCount);
       countParams = [`%${params.search}%`];
     } else {
       // Pas de recherche, juste SELECT avec LIMIT et OFFSET
-      query = `SELECT * FROM "${params.table}" LIMIT $1 OFFSET $2`;
+      query = format('SELECT * FROM %I LIMIT $1 OFFSET $2', params.table);
       queryParams = [params.limit, offset];
 
       // Compter le total de lignes dans la table
-      countQuery = `SELECT COUNT(*) FROM "${params.table}"`;
+      countQuery = format('SELECT COUNT(*) FROM %I', params.table);
       countParams = [];
     }
 
@@ -278,7 +283,7 @@ export async function updateTableData(params: ConnectionParams & {
 
       // Utiliser la clé primaire si disponible
       if (change.rowId && change.primaryKeyColumn) {
-        whereClause = `"${change.primaryKeyColumn}" = $${paramIndex}`;
+        whereClause = format('%I = $1', change.primaryKeyColumn);
         whereValues = [change.rowId];
         paramIndex++;
       }
@@ -288,9 +293,9 @@ export async function updateTableData(params: ConnectionParams & {
         for (const [key, value] of Object.entries(change.rowData)) {
           if (key !== change.column) {
             if (value === null) {
-              whereConditions.push(`"${key}" IS NULL`);
+              whereConditions.push(format('%I IS NULL', key));
             } else {
-              whereConditions.push(`"${key}" = $${paramIndex}`);
+              whereConditions.push(format('%I = $%s', key, paramIndex));
               whereValues.push(value);
               paramIndex++;
             }
@@ -307,11 +312,14 @@ export async function updateTableData(params: ConnectionParams & {
       }
 
       // Construire la requête UPDATE
-      const updateQuery = `
-        UPDATE "${params.table}"
-        SET "${change.column}" = $${paramIndex}
-        WHERE ${whereClause}
-      `;
+      // Note: paramIndex est déjà incrémenté pour la valeur à mettre à jour
+      const updateQuery = format(
+        'UPDATE %I SET %I = $%s WHERE %s',
+        params.table,
+        change.column,
+        paramIndex,
+        whereClause
+      );
 
       const values = [...whereValues, change.newValue];
 
@@ -360,7 +368,7 @@ export async function deleteTableRow(params: ConnectionParams & {
   const client = await createConnection(params);
 
   try {
-    const query = `DELETE FROM "${params.table}" WHERE "${params.primaryKeyColumn}" = $1`;
+    const query = format('DELETE FROM %I WHERE %I = $1', params.table, params.primaryKeyColumn);
     const result = await client.query(query, [params.rowId]);
 
     return {
@@ -388,11 +396,12 @@ export async function insertTableRow(params: ConnectionParams & {
     const values = Object.values(params.rowData);
     const placeholders = values.map((_, i) => `$${i + 1}`).join(', ');
 
-    const query = `
-      INSERT INTO "${params.table}" (${columns.map(c => `"${c}"`).join(', ')})
-      VALUES (${placeholders})
-      RETURNING *
-    `;
+    const query = format(
+      'INSERT INTO %I (%I) VALUES (%s) RETURNING *',
+      params.table,
+      columns,
+      placeholders
+    );
 
     const result = await client.query(query, values);
 

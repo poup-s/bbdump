@@ -1,0 +1,50 @@
+@import "tailwindcss";
+@config "../../../tailwind.config.js";
+
+:root {
+    --color-background: #ffffff;
+    --color-foreground: #000000;
+    --color-surface: #f4f4f5;
+    /* zinc-100 */
+    --color-border: #e4e4e7;
+    /* zinc-200 */
+    --color-accent: #000000;
+    --color-accent-hover: #27272a;
+    /* zinc-800 */
+}
+
+.dark {
+    --color-background: #09090b;
+    /* zinc-950 */
+    --color-foreground: #ffffff;
+    --color-surface: #18181b;
+    /* zinc-900 */
+    --color-border: #27272a;
+    /* zinc-800 */
+    --color-accent: #ffffff;
+    --color-accent-hover: #e4e4e7;
+    /* zinc-200 */
+}
+
+body {
+    @apply bg-background text-foreground antialiased transition-colors duration-300;
+    font-family: 'Inter', sans-serif;
+}
+
+/* Custom Scrollbar for minimalist look */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    @apply bg-border rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    @apply bg-zinc-400 dark:bg-zinc-600;
+}

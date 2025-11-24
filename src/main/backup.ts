@@ -6,6 +6,7 @@ import { DatabaseConfig, BackupResult } from '../types/config';
 import { logger } from './logger';
 import { pathManager } from './paths';
 import { fileEncryptionManager } from './fileEncryption';
+import * as Electron from 'electron';
 
 const execAsync = promisify(exec);
 
@@ -13,6 +14,7 @@ export class BackupManager {
   private backupDir: string;
   private pgDumpPath: string;
   private pgRestorePath: string;
+  private mainWindow: Electron.BrowserWindow | null = null;
 
   constructor() {
     this.backupDir = pathManager.backupsPath;
@@ -22,6 +24,10 @@ export class BackupManager {
 
     logger.info(`pg_dump found: ${this.pgDumpPath}`);
     logger.info(`pg_restore found: ${this.pgRestorePath}`);
+  }
+
+  setMainWindow(window: Electron.BrowserWindow | null) {
+    this.mainWindow = window;
   }
 
   /**
@@ -355,12 +361,14 @@ export class BackupManager {
       const outputDir = path.dirname(db.output);
       const appDataPath = pathManager.appDataPath;
       const backupsPath = pathManager.backupsPath;
+      const homeDir = require('os').homedir();
 
       // Vérifier que le chemin absolu commence par un répertoire autorisé
       if (!outputDir.startsWith(appDataPath) &&
-          !outputDir.startsWith(backupsPath) &&
-          !outputDir.startsWith('/tmp') &&
-          !outputDir.startsWith('/var/tmp')) {
+        !outputDir.startsWith(backupsPath) &&
+        !outputDir.startsWith(homeDir) &&
+        !outputDir.startsWith('/tmp') &&
+        !outputDir.startsWith('/var/tmp')) {
         return {
           valid: false,
           error: `Output path is outside allowed directories: ${db.output}`
@@ -493,9 +501,31 @@ export class BackupManager {
     }
 
     // Construire le chemin de sortie
-    const outputPath = path.isAbsolute(db.output)
-      ? db.output
-      : path.join(pathManager.appDataPath, db.output);
+    // Si db.output n'est pas défini ou vide, utiliser le chemin par défaut
+    let outputPath: string;
+    if (!db.output || db.output.trim() === '') {
+      // Utiliser le chemin par défaut des backups
+      outputPath = path.join(pathManager.backupsPath, `${db.name}.backup`);
+    } else if (path.isAbsolute(db.output)) {
+      // Si c'est un chemin absolu, vérifier s'il pointe vers un dossier ou un fichier
+      if (db.output.endsWith('.backup') || db.output.includes('.')) {
+        // C'est un fichier
+        outputPath = db.output;
+      } else {
+        // C'est un dossier, ajouter le nom du fichier
+        outputPath = path.join(db.output, `${db.name}.backup`);
+      }
+    } else {
+      // Chemin relatif
+      const fullPath = path.join(pathManager.appDataPath, db.output);
+      if (db.output.endsWith('.backup') || db.output.includes('.')) {
+        // C'est un fichier
+        outputPath = fullPath;
+      } else {
+        // C'est un dossier, ajouter le nom du fichier
+        outputPath = path.join(fullPath, `${db.name}.backup`);
+      }
+    }
 
     // S'assurer que le dossier parent existe
     const outputDir = path.dirname(outputPath);
@@ -906,7 +936,7 @@ export class BackupManager {
         // pg_restore peut retourner 1 avec des warnings mais réussir quand même
         // On considère code 0 ou 1 comme succès si pas d'erreur critique
         const combinedOutput = stdoutOutput + errorOutput;
-        
+
         if (code === 0 || code === 1) {
           const successMsg = `Restore successful from ${backupFile} to ${target.name}`;
           logger.info(successMsg, target.name);

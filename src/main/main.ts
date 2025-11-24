@@ -21,15 +21,20 @@ function loadConfig(): AppConfig {
     if (fs.existsSync(CONFIG_PATH)) {
       const data = fs.readFileSync(CONFIG_PATH, 'utf8');
       let loadedConfig = JSON.parse(data);
-      
+
       // Migrer les mots de passe non chiffrés
       loadedConfig = encryptionManager.migrateConfig(loadedConfig);
-      
+
+      // Ensure databases array exists
+      if (!loadedConfig.databases || !Array.isArray(loadedConfig.databases)) {
+        loadedConfig.databases = [];
+      }
+
       // Sauvegarder si migration effectuée
       if (loadedConfig !== JSON.parse(data)) {
         saveConfig(loadedConfig);
       }
-      
+
       logger.info(`Configuration loaded: ${loadedConfig.databases.length} database(s)`);
       return loadedConfig;
     } else {
@@ -61,7 +66,6 @@ function createWindow(): void {
     width: 1200,
     height: 800,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: true,
       contextIsolation: false
     }
@@ -82,20 +86,39 @@ function createWindow(): void {
     mainWindow.webContents.openDevTools();
   }
 
+  // Configurer le backupManager avec la référence à mainWindow
+  backupManager.setMainWindow(mainWindow);
+
   mainWindow.on('closed', () => {
     mainWindow = null;
+    backupManager.setMainWindow(null);
     cronManager.setMainWindow(null);
   });
-  
+
   // Passer la référence de la fenêtre au cron manager pour les notifications
   cronManager.setMainWindow(mainWindow);
-  
+
   // Configurer le callback pour mettre à jour lastBackup
   cronManager.setBackupCompleteCallback((dbName: string, timestamp: string) => {
     const db = config.databases.find(d => d.name === dbName);
     if (db) {
       db.lastBackup = timestamp;
       saveConfig(config);
+    }
+  });
+
+  // Add context menu for copy/paste
+  mainWindow.webContents.on('context-menu', (_, props) => {
+    const { Menu } = require('electron');
+    const menu = Menu.buildFromTemplate([
+      { role: 'cut', enabled: props.editFlags.canCut },
+      { role: 'copy', enabled: props.editFlags.canCopy },
+      { role: 'paste', enabled: props.editFlags.canPaste },
+      { type: 'separator' },
+      { role: 'selectAll', enabled: props.editFlags.canSelectAll }
+    ]);
+    if (props.isEditable) {
+      menu.popup({ window: mainWindow! });
     }
   });
 }
@@ -105,7 +128,7 @@ ipcMain.handle('get-config', async (): Promise<AppConfig> => {
   // Retourner la config avec les mots de passe masqués pour l'UI
   return {
     ...config,
-    databases: config.databases.map(db => ({
+    databases: (config.databases || []).map(db => ({
       ...db,
       password: '••••••••' // Masquer les mots de passe dans l'UI
     }))
@@ -115,7 +138,7 @@ ipcMain.handle('get-config', async (): Promise<AppConfig> => {
 ipcMain.handle('save-config', async (_, newConfig: AppConfig): Promise<void> => {
   config = newConfig;
   saveConfig(config);
-  cronManager.rescheduleAll(config.databases);
+  cronManager.rescheduleAll(config.databases || []);
 });
 
 ipcMain.handle('add-database', async (_, db: DatabaseConfig): Promise<AppConfig> => {
@@ -126,16 +149,16 @@ ipcMain.handle('add-database', async (_, db: DatabaseConfig): Promise<AppConfig>
     encrypted: shouldEncrypt,
     password: shouldEncrypt ? encryptionManager.encrypt(db.password) : db.password
   };
-  
+
   config.databases.push(dbToSave);
   saveConfig(config);
-  
+
   // Planifier seulement si un cron est défini
   // Utiliser le db original avec le mot de passe déchiffré
   if (db.cron && db.cron.trim() !== '') {
     cronManager.scheduleBackup(db);
   }
-  
+
   return config;
 });
 
@@ -143,13 +166,13 @@ ipcMain.handle('update-database', async (_, name: string, updatedDb: DatabaseCon
   const index = config.databases.findIndex(db => db.name === name);
   if (index !== -1) {
     const existingDb = config.databases[index];
-    
+
     // Déterminer si on doit chiffrer (par défaut true si non spécifié)
     const shouldEncrypt = updatedDb.encrypted !== false;
-    
+
     // Si le mot de passe est vide ou masqué, conserver l'ancien
     let passwordToSave = existingDb.password; // Mot de passe existant (chiffré ou non)
-    
+
     if (updatedDb.password && updatedDb.password !== '••••••••' && updatedDb.password.trim() !== '') {
       // Nouveau mot de passe fourni
       passwordToSave = shouldEncrypt ? encryptionManager.encrypt(updatedDb.password) : updatedDb.password;
@@ -163,16 +186,16 @@ ipcMain.handle('update-database', async (_, name: string, updatedDb: DatabaseCon
         passwordToSave = encryptionManager.decrypt(existingDb.password);
       }
     }
-    
+
     const dbToSave = {
       ...updatedDb,
       encrypted: shouldEncrypt,
       password: passwordToSave
     };
-    
+
     config.databases[index] = dbToSave;
     saveConfig(config);
-    
+
     // Replanifier avec la config déchiffrée
     const decryptedDatabases = config.databases.map(db => ({
       ...db,
@@ -195,14 +218,14 @@ ipcMain.handle('toggle-schedule', async (_, name: string, enabled: boolean): Pro
   if (db) {
     db.enabled = enabled;
     saveConfig(config);
-    
+
     // Replanifier toutes les tâches (le CronManager gérera l'état enabled)
     const decryptedDatabases = config.databases.map(db => ({
       ...db,
       password: db.encrypted ? encryptionManager.decrypt(db.password) : db.password
     }));
     cronManager.rescheduleAll(decryptedDatabases);
-    
+
     logger.info(`Scheduled tasks ${enabled ? 'enabled' : 'paused'}`, name);
   }
   return config;
@@ -220,21 +243,31 @@ ipcMain.handle('backup-now', async (_, name: string): Promise<BackupResult> => {
       error
     };
   }
-  
+
   // Déchiffrer le mot de passe avant utilisation (uniquement si chiffré)
   const decryptedDb = {
     ...db,
     password: db.encrypted ? encryptionManager.decrypt(db.password) : db.password
   };
-  
+
+  // Émettre l'événement de démarrage du backup
+  if (mainWindow) {
+    mainWindow.webContents.send('backup-started', name);
+  }
+
   const result = await backupManager.backupDatabase(decryptedDb);
-  
+
   // Mettre à jour la date du dernier backup si succès
   if (result.success) {
     db.lastBackup = result.timestamp;
     saveConfig(config);
   }
-  
+
+  // Émettre l'événement de fin du backup
+  if (mainWindow) {
+    mainWindow.webContents.send('backup-complete', result);
+  }
+
   return result;
 });
 
@@ -253,7 +286,7 @@ ipcMain.handle('get-scheduled-tasks', async () => {
 ipcMain.handle('get-backups', async () => {
   try {
     const backupDir = pathManager.backupsPath;
-    
+
     // S'assurer que le dossier existe
     if (!fs.existsSync(backupDir)) {
       return { backups: [], stats: { total: 0, totalSize: 0 } };
@@ -266,7 +299,16 @@ ipcMain.handle('get-backups', async () => {
         const filePath = path.join(backupDir, file);
         const stats = fs.statSync(filePath);
         const isEncrypted = fileEncryptionManager.isFileEncrypted(filePath);
+
+        // Parse filename to extract database name
+        // Format: dbname_timestamp.backup
+        const fileNameWithoutExt = file.replace('.backup', '');
+        const parts = fileNameWithoutExt.split('_');
+        const database = parts[0] || 'unknown';
+
         return {
+          filename: file,
+          database: database,
           name: file,
           path: path.relative(pathManager.appDataPath, filePath),
           size: stats.size,
@@ -327,7 +369,7 @@ ipcMain.handle('export-encryption-key', async () => {
   try {
     const { dialog } = require('electron');
     const keyPath = pathManager.encryptionKeyPath;
-    
+
     if (!fs.existsSync(keyPath)) {
       return { success: false, error: 'Encryption key not found' };
     }
@@ -349,7 +391,7 @@ ipcMain.handle('export-encryption-key', async () => {
     // Copier la clé vers le fichier choisi
     fs.copyFileSync(keyPath, result.filePath);
     logger.info(`Encryption key exported to: ${result.filePath}`);
-    
+
     return { success: true, path: result.filePath };
   } catch (error) {
     logger.error(`Error exporting key: ${error}`);
@@ -361,7 +403,7 @@ ipcMain.handle('import-encryption-key', async () => {
   try {
     const { dialog } = require('electron');
     const keyPath = pathManager.encryptionKeyPath;
-    
+
     // Ouvrir une boîte de dialogue pour choisir le fichier à importer
     const result = await dialog.showOpenDialog(mainWindow!, {
       title: 'Import encryption key',
@@ -393,7 +435,7 @@ ipcMain.handle('import-encryption-key', async () => {
 
     // Copier la nouvelle clé
     fs.copyFileSync(importPath, keyPath);
-    
+
     // Appliquer les bonnes permissions
     try {
       fs.chmodSync(keyPath, 0o600);
@@ -402,7 +444,7 @@ ipcMain.handle('import-encryption-key', async () => {
     }
 
     logger.info('Encryption key imported successfully');
-    
+
     return { success: true };
   } catch (error) {
     logger.error(`Error importing key: ${error}`);
@@ -413,7 +455,7 @@ ipcMain.handle('import-encryption-key', async () => {
 ipcMain.handle('restore-backup', async (_, payload: { backupFile: string; target: { name: string; host: string; port: number; user: string; password: string } }): Promise<BackupResult> => {
   const { backupFile, target } = payload;
   logger.info(`Restore request: ${backupFile} to ${target.name}@${target.host}:${target.port}`);
-  
+
   try {
     return await backupManager.restoreBackup(backupFile, target);
   } catch (error) {
@@ -438,30 +480,70 @@ ipcMain.handle('get-database-tables', async (_, params: { host: string; port: nu
   }
 });
 
-ipcMain.handle('get-table-schema', async (_, params: { host: string; port: number; user: string; password: string; database: string; connectionString?: string; table: string }) => {
+// Helper to get db config
+const getDbConfig = (dbName: string) => {
+  const db = config.databases.find(d => d.name === dbName);
+  if (!db) throw new Error(`Database ${dbName} not found`);
+
+  const password = db.encrypted ? encryptionManager.decrypt(db.password) : db.password;
+
+  return {
+    host: db.host,
+    port: db.port,
+    user: db.user,
+    password: password,
+    database: db.name,
+    connectionString: db.connectionString
+  };
+};
+
+// Alias for compatibility
+ipcMain.handle('get-db-tables', async (_, params: { db: { name: string } }) => {
+  try {
+    logger.info(`Getting tables for database: ${params.db.name}`);
+    const dbConfig = getDbConfig(params.db.name);
+    return await dbViewer.getDatabaseTables(dbConfig);
+  } catch (error) {
+    logger.error(`Error getting database tables: ${error}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('get-table-schema', async (_, params: { db: { name: string }, table: string }) => {
   try {
     logger.info(`Getting schema for table: ${params.table}`);
-    return await dbViewer.getTableSchema(params);
+    const dbConfig = getDbConfig(params.db.name);
+    return await dbViewer.getTableSchema({ ...dbConfig, table: params.table });
   } catch (error) {
     logger.error(`Error getting table schema: ${error}`);
     throw error;
   }
 });
 
-ipcMain.handle('get-table-relations', async (_, params: { host: string; port: number; user: string; password: string; database: string; connectionString?: string; table: string }) => {
+ipcMain.handle('get-table-relations', async (_, params: { db: { name: string }, table: string }) => {
   try {
     logger.info(`Getting relations for table: ${params.table}`);
-    return await dbViewer.getTableRelations(params);
+    const dbConfig = getDbConfig(params.db.name);
+    return await dbViewer.getTableRelations({ ...dbConfig, table: params.table });
   } catch (error) {
     logger.error(`Error getting table relations: ${error}`);
     throw error;
   }
 });
 
-ipcMain.handle('get-table-data', async (_, params: { host: string; port: number; user: string; password: string; database: string; connectionString?: string; table: string; limit: number }) => {
+ipcMain.handle('get-table-data', async (_, params: { db: { name: string }, table: string, limit?: number, page?: number, pageSize?: number }) => {
   try {
-    logger.info(`Getting data for table: ${params.table} (limit: ${params.limit})`);
-    return await dbViewer.getTableData(params);
+    const limit = params.limit || params.pageSize || 50;
+    const offset = params.page ? (params.page - 1) * limit : 0;
+
+    logger.info(`Getting data for table: ${params.table} (limit: ${limit}, offset: ${offset})`);
+    const dbConfig = getDbConfig(params.db.name);
+    return await dbViewer.getTableData({
+      ...dbConfig,
+      table: params.table,
+      limit,
+      offset
+    });
   } catch (error) {
     logger.error(`Error getting table data: ${error}`);
     throw error;
@@ -469,25 +551,18 @@ ipcMain.handle('get-table-data', async (_, params: { host: string; port: number;
 });
 
 ipcMain.handle('update-table-data', async (_, params: {
-  host: string;
-  port: number;
-  user: string;
-  password: string;
-  database: string;
-  connectionString?: string;
+  db: { name: string };
   table: string;
-  changes: Array<{
-    rowId?: any;
-    primaryKeyColumn?: string;
-    rowData?: any;
-    column: string;
-    oldValue: any;
-    newValue: any;
-  }>;
+  changes: Array<any>;
 }) => {
   try {
     logger.info(`Updating table data: ${params.table} (${params.changes.length} changes)`);
-    return await dbViewer.updateTableData(params);
+    const dbConfig = getDbConfig(params.db.name);
+    return await dbViewer.updateTableData({
+      ...dbConfig,
+      table: params.table,
+      changes: params.changes
+    });
   } catch (error) {
     logger.error(`Error updating table data: ${error}`);
     throw error;
@@ -495,19 +570,20 @@ ipcMain.handle('update-table-data', async (_, params: {
 });
 
 ipcMain.handle('delete-table-row', async (_, params: {
-  host: string;
-  port: number;
-  user: string;
-  password: string;
-  database: string;
-  connectionString?: string;
+  db: { name: string };
   table: string;
   rowId: any;
   primaryKeyColumn: string;
 }) => {
   try {
     logger.info(`Deleting row from table: ${params.table}`);
-    return await dbViewer.deleteTableRow(params);
+    const dbConfig = getDbConfig(params.db.name);
+    return await dbViewer.deleteTableRow({
+      ...dbConfig,
+      table: params.table,
+      rowId: params.rowId,
+      primaryKeyColumn: params.primaryKeyColumn
+    });
   } catch (error) {
     logger.error(`Error deleting row: ${error}`);
     throw error;
@@ -515,18 +591,18 @@ ipcMain.handle('delete-table-row', async (_, params: {
 });
 
 ipcMain.handle('insert-table-row', async (_, params: {
-  host: string;
-  port: number;
-  user: string;
-  password: string;
-  database: string;
-  connectionString?: string;
+  db: { name: string };
   table: string;
   rowData: any;
 }) => {
   try {
     logger.info(`Inserting row into table: ${params.table}`);
-    return await dbViewer.insertTableRow(params);
+    const dbConfig = getDbConfig(params.db.name);
+    return await dbViewer.insertTableRow({
+      ...dbConfig,
+      table: params.table,
+      rowData: params.rowData
+    });
   } catch (error) {
     logger.error(`Error inserting row: ${error}`);
     throw error;
@@ -534,39 +610,153 @@ ipcMain.handle('insert-table-row', async (_, params: {
 });
 
 ipcMain.handle('get-enum-values', async (_, params: {
-  host: string;
-  port: number;
-  user: string;
-  password: string;
-  database: string;
-  connectionString?: string;
+  db: { name: string };
   typeName: string;
 }) => {
   try {
     logger.info(`Getting enum values for type: ${params.typeName}`);
-    return await dbViewer.getEnumValues(params);
+    const dbConfig = getDbConfig(params.db.name);
+    return await dbViewer.getEnumValues({
+      ...dbConfig,
+      typeName: params.typeName
+    });
   } catch (error) {
     logger.error(`Error getting enum values: ${error}`);
     throw error;
   }
 });
 
+// System Handlers
+ipcMain.handle('get-app-version', () => {
+  return app.getVersion();
+});
+
+ipcMain.handle('get-default-path', () => {
+  return pathManager.backupsPath;
+});
+
+ipcMain.handle('select-directory', async () => {
+  const { dialog } = require('electron');
+  const result = await dialog.showOpenDialog({
+    properties: ['openDirectory', 'createDirectory']
+  });
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null;
+  }
+
+  return result.filePaths[0];
+});
+
+ipcMain.handle('check-for-updates', async () => {
+  // Mock update check for now
+  return { updateAvailable: false };
+});
+
+// Alias handlers for frontend compatibility
+ipcMain.handle('check-key-status', async () => {
+  const keyPath = pathManager.encryptionKeyPath;
+  return {
+    exists: fs.existsSync(keyPath),
+    path: keyPath
+  };
+});
+
+ipcMain.handle('export-key', async () => {
+  // Reuse existing handler logic via internal call or just duplicate for now (safer to duplicate/call)
+  // Calling the existing handler function if it was extracted would be better, but here we'll just forward
+  // Since we can't easily call another handler, we'll just reimplement or alias if possible.
+  // Reimplementing for safety and speed.
+  try {
+    const { dialog } = require('electron');
+    const keyPath = pathManager.encryptionKeyPath;
+
+    if (!fs.existsSync(keyPath)) {
+      return { success: false, error: 'Encryption key not found' };
+    }
+
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: 'Export encryption key',
+      defaultPath: `encryption-key-backup-${new Date().toISOString().split('T')[0]}.key`,
+      filters: [
+        { name: 'Key file', extensions: ['key'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { success: false, cancelled: true };
+    }
+
+    fs.copyFileSync(keyPath, result.filePath);
+    logger.info(`Encryption key exported to: ${result.filePath}`);
+    return { success: true, path: result.filePath };
+  } catch (error) {
+    logger.error(`Error exporting key: ${error}`);
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('import-key', async () => {
+  try {
+    const { dialog } = require('electron');
+    const keyPath = pathManager.encryptionKeyPath;
+
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: 'Import encryption key',
+      filters: [
+        { name: 'Key file', extensions: ['key'] },
+        { name: 'All files', extensions: ['*'] }
+      ],
+      properties: ['openFile']
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return { success: false, cancelled: true };
+    }
+
+    const importPath = result.filePaths[0];
+    const importedKey = fs.readFileSync(importPath, 'utf8').trim();
+    if (importedKey.length !== 64) {
+      return { success: false, error: 'Invalid key file (incorrect size)' };
+    }
+
+    if (fs.existsSync(keyPath)) {
+      const backupPath = path.join(pathManager.appDataPath, `.encryption.key.backup-${Date.now()}`);
+      fs.copyFileSync(keyPath, backupPath);
+    }
+
+    fs.copyFileSync(importPath, keyPath);
+    try {
+      fs.chmodSync(keyPath, 0o600);
+    } catch (error) {
+      logger.warn(`Unable to set permissions: ${error}`);
+    }
+
+    logger.info('Encryption key imported successfully');
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error importing key: ${error}`);
+    return { success: false, error: String(error) };
+  }
+});
+
 // Événements de l'application
 app.on('ready', () => {
   logger.info('Application started');
-  
+
   // Charger la configuration
   config = loadConfig();
-  
+
   // Déchiffrer les mots de passe pour le cron manager (uniquement si chiffré)
   const decryptedDatabases = config.databases.map(db => ({
     ...db,
     password: db.encrypted ? encryptionManager.decrypt(db.password) : db.password
   }));
-  
+
   // Planifier les sauvegardes automatiques
   cronManager.rescheduleAll(decryptedDatabases);
-  
+
   // Créer la fenêtre
   createWindow();
 });
