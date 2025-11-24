@@ -101,7 +101,7 @@ onUnmounted(() => {
     <!-- Floating Sidebar -->
     <nav class="w-20 m-4 flex flex-col items-center bg-surface/80 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl z-10 perspective-1000">
       <div class="p-6 mb-4">
-        <div class="w-8 h-8 bg-foreground rounded-full flex items-center justify-center text-background font-bold text-xl shadow-lg shadow-foreground/20">B</div>
+        <img src="/logo.png" alt="logo" class="w-8 h-8 rounded-full shadow-lg shadow-foreground/20"/>
       </div>
       
       <div class="flex-1 w-full flex flex-col items-center gap-6">

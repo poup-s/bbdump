@@ -8,7 +8,7 @@ const { t } = useI18n();
 <template>
   <div class="h-full flex flex-col items-center justify-center text-center">
     <div class="w-32 h-32 bg-foreground text-background rounded-3xl flex items-center justify-center mb-8 shadow-2xl rotate-3 hover:rotate-0 transition-transform duration-500">
-      <span class="text-6xl font-bold">B</span>
+      <img src="/logo.png" alt="logo" class="w-32 h-32 rounded-3xl shadow-2xl"/>
     </div>
     
     <h1 class="text-4xl font-bold tracking-tight mb-2">bbdump</h1>
