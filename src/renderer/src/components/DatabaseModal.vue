@@ -25,7 +25,8 @@ const form = ref<Database>({
   cron: '0 0 * * *',
   enabled: true,
   encryptBackups: false,
-  connectionString: ''
+  connectionString: '',
+  ssl: false
 });
 
 const passwordVisible = ref(false);
@@ -62,7 +63,8 @@ watch(() => store.showDatabaseModal, async (show) => {
         cron: '0 0 * * *',
         enabled: true,
         encryptBackups: false,
-        connectionString: ''
+        connectionString: '',
+        ssl: false
       };
       connectionMode.value = 'url'; // Default to URL mode for new databases
       connectionUrl.value = '';
@@ -85,6 +87,14 @@ const parseConnectionUrl = (url: string) => {
       if (port) form.value.port = parseInt(port);
       if (dbname) form.value.name = dbname;
       
+      // Check for sslmode=require in query params
+      const query = match[6];
+      if (query && query.includes('sslmode=require')) {
+        form.value.ssl = true;
+      } else {
+        form.value.ssl = false;
+      }
+
       // We don't automatically set display name, output, etc.
       return true;
     }
@@ -157,7 +167,8 @@ const save = async () => {
       cron: form.value.cron,
       enabled: form.value.enabled,
       encryptBackups: form.value.encryptBackups,
-      connectionString: form.value.connectionString
+      connectionString: form.value.connectionString,
+      ssl: form.value.ssl
     };
 
     if (isEditing.value) {
@@ -335,6 +346,8 @@ const close = () => {
                 </div>
               </div>
   
+
+  
               <div class="grid grid-cols-2 gap-4">
                 <div>
                   <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t('database.user') }} *</label>
@@ -368,6 +381,18 @@ const close = () => {
                     </button>
                   </div>
                 </div>
+              </div>
+
+              <!-- SSL Option -->
+              <div>
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input
+                    v-model="form.ssl"
+                    type="checkbox"
+                    class="w-5 h-5 rounded border-gray-300 text-foreground focus:ring-foreground/20"
+                  />
+                  <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('database.useSsl') }} (Required for Neon, Supabase, etc.)</span>
+                </label>
               </div>
             </div>
           </div>

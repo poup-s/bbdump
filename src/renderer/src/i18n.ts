@@ -38,7 +38,8 @@ export const translations = {
             output: 'Output Directory',
             cron: 'Cron Schedule',
             encrypt: 'Encrypt password',
-            enableAutoBackup: 'Enable auto-backup',
+            enableAutoBackup: 'Enable automatic backups',
+            useSsl: 'Use SSL',
             connectionMode: 'Connection Mode',
             modeManual: 'Manual',
             modeUrl: 'URL',
@@ -339,7 +340,8 @@ export const translations = {
             tableDatabase: 'Database',
             tableDate: 'Date',
             tableSize: 'Size',
-            tableActions: 'Actions'
+            tableActions: 'Actions',
+            started: 'Backup started: {db}'
         },
         cron: {
             everyDay2am: 'Every day at 2:00 AM',
@@ -363,7 +365,8 @@ export const translations = {
             databaseExists: 'This database already exists',
             fillRequired: 'Please fill in all required fields',
             databaseAdded: 'Database added successfully',
-            databaseUpdated: 'Database updated successfully'
+            databaseUpdated: 'Database updated successfully',
+            dbDeleted: 'Database deleted successfully'
         },
         onboarding: {
             backupLocation: 'Backup Location',
@@ -410,7 +413,8 @@ export const translations = {
             output: 'Répertoire de sortie',
             cron: 'Planification cron',
             encrypt: 'Chiffrer le mot de passe',
-            enableAutoBackup: 'Activer la sauvegarde automatique',
+            enableAutoBackup: 'Activer les sauvegardes automatiques',
+            useSsl: 'Utiliser SSL',
             connectionMode: 'Mode de connexion',
             modeManual: 'Manuel',
             modeUrl: 'URL',
@@ -706,7 +710,8 @@ export const translations = {
             tableDatabase: 'Base de données',
             tableDate: 'Date',
             tableSize: 'Taille',
-            tableActions: 'Actions'
+            tableActions: 'Actions',
+            started: 'Sauvegarde démarrée : {db}'
         },
         cron: {
             everyDay2am: 'Tous les jours à 2h00',
@@ -730,7 +735,8 @@ export const translations = {
             databaseExists: 'Cette base de données existe déjà',
             fillRequired: 'Veuillez remplir tous les champs obligatoires',
             databaseAdded: 'Base de données ajoutée avec succès',
-            databaseUpdated: 'Base de données mise à jour avec succès'
+            databaseUpdated: 'Base de données mise à jour avec succès',
+            dbDeleted: 'Base de données supprimée avec succès'
         },
         onboarding: {
             backupLocation: 'Emplacement des sauvegardes',

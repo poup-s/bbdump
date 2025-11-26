@@ -11,6 +11,7 @@ export interface Database {
     enabled?: boolean;
     output: string;
     connectionString?: string;
+    ssl?: boolean;
     lastBackup?: string;
     _originalPassword?: string; // For UI logic
 }

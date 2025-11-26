@@ -519,7 +519,8 @@ const getDbConfig = (dbName: string) => {
     user: db.user,
     password: password,
     database: db.name,
-    connectionString: db.connectionString
+    connectionString: db.connectionString,
+    ssl: db.ssl
   };
 };
 

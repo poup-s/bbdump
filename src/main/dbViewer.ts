@@ -10,6 +10,7 @@ interface ConnectionParams {
   password: string;
   database: string;
   connectionString?: string;
+  ssl?: boolean;
 }
 
 /**
@@ -21,7 +22,7 @@ async function createConnection(params: ConnectionParams): Promise<Client> {
       ? {
         connectionString: params.connectionString,
         // Retirer channel_binding s'il est présent
-        ssl: params.connectionString.includes('sslmode=require')
+        ssl: params.ssl || params.connectionString.includes('sslmode=require')
           ? { rejectUnauthorized: false }
           : undefined
       }
@@ -30,7 +31,8 @@ async function createConnection(params: ConnectionParams): Promise<Client> {
         port: params.port,
         user: params.user,
         password: params.password,
-        database: params.database
+        database: params.database,
+        ssl: params.ssl ? { rejectUnauthorized: false } : undefined
       }
   );
 

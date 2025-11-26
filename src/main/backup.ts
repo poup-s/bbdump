@@ -204,6 +204,10 @@ export class BackupManager {
         ...process.env
       };
 
+      if (db.ssl) {
+        env.PGSSLMODE = 'require';
+      }
+
       // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string
       if (!db.connectionString && db.password) {
         env.PGPASSWORD = db.password;
@@ -596,6 +600,10 @@ export class BackupManager {
       const env: NodeJS.ProcessEnv = {
         ...process.env
       };
+
+      if (db.ssl) {
+        env.PGSSLMODE = 'require';
+      }
 
       // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string
       if (!db.connectionString && db.password) {

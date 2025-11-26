@@ -18,6 +18,7 @@ export interface DatabaseConfig {
   compressionLevel?: number; // Niveau de compression pg_dump (0-9, défaut: 6)
   jobs?: number; // Nombre de jobs parallèles pour pg_dump (défaut: 1)
   backupTimeout?: number; // Timeout en millisecondes (défaut: 30 minutes)
+  ssl?: boolean; // Si true, force l'utilisation de SSL (sslmode=require)
 }
 
 export interface AppConfig {
