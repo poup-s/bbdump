@@ -54,8 +54,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col">
-    <div class="flex justify-between items-center mb-8">
+  <div class="h-full flex flex-col min-h-0">
+    <div class="flex justify-between items-center mb-8 shrink-0">
       <div>
         <h2 class="text-3xl font-bold tracking-tight">{{ t('nav.logs') }}</h2>
         <p class="text-gray-500 mt-1">{{ filteredLogs.length }} events recorded</p>
@@ -94,7 +94,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <div class="flex-1 bg-[#1e1e1e] rounded-2xl border border-border overflow-hidden shadow-inner font-mono text-sm p-4 overflow-y-auto">
+    <div class="flex-1 min-h-0 bg-[#1e1e1e] rounded-2xl border border-border overflow-hidden shadow-inner font-mono text-sm p-4 overflow-y-auto">
       <div v-if="filteredLogs.length === 0" class="h-full flex items-center justify-center text-gray-500">
         {{ t('logs.noLogs') }}
       </div>

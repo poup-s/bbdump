@@ -107,7 +107,7 @@ onUnmounted(() => {
 <template>
   <Onboarding v-if="!store.onboardingCompleted" />
   
-  <div v-else class="min-h-screen flex bg-background text-foreground font-sans overflow-hidden relative transition-colors duration-300">
+  <div v-else class="h-screen flex bg-background text-foreground font-sans overflow-hidden relative transition-colors duration-300">
     <ThreeBackground />
     
     <!-- Floating Sidebar -->
@@ -156,7 +156,7 @@ onUnmounted(() => {
 
     <!-- Main Content -->
     <main class="flex-1 m-4 ml-0 bg-surface/50 backdrop-blur-md border border-white/10 rounded-3xl shadow-2xl overflow-hidden relative z-10">
-      <div class="h-full overflow-y-auto p-8 scrollbar-hide">
+      <div class="h-full p-8" :class="{ 'overflow-y-auto scrollbar-hide': activeTab !== 'logs' }">
         <Transition
           enter-active-class="transition duration-300 ease-out"
           enter-from-class="transform opacity-0 translate-y-4"
