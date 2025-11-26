@@ -280,6 +280,16 @@ const close = () => {
                 </p>
               </div>
               
+              <div>
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t('database.displayName') }}</label>
+                <input
+                  v-model="form.displayName"
+                  type="text"
+                  class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
+                  :placeholder="t('database.displayNamePlaceholder')"
+                />
+              </div>
+              
               <!-- Read-only parsed fields preview -->
               <div v-if="connectionUrl" class="grid grid-cols-2 gap-4 opacity-75 pointer-events-none bg-gray-50 dark:bg-zinc-800/50 p-4 rounded-xl border border-gray-100 dark:border-zinc-700/50">
                 <div>
