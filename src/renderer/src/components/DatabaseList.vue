@@ -68,6 +68,16 @@ const openViewer = (db: Database) => {
   store.viewerDb = db;
   store.showDbViewer = true;
 };
+
+const copyConnectionUrl = async (db: Database) => {
+  const url = `postgresql://${db.user}@${db.host}:${db.port}/${db.name}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    addToast(t('databases.urlCopied'), 'success');
+  } catch (error) {
+    addToast('Failed to copy URL', 'error');
+  }
+};
 </script>
 
 <template>
@@ -77,15 +87,26 @@ const openViewer = (db: Database) => {
         <h2 class="text-3xl font-bold tracking-tight">{{ t('nav.databases') }}</h2>
         <p class="text-gray-500 mt-1">{{ store.databases.length }} configured connections</p>
       </div>
-      <button
-        @click="openAddModal"
-        class="bg-foreground text-background px-6 py-3 rounded-xl font-medium hover:scale-105 transition-transform shadow-lg flex items-center gap-2"
-      >
-        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-        </svg>
-        {{ t('modal.addDatabase') }}
-      </button>
+      <div class="flex gap-3">
+        <button
+          @click="store.showCreateDatabaseModal = true"
+          class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-medium hover:scale-105 transition-transform shadow-lg flex items-center gap-2"
+        >
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+          </svg>
+          {{ t('databases.createButton') }}
+        </button>
+        <button
+          @click="openAddModal"
+          class="bg-foreground text-background px-6 py-3 rounded-xl font-medium hover:scale-105 transition-transform shadow-lg flex items-center gap-2"
+        >
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+          </svg>
+          {{ t('modal.addDatabase') }}
+        </button>
+      </div>
     </div>
 
     <div v-if="store.databases.length === 0" class="flex-1 flex flex-col items-center justify-center text-center opacity-60">
@@ -129,9 +150,24 @@ const openViewer = (db: Database) => {
         </div>
 
         <div v-else class="mb-6">
-          <h3 class="text-xl font-bold truncate pr-8">{{ db.displayName || db.name }}</h3>
+          <div class="flex items-center gap-2 mb-1">
+            <h3 class="text-xl font-bold truncate pr-8">{{ db.displayName || db.name }}</h3>
+            <span v-if="db.isLocalBbdump" class="px-2 py-0.5 text-xs font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full">
+              {{ t('databases.localBbdump') }}
+            </span>
+          </div>
           <div class="flex items-center text-sm text-gray-500 mt-1 font-mono">
             <span class="truncate max-w-[150px]">{{ db.user }}@{{ db.host }}:{{ db.port }}</span>
+            <button
+              v-if="db.isLocalBbdump"
+              @click="copyConnectionUrl(db)"
+              class="ml-2 p-1 hover:bg-surface rounded transition-colors"
+              :title="t('databases.copyUrl')"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            </button>
           </div>
           <div class="mt-4 flex items-center gap-2 text-xs font-medium px-3 py-1 bg-surface rounded-full w-fit">
             <span class="text-gray-400">Last Backup:</span>

@@ -20,6 +20,7 @@ export const store = reactive({
     showDbViewer: false,
     viewerDb: null as Database | null,
     showDatabaseModal: false,
+    showCreateDatabaseModal: false,
     showRestoreModal: false,
     restoreBackupFile: null as string | null,
     editingDatabase: null as Database | null,

@@ -14,6 +14,7 @@ export interface Database {
     ssl?: boolean;
     lastBackup?: string;
     _originalPassword?: string; // For UI logic
+    isLocalBbdump?: boolean; // True if created by bbdump
 }
 
 export interface Backup {

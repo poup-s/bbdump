@@ -9,6 +9,7 @@ import { encryptionManager } from './encryption';
 import { fileEncryptionManager } from './fileEncryption';
 import { pathManager } from './paths';
 import * as dbViewer from './dbViewer';
+import * as databaseCreator from './databaseCreator';
 
 const CONFIG_PATH = pathManager.configPath;
 
@@ -165,6 +166,76 @@ ipcMain.handle('save-settings', async (_, settings: { language?: 'en' | 'fr', de
   if (settings.defaultBackupPath) config.defaultBackupPath = settings.defaultBackupPath;
   saveConfig(config);
   return config;
+});
+
+ipcMain.handle('create-local-database', async (_, params: { name: string; displayName?: string; port: number }): Promise<{ success: boolean; error?: string; database?: DatabaseConfig; progress?: { step: string; message: string; progress: number } }> => {
+  try {
+    // Récupérer les ports existants
+    const existingPorts = config.databases.map(db => db.port);
+    
+    // Créer la base de données avec callback de progression
+    let lastProgress: { step: string; message: string; progress: number } | undefined;
+    
+    const result = await databaseCreator.createLocalDatabase(
+      params,
+      existingPorts,
+      (progress) => {
+        lastProgress = progress;
+        // Envoyer la progression au renderer
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('create-database-progress', progress);
+        }
+      }
+    );
+    
+    if (!result.success || !result.database) {
+      return {
+        success: false,
+        error: result.error,
+        progress: lastProgress
+      };
+    }
+
+    // Obtenir le chemin par défaut
+    const defaultPath = config.defaultBackupPath || pathManager.backupsPath;
+    
+    // Créer la configuration de la base de données
+    const newDb: DatabaseConfig = {
+      name: result.database.name,
+      displayName: result.database.displayName,
+      host: result.database.host,
+      port: result.database.port,
+      user: result.database.user,
+      password: result.database.password,
+      encrypted: false, // Pas de chiffrement pour les bases locales
+      encryptBackups: false,
+      cron: '0 0 * * *',
+      output: defaultPath,
+      enabled: true,
+      ssl: false,
+      isLocalBbdump: true
+    };
+
+    // Ajouter la base à la configuration
+    config.databases.push(newDb);
+    saveConfig(config);
+
+    // Planifier les backups
+    cronManager.scheduleBackup(newDb);
+
+    logger.info(`Local database "${params.name}" created and added to configuration`);
+
+    return {
+      success: true,
+      database: newDb
+    };
+  } catch (error: any) {
+    logger.error(`Error creating local database: ${error.message}`);
+    return {
+      success: false,
+      error: error.message || 'Failed to create database'
+    };
+  }
 });
 
 ipcMain.handle('add-database', async (_, db: DatabaseConfig): Promise<AppConfig> => {

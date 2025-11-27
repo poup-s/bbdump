@@ -101,7 +101,26 @@ export const translations = {
             statusActive: '⏸ ACTIVE',
             statusPaused: '▶ PAUSED',
             statusManual: 'Manual',
-            viewDatabase: 'View Database'
+            viewDatabase: 'View Database',
+            createButton: 'Create Database',
+            localBbdump: 'Local bbdump',
+            copyUrl: 'Copy connection URL',
+            urlCopied: 'Connection URL copied to clipboard'
+        },
+        createDatabase: {
+            nameHint: 'Only letters, numbers, and underscores. Must start with a letter.',
+            portHint: 'Port will be automatically checked for availability',
+            infoTitle: 'Local Database',
+            infoDesc: 'This will create a PostgreSQL database on your local machine. PostgreSQL will be automatically installed and started if needed.',
+            requirement: '💡 PostgreSQL will be automatically installed and started if not already available',
+            progress: 'Progress',
+            success: 'Database "{name}" created successfully',
+            errors: {
+                nameRequired: 'Database name is required',
+                nameInvalid: 'Database name must start with a letter and contain only letters, numbers, and underscores',
+                portInvalid: 'Port must be between 1024 and 65535',
+                createFailed: 'Failed to create database'
+            }
         },
         viewer: {
             data: 'Data',
@@ -282,6 +301,9 @@ export const translations = {
         },
         modal: {
             addDatabase: 'Add a connection',
+            createDatabase: 'Create Database',
+            createDatabaseTitle: 'Create Local PostgreSQL Database',
+            createDatabaseDesc: 'Create a new PostgreSQL database managed by bbdump',
             editDatabase: 'Edit database',
             warning: '<strong>Important:</strong> The database must ALREADY EXIST on your PostgreSQL server. This application only configures backups, it does not create databases.',
             editWarning: '<strong>Reminder:</strong> Make sure the database name corresponds to an EXISTING database on your PostgreSQL server.',
@@ -537,6 +559,7 @@ export const translations = {
         databases: {
             title: 'BASES DE DONNÉES CONFIGURÉES',
             addButton: 'Ajouter une base',
+            createButton: 'Créer une base',
             noData: 'AUCUNE BASE DE DONNÉES CONFIGURÉE',
             noDatabases: 'Aucune base configurée',
             noDatabasesDesc: 'Ajoutez votre première base PostgreSQL pour commencer les sauvegardes',
@@ -544,6 +567,9 @@ export const translations = {
             running: 'En cours...',
             edit: 'Modifier',
             delete: 'Supprimer',
+            localBbdump: 'Locale bbdump',
+            copyUrl: 'Copier l\'URL de connexion',
+            urlCopied: 'URL de connexion copiée dans le presse-papiers',
             pauseSchedule: 'Pause les tâches planifiées',
             enableSchedule: 'Activer les tâches planifiées',
             encrypted: 'PASS',
@@ -559,6 +585,21 @@ export const translations = {
             statusPaused: '▶ PAUSE',
             statusManual: 'Manuel',
             viewDatabase: 'Voir la base'
+        },
+        createDatabase: {
+            nameHint: 'Uniquement des lettres, chiffres et underscores. Doit commencer par une lettre.',
+            portHint: 'Le port sera automatiquement vérifié pour sa disponibilité',
+            infoTitle: 'Base de données locale',
+            infoDesc: 'Cela créera une base de données PostgreSQL sur votre machine locale. PostgreSQL sera automatiquement installé et démarré si nécessaire.',
+            requirement: '💡 PostgreSQL sera automatiquement installé et démarré si nécessaire',
+            progress: 'Progression',
+            success: 'Base de données "{name}" créée avec succès',
+            errors: {
+                nameRequired: 'Le nom de la base est requis',
+                nameInvalid: 'Le nom de la base doit commencer par une lettre et contenir uniquement des lettres, chiffres et underscores',
+                portInvalid: 'Le port doit être entre 1024 et 65535',
+                createFailed: 'Échec de la création de la base de données'
+            }
         },
         viewer: {
             editMode: 'Mode édition',
@@ -793,6 +834,9 @@ export const translations = {
         },
         modal: {
             addDatabase: 'Ajouter une connexion',
+            createDatabase: 'Créer une base de données',
+            createDatabaseTitle: 'Créer une base PostgreSQL locale',
+            createDatabaseDesc: 'Créer une nouvelle base de données PostgreSQL gérée par bbdump',
             editDatabase: 'Modifier la base de données',
             warning: '<strong>Important :</strong> La base de données doit DÉJÀ EXISTER sur votre serveur PostgreSQL. Cette application configure seulement des backups, elle ne crée pas de bases de données.',
             editWarning: '<strong>Rappel :</strong> Assurez-vous que le nom de la base correspond à une base EXISTANTE sur votre serveur PostgreSQL.',

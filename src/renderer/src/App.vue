@@ -16,6 +16,7 @@ import About from './components/About.vue';
 import ToastNotification from './components/ToastNotification.vue';
 import ConfirmModal from './components/ConfirmModal.vue';
 import DatabaseModal from './components/DatabaseModal.vue';
+import CreateDatabaseModal from './components/CreateDatabaseModal.vue';
 import RestoreBackupModal from './components/RestoreBackupModal.vue';
 import DbViewer from './components/db-viewer/DbViewer.vue';
 import Onboarding from './components/Onboarding.vue';
@@ -184,6 +185,7 @@ onUnmounted(() => {
     
     <!-- Modals -->
     <DatabaseModal />
+    <CreateDatabaseModal />
     <RestoreBackupModal
       v-if="store.showRestoreModal"
       @close="store.showRestoreModal = false; store.restoreBackupFile = null"
