@@ -31,8 +31,17 @@ function loadConfig(): AppConfig {
         loadedConfig.databases = [];
       }
 
-      // Sauvegarder si migration effectuée
-      if (loadedConfig !== JSON.parse(data)) {
+      // S'assurer que isLocalBbdump est préservé pour toutes les bases (même si undefined dans le JSON)
+      loadedConfig.databases = loadedConfig.databases.map((db: DatabaseConfig) => ({
+        ...db,
+        // Préserver isLocalBbdump s'il existe, sinon false
+        isLocalBbdump: db.isLocalBbdump === true ? true : false
+      }));
+
+      // Sauvegarder si migration effectuée pour s'assurer que isLocalBbdump est toujours présent
+      const originalData = JSON.parse(data);
+      const needsSave = JSON.stringify(loadedConfig) !== JSON.stringify(originalData);
+      if (needsSave) {
         saveConfig(loadedConfig);
       }
 
@@ -65,7 +74,16 @@ function loadConfig(): AppConfig {
 // Sauvegarder la configuration
 function saveConfig(newConfig: AppConfig): void {
   try {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(newConfig, null, 2), 'utf8');
+    // S'assurer que isLocalBbdump est explicitement préservé pour toutes les bases
+    const configToSave = {
+      ...newConfig,
+      databases: (newConfig.databases || []).map((db: DatabaseConfig) => ({
+        ...db,
+        // S'assurer que isLocalBbdump est toujours présent (même si undefined, on le met explicitement)
+        isLocalBbdump: db.isLocalBbdump === true ? true : false
+      }))
+    };
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(configToSave, null, 2), 'utf8');
     logger.info('Configuration saved');
   } catch (error) {
     logger.error(`Error saving configuration: ${error}`);
@@ -138,11 +156,14 @@ function createWindow(): void {
 // IPC Handlers
 ipcMain.handle('get-config', async (): Promise<AppConfig> => {
   // Retourner la config avec les mots de passe masqués pour l'UI
+  // S'assurer que toutes les propriétés sont préservées, notamment isLocalBbdump
   return {
     ...config,
     databases: (config.databases || []).map(db => ({
       ...db,
-      password: '••••••••' // Masquer les mots de passe dans l'UI
+      password: '••••••••', // Masquer les mots de passe dans l'UI
+      // S'assurer que isLocalBbdump est explicitement préservé
+      isLocalBbdump: db.isLocalBbdump ?? false
     }))
   };
 });
@@ -284,10 +305,12 @@ ipcMain.handle('update-database', async (_, name: string, updatedDb: DatabaseCon
       }
     }
 
+    // Préserver isLocalBbdump de la base existante
     const dbToSave = {
       ...updatedDb,
       encrypted: shouldEncrypt,
-      password: passwordToSave
+      password: passwordToSave,
+      isLocalBbdump: existingDb.isLocalBbdump === true ? true : false // Préserver explicitement
     };
 
     config.databases[index] = dbToSave;
@@ -313,8 +336,25 @@ ipcMain.handle('remove-database', async (_, name: string): Promise<AppConfig> =>
 ipcMain.handle('toggle-schedule', async (_, name: string, enabled: boolean): Promise<AppConfig> => {
   const db = config.databases.find(d => d.name === name);
   if (db) {
+    // Préserver explicitement isLocalBbdump avant de modifier enabled
+    const wasLocalBbdump = db.isLocalBbdump === true;
+    
+    logger.info(`Toggling schedule for ${name}: enabled=${enabled}, isLocalBbdump=${wasLocalBbdump}`);
+    
+    // Modifier seulement enabled
     db.enabled = enabled;
+    
+    // Réassigner explicitement isLocalBbdump pour s'assurer qu'il est préservé
+    db.isLocalBbdump = wasLocalBbdump;
+    
+    // Vérifier avant sauvegarde
+    logger.info(`Before save: db.isLocalBbdump=${db.isLocalBbdump}`);
+    
     saveConfig(config);
+    
+    // Vérifier après sauvegarde
+    const savedDb = config.databases.find(d => d.name === name);
+    logger.info(`After save: savedDb.isLocalBbdump=${savedDb?.isLocalBbdump}`);
 
     // Replanifier toutes les tâches (le CronManager gérera l'état enabled)
     const decryptedDatabases = config.databases.map(db => ({
@@ -323,7 +363,7 @@ ipcMain.handle('toggle-schedule', async (_, name: string, enabled: boolean): Pro
     }));
     cronManager.rescheduleAll(decryptedDatabases);
 
-    logger.info(`Scheduled tasks ${enabled ? 'enabled' : 'paused'}`, name);
+    logger.info(`Scheduled tasks ${enabled ? 'enabled' : 'paused'} for ${name} (isLocalBbdump: ${db.isLocalBbdump})`, name);
   }
   return config;
 });

@@ -80,6 +80,7 @@ export const translations = {
         databases: {
             title: 'CONFIGURED DATABASES',
             addButton: 'Add Database',
+            createButton: 'Create Database',
             noData: 'NO DATABASES CONFIGURED',
             noDatabases: 'No databases configured',
             noDatabasesDesc: 'Add your first PostgreSQL database to start backing up',
@@ -98,14 +99,15 @@ export const translations = {
             tableEncryption: 'Encryption',
             tableBackup: 'Backup',
             tableActions: 'Actions',
+            localBbdump: 'Local bbdump',
+            localDatabases: 'Local Databases',
+            externalConnections: 'External Connections',
+            copyUrl: 'Copy connection URL',
+            urlCopied: 'Connection URL copied to clipboard',
             statusActive: '⏸ ACTIVE',
             statusPaused: '▶ PAUSED',
             statusManual: 'Manual',
-            viewDatabase: 'View Database',
-            createButton: 'Create Database',
-            localBbdump: 'Local bbdump',
-            copyUrl: 'Copy connection URL',
-            urlCopied: 'Connection URL copied to clipboard'
+            viewDatabase: 'View Database'
         },
         createDatabase: {
             nameHint: 'Only letters, numbers, and underscores. Must start with a letter.',
@@ -568,6 +570,8 @@ export const translations = {
             edit: 'Modifier',
             delete: 'Supprimer',
             localBbdump: 'Locale bbdump',
+            localDatabases: 'Bases de données locales',
+            externalConnections: 'Connexions externes',
             copyUrl: 'Copier l\'URL de connexion',
             urlCopied: 'URL de connexion copiée dans le presse-papiers',
             pauseSchedule: 'Pause les tâches planifiées',
