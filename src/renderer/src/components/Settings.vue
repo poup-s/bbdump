@@ -4,6 +4,7 @@ import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
 import { ipcRenderer } from '../electron';
 import { store } from '../store';
+import PostgresConfig from './PostgresConfig.vue';
 
 const { t, setLanguage } = useI18n();
 const { addToast } = useToast();
@@ -25,7 +26,7 @@ const saveLanguage = async () => {
   setLanguage(currentLang.value as 'en' | 'fr');
   try {
     await ipcRenderer.invoke('save-config', { language: currentLang.value });
-    addToast(t('toast.settingsSaved'), 'success');
+    addToast(t('toasts.settingsSaved'), 'success');
   } catch (error: any) {
     addToast('Error saving settings: ' + error.message, 'error');
   }
@@ -166,6 +167,9 @@ onMounted(() => {
           </p>
         </div>
       </div>
+
+      <!-- PostgreSQL Configuration -->
+      <PostgresConfig />
     </div>
   </div>
 </template>

@@ -20,8 +20,8 @@ useRafFn(() => {
 </script>
 
 <template>
-  <div class="w-full h-32 rounded-xl overflow-hidden relative">
-    <TresCanvas clear-color="#000000" alpha>
+  <div class="w-full h-full rounded-xl overflow-hidden relative bg-gradient-to-br from-green-500/10 via-blue-500/10 to-purple-500/10 backdrop-blur-sm">
+    <TresCanvas clear-color="transparent" alpha style="width: 100%; height: 100%;">
       <TresPerspectiveCamera :position="[0, 2, 6]" :look-at="[0, 0, 0]" />
       
       <TresGroup ref="groupRef">
@@ -64,8 +64,8 @@ useRafFn(() => {
       <TresDirectionalLight :position="[5, 5, 5]" :intensity="2" />
     </TresCanvas>
     
-    <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
-      <div class="bg-green-500/20 backdrop-blur-[2px] px-3 py-1 rounded-full text-xs text-green-400 font-bold font-mono border border-green-500/30 animate-bounce">
+    <div class="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+      <div class="bg-green-500/30 backdrop-blur-md px-4 py-2 rounded-full text-sm text-green-300 font-bold font-mono border-2 border-green-400/50 shadow-lg shadow-green-500/20">
         NEW DATABASE!
       </div>
     </div>

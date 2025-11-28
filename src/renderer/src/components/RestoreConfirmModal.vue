@@ -1,0 +1,188 @@
+<script setup lang="ts">
+import { ref, computed, watch } from 'vue';
+import { store } from '../store';
+import { useI18n } from '../composables/useI18n';
+import { useToast } from '../composables/useToast';
+import { ipcRenderer } from '../electron';
+import RestoreAnimation from './RestoreAnimation.vue';
+
+const { t, currentLanguage } = useI18n();
+const { addToast } = useToast();
+
+const isLoading = ref(false);
+const confirmInput = ref('');
+const error = ref('');
+
+const targetDbName = computed(() => {
+  return store.restoreTargetDb?.name || '';
+});
+
+const isConfirmValid = computed(() => {
+  return confirmInput.value.trim() === targetDbName.value;
+});
+
+watch(() => store.showRestoreConfirmModal, (show) => {
+  if (show) {
+    confirmInput.value = '';
+    error.value = '';
+  }
+});
+
+const restore = async () => {
+  if (!isConfirmValid.value) {
+    error.value = t('modal.restoreConfirmError');
+    return;
+  }
+
+  if (!store.restoreBackupFile || !store.restoreTargetDb) {
+    addToast('Missing backup file or target database', 'error');
+    return;
+  }
+
+  isLoading.value = true;
+  error.value = '';
+  
+  try {
+    const payload = {
+      backupFile: store.restoreBackupFile,
+      target: {
+        name: store.restoreTargetDb.name,
+        host: store.restoreTargetDb.host,
+        port: store.restoreTargetDb.port,
+        user: store.restoreTargetDb.user,
+        password: store.restoreTargetDb.password,
+        connectionString: store.restoreTargetDb.connectionString
+      }
+    };
+    
+    await ipcRenderer.invoke('restore-backup', payload);
+    addToast(t('toasts.restoreStarted'), 'success');
+    close();
+  } catch (error: any) {
+    addToast('Error starting restore: ' + error.message, 'error');
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+const close = () => {
+  store.showRestoreConfirmModal = false;
+  store.restoreBackupFile = null;
+  store.restoreTargetDb = null;
+  confirmInput.value = '';
+  error.value = '';
+};
+
+const handleInput = () => {
+  error.value = '';
+};
+</script>
+
+<template>
+  <Transition
+    enter-active-class="transition duration-200 ease-out"
+    enter-from-class="opacity-0 scale-95"
+    enter-to-class="opacity-100 scale-100"
+    leave-active-class="transition duration-150 ease-in"
+    leave-from-class="opacity-100 scale-100"
+    leave-to-class="opacity-0 scale-95"
+  >
+    <div v-if="store.showRestoreConfirmModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+      <div 
+        class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-md w-full border border-border overflow-hidden"
+        @click.stop
+      >
+        <div class="p-6">
+          <div v-if="!isLoading">
+            <div class="w-12 h-12 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-full flex items-center justify-center mb-4">
+              <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            
+            <h3 class="text-xl font-bold mb-2 text-red-600 dark:text-red-400">
+              {{ t('modal.restoreConfirmTitle') }}
+            </h3>
+            
+            <p class="text-gray-700 dark:text-gray-300 mb-4">
+              {{ t('modal.restoreConfirmMessage') }}
+            </p>
+
+            <!-- Database Info -->
+            <div class="mb-4 p-3 bg-gray-50 dark:bg-zinc-800/50 rounded-lg border border-gray-200 dark:border-zinc-700">
+              <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">{{ t('modal.restoreTarget') }}</div>
+              <div class="text-sm font-mono font-semibold text-gray-900 dark:text-gray-100">
+                {{ store.restoreTargetDb?.displayName || store.restoreTargetDb?.name }}
+              </div>
+              <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                {{ store.restoreTargetDb?.host }}:{{ store.restoreTargetDb?.port }}
+              </div>
+            </div>
+
+            <!-- Confirmation Input -->
+            <div class="mb-4">
+              <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                {{ t('modal.restoreConfirmMessage') }}
+              </label>
+              <input
+                v-model="confirmInput"
+                @input="handleInput"
+                type="text"
+                :placeholder="t('modal.restoreConfirmPlaceholder')"
+                class="w-full px-3 py-2 bg-white dark:bg-zinc-800 border rounded-lg text-sm focus:ring-2 focus:ring-red-500 focus:border-transparent outline-none transition-all"
+                :class="error ? 'border-red-500 dark:border-red-500' : 'border-gray-200 dark:border-zinc-700'"
+                :disabled="isLoading"
+              />
+              <div v-if="error" class="mt-2 text-sm text-red-600 dark:text-red-400">
+                {{ error }}
+              </div>
+              <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                <span v-if="currentLanguage === 'fr'">Tapez :</span><span v-else>Type :</span> <span class="font-mono font-semibold">{{ targetDbName }}</span>
+              </div>
+            </div>
+
+            <!-- Warning -->
+            <div class="bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200 p-3 rounded-lg text-sm border border-red-200 dark:border-red-800/50">
+              <div class="flex items-start gap-2">
+                <svg class="w-5 h-5 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <div>
+                  <div class="font-semibold mb-1">{{ t('modal.restoreWarning') }}</div>
+                  <div class="text-xs opacity-90">
+                    {{ t('modal.restoreStep1') }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="flex flex-col items-center justify-center py-4">
+            <RestoreAnimation />
+            <p class="mt-4 text-gray-500 dark:text-gray-400 animate-pulse">{{ t('modal.titleProgress') }}</p>
+          </div>
+        </div>
+        
+        <div v-if="!isLoading" class="bg-surface px-6 py-4 flex justify-end gap-3 border-t border-border">
+          <button
+            @click="close"
+            class="px-4 py-2 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-zinc-800 transition-colors font-medium"
+          >
+            {{ t('common.cancel') }}
+          </button>
+          <button
+            @click="restore"
+            :disabled="!isConfirmValid"
+            class="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white transition-colors font-medium flex items-center gap-2"
+          >
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            {{ t('modal.restoreConfirmButton') }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Transition>
+</template>
+

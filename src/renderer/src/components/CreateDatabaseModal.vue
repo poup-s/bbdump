@@ -10,10 +10,12 @@ const { addToast } = useToast();
 
 const isLoading = ref(false);
 const progress = ref<{ step: string; message: string; progress: number } | null>(null);
+const isPortEditable = ref(false);
 const form = ref({
   name: '',
   displayName: '',
-  port: 5432
+  port: 5432,
+  password: ''
 });
 
 const errors = ref({
@@ -27,13 +29,15 @@ watch(() => store.showCreateDatabaseModal, (show) => {
     form.value = {
       name: '',
       displayName: '',
-      port: 5432
+      port: 5432,
+      password: ''
     };
     errors.value = {
       name: '',
       port: ''
     };
     progress.value = null;
+    isPortEditable.value = false;
   }
 });
 
@@ -80,7 +84,8 @@ const createDatabase = async () => {
     const result = await ipcRenderer.invoke('create-local-database', {
       name: form.value.name.trim(),
       displayName: form.value.displayName.trim() || undefined,
-      port: form.value.port
+      port: form.value.port,
+      password: form.value.password.trim() || undefined
     });
 
     if (result.success) {
@@ -94,7 +99,7 @@ const createDatabase = async () => {
       store.newlyAddedDbName = form.value.name;
       setTimeout(() => {
         store.newlyAddedDbName = null;
-      }, 5000);
+      }, 2000);
       
       progress.value = null;
       close();
@@ -174,22 +179,66 @@ const close = () => {
               />
             </div>
 
-            <!-- Port -->
+            <!-- Password (Optional) -->
             <div>
               <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                {{ t('database.port') }} *
+                {{ t('database.password') }} ({{ t('common.optional') }})
               </label>
               <input
-                v-model.number="form.port"
-                type="number"
+                v-model="form.password"
+                type="password"
                 class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
-                :class="{ 'border-red-500': errors.port }"
-                placeholder="5432"
-                min="1024"
-                max="65535"
+                :placeholder="t('database.password')"
               />
+              <p class="text-xs text-gray-500 mt-1">{{ t('createDatabase.passwordHint') }}</p>
+            </div>
+
+            <!-- Port (Discret) -->
+            <div class="pt-2">
+              <div class="flex items-center justify-between mb-1.5">
+                <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
+                  {{ t('database.port') }}
+                </label>
+                <button
+                  v-if="!isPortEditable"
+                  @click="isPortEditable = true"
+                  type="button"
+                  class="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors flex items-center gap-1"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                  {{ t('common.edit') }}
+                </button>
+                <button
+                  v-else
+                  @click="isPortEditable = false; form.port = 5432"
+                  type="button"
+                  class="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+                >
+                  {{ t('common.cancel') }}
+                </button>
+              </div>
+              <div class="flex items-center gap-2">
+                <input
+                  v-model.number="form.port"
+                  type="number"
+                  :disabled="!isPortEditable"
+                  class="flex-1 bg-gray-50 dark:bg-zinc-800/50 border border-gray-200 dark:border-zinc-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all disabled:cursor-not-allowed disabled:opacity-60"
+                  :class="{ 
+                    'border-red-500': errors.port,
+                    'bg-surface border-border': isPortEditable
+                  }"
+                  placeholder="5432"
+                  min="1024"
+                  max="65535"
+                />
+                <span v-if="!isPortEditable" class="text-xs text-gray-400 dark:text-gray-500 font-mono">
+                  {{ form.port }}
+                </span>
+              </div>
               <p v-if="errors.port" class="text-xs text-red-500 mt-1">{{ errors.port }}</p>
-              <p v-else class="text-xs text-gray-500 mt-1">{{ t('createDatabase.portHint') }}</p>
+              <p v-else-if="isPortEditable" class="text-xs text-gray-500 mt-1">{{ t('createDatabase.portHint') }}</p>
             </div>
           </div>
 
@@ -223,16 +272,14 @@ const close = () => {
           </Transition>
 
           <!-- Info Box -->
-          <div v-if="!progress" class="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800">
-            <div class="flex items-start gap-3">
-              <svg class="w-5 h-5 text-blue-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div v-if="!progress" class="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800">
+            <div class="flex items-start gap-2.5">
+              <svg class="w-4 h-4 text-blue-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              <div class="text-sm text-blue-700 dark:text-blue-300">
-                <p class="font-medium mb-1">{{ t('createDatabase.infoTitle') }}</p>
-                <p>{{ t('createDatabase.infoDesc') }}</p>
-                <p class="mt-2 text-xs opacity-90">{{ t('createDatabase.requirement') }}</p>
-              </div>
+              <p class="text-sm text-blue-700 dark:text-blue-300 leading-relaxed">
+                {{ t('createDatabase.infoDesc') }}
+              </p>
             </div>
           </div>
         </div>

@@ -41,7 +41,7 @@ const deleteBackup = (backup: Backup) => {
       try {
         await ipcRenderer.invoke('delete-backup', backup.filename);
         await loadBackups();
-        addToast(t('toast.backupDeleted'), 'success');
+        addToast(t('toasts.backupDeleted'), 'success');
       } catch (error: any) {
         addToast('Error deleting backup: ' + error.message, 'error');
       }

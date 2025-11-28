@@ -50,19 +50,58 @@ class Logger {
       const lines = content.trim().split('\n').filter(line => line.length > 0);
 
       const logs: LogEntry[] = lines.map(line => {
-        const timestampMatch = line.match(/\[([^\]]+)\]/);
-        const levelMatch = line.match(/\[([^\]]+)\]/g);
-        const databaseMatch = line.match(/\[([a-zA-Z0-9_-]+)\]/g);
-
-        const timestamp = timestampMatch ? timestampMatch[1] : new Date().toISOString();
-        const level = (levelMatch && levelMatch[1] ? levelMatch[1].replace(/[\[\]]/g, '').toLowerCase() : 'info') as LogEntry['level'];
+        // Format attendu: [timestamp] [LEVEL] [database] message
+        // ou: [timestamp] [LEVEL] message (si pas de database)
+        // Le database doit être directement après le niveau, pas dans le message
         
-        // Extraire le message après les tags
-        const messageMatch = line.match(/\] (.+)$/);
-        const message = messageMatch ? messageMatch[1] : line;
+        // Regex plus précise pour extraire timestamp, level, database optionnel, et message
+        // Format: [timestamp] [LEVEL] [database] message
+        const logPattern = /^\[([^\]]+)\]\s+\[(INFO|ERROR|WARN|info|error|warn)\]\s+(?:\[([a-zA-Z0-9_][a-zA-Z0-9_.-]*)\]\s+)?(.+)$/;
+        const match = line.match(logPattern);
+        
+        let timestamp = new Date().toISOString();
+        let level: LogEntry['level'] = 'info';
+        let database: string | undefined = undefined;
+        let message = line;
 
-        // Vérifier si un nom de base de données est présent
-        const database = databaseMatch && databaseMatch.length > 2 ? databaseMatch[2].replace(/[\[\]]/g, '') : undefined;
+        if (match) {
+          timestamp = match[1];
+          const levelStr = match[2].toLowerCase();
+          if (levelStr === 'info' || levelStr === 'error' || levelStr === 'warn') {
+            level = levelStr as LogEntry['level'];
+          }
+          // Le troisième groupe capture la database si présente (directement après le niveau)
+          database = match[3] ? match[3] : undefined;
+          message = match[4].trim();
+        } else {
+          // Fallback pour les anciens formats ou formats non standard
+          const bracketMatches = line.match(/\[([^\]]+)\]/g);
+          if (bracketMatches && bracketMatches.length >= 2) {
+            timestamp = bracketMatches[0].replace(/[\[\]]/g, '');
+            const levelStr = bracketMatches[1].replace(/[\[\]]/g, '').toLowerCase();
+            if (levelStr === 'info' || levelStr === 'error' || levelStr === 'warn') {
+              level = levelStr as LogEntry['level'];
+              // Pour le fallback, on ne considère comme database que si c'est un nom valide
+              // et qu'il n'est pas un mot-clé commun
+              if (bracketMatches.length >= 3) {
+                const potentialDb = bracketMatches[2].replace(/[\[\]]/g, '');
+                // Ne considérer comme database que si c'est un nom valide (pas un mot-clé comme "preparing", "checking", etc.)
+                const keywords = ['preparing', 'checking', 'connecting', 'creating', 'complete', 'backup', 'restore'];
+                if (!keywords.includes(potentialDb.toLowerCase()) && /^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$/.test(potentialDb)) {
+                  database = potentialDb;
+                  const messageStart = line.indexOf(bracketMatches[2]) + bracketMatches[2].length;
+                  message = line.substring(messageStart).trim();
+                } else {
+                  const messageStart = line.indexOf(bracketMatches[1]) + bracketMatches[1].length;
+                  message = line.substring(messageStart).trim();
+                }
+              } else {
+                const messageStart = line.indexOf(bracketMatches[1]) + bracketMatches[1].length;
+                message = line.substring(messageStart).trim();
+              }
+            }
+          }
+        }
 
         return { timestamp, level, message, database };
       }).reverse(); // Les plus récents en premier

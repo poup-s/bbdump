@@ -93,13 +93,26 @@ onMounted(() => {
         <TableSidebar
           :tables="tables"
           :selected-table="selectedTable"
+          :loading="loading"
           @select="handleTableSelect"
         />
 
         <!-- Main Content -->
-        <div class="flex-1 flex flex-col overflow-hidden bg-white dark:bg-zinc-900 relative">
+        <div class="flex-1 flex items-center overflow-hidden bg-white dark:bg-zinc-900 relative">
+          <!-- Loading State -->
+          <div v-if="loading" class="absolute inset-0 z-10 flex flex-col items-center justify-center p-8 text-center bg-white dark:bg-zinc-900">
+            <div class="mb-6">
+              <div class="relative w-16 h-16 mx-auto">
+                <div class="absolute inset-0 border-4 border-blue-200 dark:border-blue-800 rounded-full"></div>
+                <div class="absolute inset-0 border-4 border-blue-600 dark:border-blue-400 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+            </div>
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Loading database...</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Fetching tables and schema information</p>
+          </div>
+          
           <!-- Error State -->
-          <div v-if="error" class="absolute inset-0 z-10 flex flex-col items-center justify-center p-8 text-center bg-white dark:bg-zinc-900">
+          <div v-else-if="error" class="absolute inset-0 z-10 flex flex-col items-center justify-center p-8 text-center bg-white dark:bg-zinc-900">
             <div class="mb-6 p-6 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl max-w-md">
               <div class="w-12 h-12 bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 rounded-full flex items-center justify-center mx-auto mb-4">
                 <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -118,7 +131,7 @@ onMounted(() => {
           </div>
           
           <!-- Success State -->
-          <div v-else-if="selectedTable" class="flex flex-col h-full">
+          <div v-else-if="!loading && selectedTable" class="flex flex-col h-full">
             <!-- Tabs -->
             <div class="border-b border-gray-200 dark:border-zinc-800 px-6 bg-gray-50/50 dark:bg-zinc-900/50 backdrop-blur-sm">
               <nav class="-mb-px flex space-x-6">
@@ -161,7 +174,7 @@ onMounted(() => {
           </div>
           
           <!-- Empty State -->
-          <div v-else class="flex-1 flex flex-col items-center justify-center text-gray-400 dark:text-gray-600">
+          <div v-else-if="!loading && !error" class="flex-1 flex flex-col items-center justify-center text-gray-400 dark:text-gray-600">
             <div class="w-16 h-16 bg-gray-100 dark:bg-zinc-800 rounded-full flex items-center justify-center mb-4">
               <svg class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 10h18M3 14h18m-9-4v8m-7-6h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2z" />

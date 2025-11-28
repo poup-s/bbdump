@@ -25,7 +25,7 @@ const form = ref<Database>({
   password: '',
   output: '',
   cron: '0 0 * * *',
-  enabled: true,
+  enabled: false,
   encryptBackups: false,
   connectionString: '',
   ssl: false
@@ -69,7 +69,7 @@ watch(() => store.showDatabaseModal, async (show) => {
         password: '',
         output: defaultPath,
         cron: '0 0 * * *',
-        enabled: true,
+        enabled: false,
         encryptBackups: false,
         connectionString: '',
         ssl: false
@@ -209,7 +209,7 @@ const save = async () => {
       store.newlyAddedDbName = dbData.name;
       setTimeout(() => {
         store.newlyAddedDbName = null;
-      }, 5000);
+      }, 2000);
     }
     
     const config = await ipcRenderer.invoke('get-config');

@@ -5,6 +5,7 @@ import { useI18n } from '../../composables/useI18n';
 const props = defineProps<{
   tables: any[];
   selectedTable: string | null;
+  loading?: boolean;
 }>();
 
 const emit = defineEmits(['select']);
@@ -35,7 +36,17 @@ const filteredTables = computed(() => {
       </div>
     </div>
     <div class="flex-1 overflow-y-auto p-2">
-      <ul class="space-y-1">
+      <!-- Loading State -->
+      <div v-if="loading" class="flex flex-col items-center justify-center py-12">
+        <div class="relative w-12 h-12 mb-4">
+          <div class="absolute inset-0 border-4 border-blue-200 dark:border-blue-800 rounded-full"></div>
+          <div class="absolute inset-0 border-4 border-blue-600 dark:border-blue-400 border-t-transparent rounded-full animate-spin"></div>
+        </div>
+        <p class="text-sm text-gray-500 dark:text-gray-400">Loading tables...</p>
+      </div>
+      
+      <!-- Tables List -->
+      <ul v-else class="space-y-1">
         <li
           v-for="table in filteredTables"
           :key="table.name"

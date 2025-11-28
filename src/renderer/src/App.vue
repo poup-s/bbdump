@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { computed, onMounted, onUnmounted } from 'vue';
 import { store } from './store';
 import { useI18n } from './composables/useI18n';
 import { useToast } from './composables/useToast';
@@ -18,6 +18,7 @@ import ConfirmModal from './components/ConfirmModal.vue';
 import DatabaseModal from './components/DatabaseModal.vue';
 import CreateDatabaseModal from './components/CreateDatabaseModal.vue';
 import RestoreBackupModal from './components/RestoreBackupModal.vue';
+import RestoreConfirmModal from './components/RestoreConfirmModal.vue';
 import DbViewer from './components/db-viewer/DbViewer.vue';
 import Onboarding from './components/Onboarding.vue';
 import ThreeBackground from './components/ThreeBackground.vue';
@@ -27,7 +28,10 @@ const { addToast } = useToast();
 const isDark = useDark();
 const toggleDark = useToggle(isDark);
 
-const activeTab = ref('databases');
+const activeTab = computed({
+  get: () => store.activeTab,
+  set: (value) => { store.activeTab = value; }
+});
 
 const tabs = [
   { id: 'databases', label: 'nav.databases', icon: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4' },
@@ -186,14 +190,8 @@ onUnmounted(() => {
     <!-- Modals -->
     <DatabaseModal />
     <CreateDatabaseModal />
-    <RestoreBackupModal
-      v-if="store.showRestoreModal"
-      @close="store.showRestoreModal = false; store.restoreBackupFile = null"
-    />
-    <RestoreBackupModal
-      v-if="store.showRestoreModal"
-      @close="store.showRestoreModal = false; store.restoreBackupFile = null"
-    />
+    <RestoreBackupModal />
+    <RestoreConfirmModal />
     <!-- BackupProgressModal removed in favor of card animation -->
     <DbViewer
       v-if="store.showDbViewer"

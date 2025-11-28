@@ -21,12 +21,13 @@ export interface InstallationProgress {
 
 /**
  * Détecte l'OS
+ * Utilise le module centralisé osDetector
  */
 function getOS(): 'macos' | 'linux' | 'windows' {
-  const platform = os.platform();
-  if (platform === 'darwin') return 'macos';
-  if (platform === 'win32') return 'windows';
-  return 'linux';
+  // Import dynamique pour éviter les dépendances circulaires
+  const { getOSType } = require('./os/osDetector');
+  const osType = getOSType();
+  return osType;
 }
 
 /**

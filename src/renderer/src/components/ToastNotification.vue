@@ -13,7 +13,7 @@ const { toasts, removeToast } = useToast();
         class="pointer-events-auto group perspective-1000"
       >
         <div 
-          class="relative bg-white dark:bg-zinc-900/90 backdrop-blur-xl border border-gray-200 dark:border-white/20 shadow-2xl rounded-2xl p-4 min-w-[380px] max-w-md transform-style-3d transition-all duration-500 hover:scale-105 hover:rotate-x-0"
+          class="relative bg-white dark:bg-zinc-900/90 backdrop-blur-xl border border-gray-300 dark:border-white/20 shadow-2xl rounded-2xl p-4 min-w-[380px] max-w-md transform-style-3d transition-all duration-500 hover:scale-105 hover:rotate-x-0"
           :class="[
             'rotate-x-12',
             toast.type === 'success' ? 'shadow-green-500/20' : '',
@@ -24,7 +24,7 @@ const { toasts, removeToast } = useToast();
         >
           <!-- 3D Depth Layer -->
           <div 
-            class="absolute inset-0 rounded-2xl transform -translate-z-4 bg-black/20 blur-sm"
+            class="absolute inset-0 rounded-2xl transform -translate-z-4 bg-gray-100/20 dark:bg-black/20 blur-sm"
           ></div>
 
           <div class="relative flex items-center gap-4 transform translate-z-2">
@@ -54,7 +54,7 @@ const { toasts, removeToast } = useToast();
 
             <!-- Content -->
             <div class="flex-1">
-              <p class="font-medium text-gray-900 dark:text-white">{{ toast.message }}</p>
+              <p class="font-medium text-gray-900 dark:text-white leading-relaxed">{{ toast.message }}</p>
             </div>
 
             <!-- Close Button -->
@@ -69,7 +69,7 @@ const { toasts, removeToast } = useToast();
           </div>
           
           <!-- Shine Effect -->
-          <div class="absolute inset-0 rounded-2xl bg-gradient-to-tr from-white/10 to-transparent pointer-events-none"></div>
+          <div class="absolute inset-0 rounded-2xl bg-gradient-to-tr from-white/20 dark:from-white/10 to-transparent pointer-events-none"></div>
         </div>
       </div>
     </transition-group>

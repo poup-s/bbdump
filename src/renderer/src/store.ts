@@ -22,7 +22,9 @@ export const store = reactive({
     showDatabaseModal: false,
     showCreateDatabaseModal: false,
     showRestoreModal: false,
+    showRestoreConfirmModal: false,
     restoreBackupFile: null as string | null,
+    restoreTargetDb: null as Database | null,
     editingDatabase: null as Database | null,
     showBackupModal: false,
     backupProgress: null as {
@@ -33,5 +35,6 @@ export const store = reactive({
     } | null,
     newlyAddedDbName: null as string | null,
     onboardingCompleted: false,
-    language: 'en' as 'en' | 'fr'
+    language: 'en' as 'en' | 'fr',
+    activeTab: 'databases' as string
 });

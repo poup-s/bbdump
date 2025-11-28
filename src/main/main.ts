@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { AppConfig, DatabaseConfig, BackupResult, LogEntry } from '../types/config';
 import { backupManager } from './backup';
 import { cronManager } from './cron';
@@ -10,6 +11,12 @@ import { fileEncryptionManager } from './fileEncryption';
 import { pathManager } from './paths';
 import * as dbViewer from './dbViewer';
 import * as databaseCreator from './databaseCreator';
+import { checkPostgresInstalled } from './postgresManager';
+import * as postgresConfig from './postgresConfig';
+import { exec, spawn } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 const CONFIG_PATH = pathManager.configPath;
 
@@ -174,6 +181,88 @@ ipcMain.handle('save-config', async (_, newConfig: AppConfig): Promise<void> => 
   cronManager.rescheduleAll(config.databases || []);
 });
 
+/**
+ * Vérifie les prérequis nécessaires pour utiliser l'application
+ * Utilise le module centralisé prerequisitesManager
+ */
+async function checkPrerequisites(): Promise<{
+  pgDump: { installed: boolean; path?: string; error?: string };
+  psql: { installed: boolean; path?: string; error?: string };
+  homebrew: { installed: boolean; path?: string; error?: string };
+  postgresServer: { installed: boolean; version?: string; hasServer?: boolean; error?: string };
+}> {
+  const { checkPrerequisites: checkPrereqs } = await import('./prerequisites/prerequisitesManager');
+  const prerequisites = await checkPrereqs();
+  
+  // Convertir le format pour compatibilité avec l'interface existante
+  return {
+    pgDump: {
+      installed: prerequisites.pgDump.installed,
+      path: prerequisites.pgDump.path,
+      error: prerequisites.pgDump.error
+    },
+    psql: {
+      installed: prerequisites.psql.installed,
+      path: prerequisites.psql.path,
+      error: prerequisites.psql.error
+    },
+    homebrew: prerequisites.homebrew ? {
+      installed: prerequisites.homebrew.installed,
+      path: prerequisites.homebrew.path,
+      error: prerequisites.homebrew.error
+    } : { installed: true }, // Linux/Windows
+    postgresServer: prerequisites.postgresServer
+  };
+}
+
+ipcMain.handle('check-prerequisites', async () => {
+  try {
+    return await checkPrerequisites();
+  } catch (error: any) {
+    logger.error(`Error checking prerequisites: ${error.message}`);
+    throw error;
+  }
+});
+
+/**
+ * Installe Homebrew sur macOS
+ * Utilise le module centralisé toolInstaller
+ */
+async function installHomebrew(onProgress: (progress: { step: string; message: string; progress: number }) => void): Promise<{ success: boolean; error?: string }> {
+  const { installHomebrew: installBrew } = await import('./tools/toolInstaller');
+  return installBrew(onProgress);
+}
+
+ipcMain.handle('install-homebrew', async () => {
+  try {
+    const onProgress = (progress: { step: string; message: string; progress: number }) => {
+      if (mainWindow) {
+        mainWindow.webContents.send('install-progress', progress);
+      }
+    };
+    return await installHomebrew(onProgress);
+  } catch (error: any) {
+    logger.error(`Error installing Homebrew: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('install-postgresql', async () => {
+  try {
+    const onProgress = (progress: { step: string; message: string; progress: number }) => {
+      if (mainWindow) {
+        mainWindow.webContents.send('install-progress', progress);
+      }
+    };
+    // Utiliser le module centralisé toolInstaller
+    const { installPostgreSQL } = await import('./tools/toolInstaller');
+    return await installPostgreSQL(onProgress);
+  } catch (error: any) {
+    logger.error(`Error installing PostgreSQL: ${error.message}`);
+    throw error;
+  }
+});
+
 ipcMain.handle('complete-onboarding', async (_, settings: { language: 'en' | 'fr', defaultBackupPath: string }) => {
   config.onboardingCompleted = true;
   config.language = settings.language;
@@ -189,7 +278,7 @@ ipcMain.handle('save-settings', async (_, settings: { language?: 'en' | 'fr', de
   return config;
 });
 
-ipcMain.handle('create-local-database', async (_, params: { name: string; displayName?: string; port: number }): Promise<{ success: boolean; error?: string; database?: DatabaseConfig; progress?: { step: string; message: string; progress: number } }> => {
+ipcMain.handle('create-local-database', async (_, params: { name: string; displayName?: string; port: number; password?: string }): Promise<{ success: boolean; error?: string; database?: DatabaseConfig; progress?: { step: string; message: string; progress: number } }> => {
   try {
     // Récupérer les ports existants
     const existingPorts = config.databases.map(db => db.port);
@@ -227,12 +316,12 @@ ipcMain.handle('create-local-database', async (_, params: { name: string; displa
       host: result.database.host,
       port: result.database.port,
       user: result.database.user,
-      password: result.database.password,
+      password: params.password || result.database.password || '', // Utiliser le mot de passe fourni ou celui détecté, ou vide
       encrypted: false, // Pas de chiffrement pour les bases locales
       encryptBackups: false,
       cron: '0 0 * * *',
       output: defaultPath,
-      enabled: true,
+      enabled: false,
       ssl: false,
       isLocalBbdump: true
     };
@@ -256,6 +345,189 @@ ipcMain.handle('create-local-database', async (_, params: { name: string; displa
       success: false,
       error: error.message || 'Failed to create database'
     };
+  }
+});
+
+ipcMain.handle('duplicate-external-to-local', async (_, params: { 
+  sourceDb: DatabaseConfig; 
+  targetName: string; 
+  targetPassword?: string;
+  targetPort: number;
+}): Promise<{ success: boolean; error?: string; database?: DatabaseConfig }> => {
+  const tempBackupPath = path.join(os.tmpdir(), `bbdump-duplicate-${Date.now()}.backup`);
+  
+  // Envoyer la progression au renderer
+  const sendProgress = (step: string, message: string, progress: number) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('duplicate-progress', { step, message, progress });
+    }
+  };
+  
+  try {
+    // 1. Faire un dump de la base externe
+    sendProgress('backup', `Creating backup from external database "${params.sourceDb.name}"...`, 10);
+    logger.info(`Creating backup from external database "${params.sourceDb.name}"`);
+    
+    const sourceDbConfig: DatabaseConfig = {
+      ...params.sourceDb,
+      password: params.sourceDb.encrypted 
+        ? encryptionManager.decrypt(params.sourceDb.password) 
+        : params.sourceDb.password
+    };
+    
+    const backupResult = await backupManager.executeBackup(sourceDbConfig);
+    
+    if (!backupResult.success) {
+      return {
+        success: false,
+        error: `Failed to backup source database: ${backupResult.error || 'Unknown error'}`
+      };
+    }
+    
+    // Mettre à jour le lastBackup de la base source
+    const sourceDbInConfig = config.databases.find(d => d.name === params.sourceDb.name);
+    if (sourceDbInConfig && backupResult.timestamp) {
+      sourceDbInConfig.lastBackup = backupResult.timestamp;
+      saveConfig(config);
+    }
+    
+    sendProgress('backup', 'Backup created successfully', 30);
+    
+    // Trouver le fichier de backup créé - il devrait être le plus récent dans le dossier output
+    const backupDir = sourceDbConfig.output || config.defaultBackupPath || pathManager.backupsPath;
+    const backupFiles = fs.readdirSync(backupDir)
+      .filter(f => f.startsWith(`${sourceDbConfig.name}_`) && f.endsWith('.backup'))
+      .map(f => ({
+        name: f,
+        path: path.join(backupDir, f),
+        time: fs.statSync(path.join(backupDir, f)).mtime.getTime()
+      }))
+      .sort((a, b) => b.time - a.time);
+    
+    if (backupFiles.length === 0) {
+      return {
+        success: false,
+        error: 'Backup file not found after backup operation'
+      };
+    }
+    
+    const backupFile = backupFiles[0].path;
+    logger.info(`Backup created successfully: ${backupFile}`);
+    
+    // 2. Créer une nouvelle base locale
+    sendProgress('creating', `Creating local database "${params.targetName}"...`, 40);
+    logger.info(`Creating local database "${params.targetName}"`);
+    
+    const existingPorts = config.databases.map(db => db.port);
+    const createResult = await databaseCreator.createLocalDatabase(
+      {
+        name: params.targetName,
+        displayName: params.targetName,
+        port: params.targetPort
+      },
+      existingPorts
+    );
+    
+    if (!createResult.success || !createResult.database) {
+      return {
+        success: false,
+        error: `Failed to create local database: ${createResult.error || 'Unknown error'}`
+      };
+    }
+    
+    sendProgress('creating', 'Local database created successfully', 60);
+    logger.info(`Local database "${params.targetName}" created successfully`);
+    
+    // 3. Restaurer le dump dans la nouvelle base locale
+    sendProgress('restoring', `Restoring backup to local database "${params.targetName}"...`, 70);
+    logger.info(`Restoring backup to local database "${params.targetName}"`);
+    
+    const targetDbConfig: DatabaseConfig = {
+      name: params.targetName,
+      displayName: params.targetName,
+      host: 'localhost',
+      port: params.targetPort,
+      user: createResult.database.user,
+      password: params.targetPassword || '',
+      encrypted: false,
+      encryptBackups: false,
+      cron: '0 0 * * *',
+      output: config.defaultBackupPath || pathManager.backupsPath,
+      enabled: false,
+      ssl: false,
+      isLocalBbdump: true
+    };
+    
+    // Utiliser seulement le nom du fichier pour restoreBackup (il ajoute le chemin du dossier backups)
+    const backupFileName = path.basename(backupFile);
+    const restoreResult = await backupManager.restoreBackup(backupFileName, {
+      name: params.targetName,
+      host: 'localhost',
+      port: params.targetPort,
+      user: createResult.database.user,
+      password: params.targetPassword || '',
+      connectionString: undefined
+    });
+    
+    if (!restoreResult.success) {
+      // Nettoyer la base créée en cas d'échec
+      try {
+        const { Client } = await import('pg');
+        const client = new Client({
+          host: 'localhost',
+          port: params.targetPort,
+          user: createResult.database.user,
+          password: params.targetPassword || '',
+          database: 'postgres' // Se connecter à postgres pour pouvoir supprimer la base
+        });
+        await client.connect();
+        const format = (await import('pg-format')).default;
+        await client.query(format('DROP DATABASE IF EXISTS %I', params.targetName));
+        await client.end();
+      } catch (cleanupError: any) {
+        logger.warn(`Failed to cleanup database after restore failure: ${cleanupError?.message || cleanupError}`);
+      }
+      
+      return {
+        success: false,
+        error: `Failed to restore backup: ${restoreResult.error || 'Unknown error'}`
+      };
+    }
+    
+    sendProgress('restoring', 'Backup restored successfully', 90);
+    logger.info(`Backup restored successfully to "${params.targetName}"`);
+    
+    // 4. Ajouter la nouvelle base à la configuration
+    sendProgress('complete', 'Adding database to configuration...', 95);
+    
+    // Utiliser le timestamp du backup créé comme lastBackup pour la nouvelle base
+    if (backupResult.timestamp) {
+      targetDbConfig.lastBackup = backupResult.timestamp;
+    }
+    
+    config.databases.push(targetDbConfig);
+    saveConfig(config);
+    
+    // Planifier les backups
+    cronManager.scheduleBackup(targetDbConfig);
+    
+    sendProgress('complete', 'Database duplicated successfully', 100);
+    logger.info(`Database "${params.targetName}" duplicated and added to configuration`);
+    
+    return {
+      success: true,
+      database: targetDbConfig
+    };
+  } catch (error: any) {
+    logger.error(`Error duplicating database: ${error.message}`);
+    return {
+      success: false,
+      error: error.message || 'Failed to duplicate database'
+    };
+  } finally {
+    // Nettoyer le fichier de backup temporaire si nécessaire
+    // Note: Le backup créé par executeBackup est dans le dossier de backups, pas dans tmp
+    // On ne le supprime pas car il peut être utile pour l'utilisateur
   }
 });
 
@@ -619,8 +891,14 @@ ipcMain.handle('get-database-tables', async (_, params: { host: string; port: nu
 
 // Helper to get db config
 const getDbConfig = (dbName: string) => {
+  if (!config || !config.databases || !Array.isArray(config.databases)) {
+    throw new Error(`Configuration not loaded or databases array is missing`);
+  }
+  
   const db = config.databases.find(d => d.name === dbName);
-  if (!db) throw new Error(`Database ${dbName} not found`);
+  if (!db) {
+    throw new Error(`Database "${dbName}" not found in configuration`);
+  }
 
   const password = db.encrypted ? encryptionManager.decrypt(db.password) : db.password;
 
@@ -638,11 +916,14 @@ const getDbConfig = (dbName: string) => {
 // Alias for compatibility
 ipcMain.handle('get-db-tables', async (_, params: { db: { name: string } }) => {
   try {
+    // Recharger la config pour s'assurer qu'elle est à jour
+    config = loadConfig();
+    
     logger.info(`Getting tables for database: ${params.db.name}`);
     const dbConfig = getDbConfig(params.db.name);
     return await dbViewer.getDatabaseTables(dbConfig);
-  } catch (error) {
-    logger.error(`Error getting database tables: ${error}`);
+  } catch (error: any) {
+    logger.error(`Error getting database tables: ${error.message || error}`);
     throw error;
   }
 });
@@ -654,6 +935,52 @@ ipcMain.handle('get-table-schema', async (_, params: { db: { name: string }, tab
     return await dbViewer.getTableSchema({ ...dbConfig, table: params.table });
   } catch (error) {
     logger.error(`Error getting table schema: ${error}`);
+    throw error;
+  }
+});
+
+// PostgreSQL Configuration Handlers
+ipcMain.handle('get-postgres-config', async (_, port: number = 5432) => {
+  try {
+    return await postgresConfig.getPostgresConfigInfo(port);
+  } catch (error: any) {
+    logger.error(`Error getting PostgreSQL config: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('kill-postgres-connection', async (_, pid: number, port: number = 5432) => {
+  try {
+    return await postgresConfig.killConnection(pid, port);
+  } catch (error: any) {
+    logger.error(`Error killing PostgreSQL connection: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('disconnect-postgres-database', async (_, dbName: string, port: number = 5432) => {
+  try {
+    return await postgresConfig.disconnectDatabase(dbName, port);
+  } catch (error: any) {
+    logger.error(`Error disconnecting PostgreSQL database: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('drop-postgres-database', async (_, dbName: string, port: number = 5432, forceDisconnect: boolean = true) => {
+  try {
+    return await postgresConfig.dropDatabase(dbName, port, forceDisconnect);
+  } catch (error: any) {
+    logger.error(`Error dropping PostgreSQL database: ${error.message}`);
+    throw error;
+  }
+});
+
+ipcMain.handle('test-postgres-connection', async (_, dbName: string, port: number = 5432, password?: string) => {
+  try {
+    return await postgresConfig.testDatabaseConnection(dbName, port, password);
+  } catch (error: any) {
+    logger.error(`Error testing PostgreSQL connection: ${error.message}`);
     throw error;
   }
 });

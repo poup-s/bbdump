@@ -18,12 +18,27 @@ export class BackupManager {
 
   constructor() {
     this.backupDir = pathManager.backupsPath;
-    this.pgDumpPath = this.findPostgresCommand('pg_dump');
-    this.pgRestorePath = this.findPostgresCommand('pg_restore');
+    // Les chemins seront résolus de manière asynchrone lors de la première utilisation
+    // Pour l'instant, utiliser les noms de commandes (seront résolus via PATH)
+    this.pgDumpPath = 'pg_dump';
+    this.pgRestorePath = 'pg_restore';
     this.ensureBackupDir();
+    
+    // Initialiser les chemins de manière asynchrone (ne pas attendre)
+    this.initializePaths().catch((error) => {
+      logger.warn(`Failed to initialize PostgreSQL paths: ${error.message}`);
+    });
+  }
 
-    logger.info(`pg_dump found: ${this.pgDumpPath}`);
-    logger.info(`pg_restore found: ${this.pgRestorePath}`);
+  private async initializePaths(): Promise<void> {
+    try {
+      this.pgDumpPath = await this.findPostgresCommand('pg_dump');
+      this.pgRestorePath = await this.findPostgresCommand('pg_restore');
+      logger.info(`pg_dump found: ${this.pgDumpPath}`);
+      logger.info(`pg_restore found: ${this.pgRestorePath}`);
+    } catch (error: any) {
+      logger.warn(`Failed to initialize PostgreSQL paths: ${error.message}`);
+    }
   }
 
   setMainWindow(window: Electron.BrowserWindow | null) {
@@ -68,46 +83,10 @@ export class BackupManager {
     }
   }
 
-  private findPostgresCommand(command: string): string {
-    // Emplacements possibles pour PostgreSQL sur macOS
-    const possiblePaths = [
-      `/opt/homebrew/bin/${command}`, // Homebrew Apple Silicon
-      `/usr/local/bin/${command}`, // Homebrew Intel
-      `/Library/PostgreSQL/*/bin/${command}`, // EnterpriseDB installer
-      `/Applications/Postgres.app/Contents/Versions/*/bin/${command}`, // Postgres.app
-      command // Fallback au PATH système
-    ];
-
-    // Tester chaque chemin
-    for (const testPath of possiblePaths) {
-      // Si le chemin contient un wildcard, on doit le résoudre
-      if (testPath.includes('*')) {
-        try {
-          const dir = path.dirname(testPath);
-          const parentDir = dir.split('*')[0];
-          if (fs.existsSync(parentDir)) {
-            const entries = fs.readdirSync(parentDir);
-            for (const entry of entries) {
-              const fullPath = path.join(parentDir, entry, 'bin', command);
-              if (fs.existsSync(fullPath)) {
-                return fullPath;
-              }
-            }
-          }
-        } catch (error) {
-          // Continuer avec le prochain chemin
-        }
-      } else {
-        // Chemin direct, tester s'il existe
-        if (fs.existsSync(testPath)) {
-          return testPath;
-        }
-      }
-    }
-
-    // Si aucun chemin n'est trouvé, retourner le nom de commande par défaut
-    logger.warn(`${command} not found in standard locations, using system PATH`);
-    return command;
+  private async findPostgresCommand(command: string): Promise<string> {
+    // Utiliser le module centralisé toolDetector
+    const { findPostgresCommand: findCommand } = await import('./tools/toolDetector');
+    return findCommand(command);
   }
 
   private ensureBackupDir(): void {
@@ -208,8 +187,9 @@ export class BackupManager {
         env.PGSSLMODE = 'require';
       }
 
-      // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string
-      if (!db.connectionString && db.password) {
+      // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string et si un mot de passe est fourni
+      // Pour les bases locales (isLocalBbdump), le mot de passe peut être vide (authentification peer/ident)
+      if (!db.connectionString && db.password && db.password.trim().length > 0) {
         env.PGPASSWORD = db.password;
       }
 
@@ -457,7 +437,9 @@ export class BackupManager {
       };
     }
 
-    if (!db.password || db.password.trim().length === 0) {
+    // Pour les bases locales créées par bbdump, le mot de passe peut être vide
+    // (connexion via ident/peer authentication)
+    if (!db.isLocalBbdump && (!db.password || db.password.trim().length === 0)) {
       return {
         valid: false,
         error: 'Password is required'
@@ -605,8 +587,9 @@ export class BackupManager {
         env.PGSSLMODE = 'require';
       }
 
-      // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string
-      if (!db.connectionString && db.password) {
+      // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string et si un mot de passe est fourni
+      // Pour les bases locales (isLocalBbdump), le mot de passe peut être vide (authentification peer/ident)
+      if (!db.connectionString && db.password && db.password.trim().length > 0) {
         env.PGPASSWORD = db.password;
       }
 
@@ -901,8 +884,8 @@ export class BackupManager {
         ...process.env
       };
 
-      // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string
-      if (!target.connectionString && target.password) {
+      // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string et si un mot de passe est fourni
+      if (!target.connectionString && target.password && target.password.trim().length > 0) {
         env.PGPASSWORD = target.password;
       }
 
