@@ -99,9 +99,11 @@ Les exécutables seront générés dans le dossier `release/`.
 
 **Méthode la plus simple** : Utilisez le script d'installation automatique :
 
-1. **Téléchargez le DMG** depuis le dossier [`app/`](app/) :
-   - Pour Apple Silicon (M1/M2/M3) : [`bbdump-1.9.0-arm64.dmg`](app/bbdump-1.9.0-arm64.dmg)
-   - Pour Intel Mac : [`bbdump-1.9.0.dmg`](app/bbdump-1.9.0.dmg)
+1. **Téléchargez le DMG** depuis les [**GitHub Releases**](https://github.com/poup-s/bbdump/releases) :
+   - Pour Apple Silicon (M1/M2/M3) : `bbdump-1.9.0-arm64.dmg`
+   - Pour Intel Mac : `bbdump-1.9.0.dmg`
+   
+   > 💡 **Pourquoi GitHub Releases ?** Les fichiers DMG sont volumineux (~350MB) et ne peuvent pas être versionnés directement dans Git. Les releases GitHub sont la méthode recommandée pour distribuer des fichiers binaires.
 2. **Montez le DMG** (double-clic sur le fichier `.dmg`)
    - Une fenêtre Finder devrait s'ouvrir avec `bbdump.app`
 3. **Ouvrez Terminal** (Applications > Utilitaires > Terminal)

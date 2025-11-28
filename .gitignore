@@ -95,10 +95,6 @@ coverage/
 *.tar
 *.zip
 
-# Exception: app/ folder contains distributable DMG files
-!app/
-!app/*.dmg
-
 # Electron builder
 electron-builder.yml
 
