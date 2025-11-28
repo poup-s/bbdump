@@ -95,24 +95,59 @@ Les exécutables seront générés dans le dossier `release/`.
 
 ⚠️ **Important** : Si macOS affiche un message indiquant que l'application est "endommagée" ou "ne peut pas être ouverte", c'est normal car l'application n'est pas signée avec un certificat Apple Developer. macOS bloque les applications non signées pour des raisons de sécurité.
 
-#### 📋 Guide d'installation étape par étape
+#### 🚀 Installation automatique (recommandée)
+
+**Méthode la plus simple** : Utilisez le script d'installation automatique :
+
+1. **Téléchargez et montez le DMG** (double-clic sur le fichier `.dmg`)
+2. **Ouvrez Terminal** (Applications > Utilitaires > Terminal)
+3. **Copiez-collez cette commande** :
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/poup-s/bbdump/main/install-mac.sh | bash
+   ```
+   Ou si vous avez déjà téléchargé le script :
+   ```bash
+   bash install-mac.sh
+   ```
+
+Le script va automatiquement :
+- Retirer le flag de quarantaine
+- Installer l'application dans `/Applications`
+- Configurer les permissions nécessaires
+
+#### 📋 Installation manuelle étape par étape
 
 **Étape 1 : Télécharger et monter le DMG**
 - Téléchargez le fichier `.dmg` depuis les releases GitHub
 - Double-cliquez sur le fichier `.dmg` pour le monter
 - Une fenêtre Finder s'ouvre avec `bbdump.app`
 
-**Étape 2 : Retirer le flag de quarantaine (nécessaire)**
+**Étape 2 : Retirer le flag de quarantaine (OBLIGATOIRE)**
 
-macOS ajoute un attribut de "quarantaine" aux fichiers téléchargés. Il faut le retirer avant d'installer :
+macOS ajoute un attribut de "quarantaine" aux fichiers téléchargés depuis Internet. Il faut le retirer avant d'installer :
 
-1. **Ouvrez l'application Terminal** (Applications > Utilitaires > Terminal)
-2. **Copiez-collez cette commande** dans Terminal et appuyez sur Entrée :
+**Méthode rapide (recommandée) :**
+```bash
+# Trouver automatiquement le volume monté
+VOLUME=$(ls -d /Volumes/bbdump* 2>/dev/null | head -1)
+if [ -n "$VOLUME" ]; then
+    xattr -cr "$VOLUME/bbdump.app"
+    echo "✅ Flag de quarantaine retiré"
+else
+    echo "❌ Volume non trouvé. Vérifiez que le DMG est monté."
+fi
+```
+
+**Méthode manuelle :**
+1. **Ouvrez Terminal** (Applications > Utilitaires > Terminal)
+2. **Trouvez le nom exact du volume** :
    ```bash
-   xattr -cr /Volumes/bbdump*/bbdump.app
+   ls /Volumes/ | grep bbdump
    ```
-   *(Remplacez `bbdump*` par le nom exact du volume si différent)*
-3. Vous devriez voir le curseur revenir sans erreur
+3. **Retirez le flag** (remplacez `bbdump-1.9.0-arm64` par le nom trouvé) :
+   ```bash
+   xattr -cr "/Volumes/bbdump-1.9.0-arm64/bbdump.app"
+   ```
 
 **Étape 3 : Installer l'application**
 

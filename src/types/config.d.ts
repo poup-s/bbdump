@@ -1,4 +1,5 @@
 export interface DatabaseConfig {
+  isLocalBbdump?: boolean;
   name: string;
   displayName?: string;
   // Connection string PostgreSQL (ex: postgresql://user:pass@host:port/db?sslmode=require)
@@ -19,7 +20,6 @@ export interface DatabaseConfig {
   jobs?: number; // Nombre de jobs parallèles pour pg_dump (défaut: 1)
   backupTimeout?: number; // Timeout en millisecondes (défaut: 30 minutes)
   ssl?: boolean; // Si true, force l'utilisation de SSL (sslmode=require)
-  isLocalBbdump?: boolean; // True si créée par bbdump
 }
 
 export interface AppConfig {
