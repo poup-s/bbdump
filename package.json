@@ -1,6 +1,6 @@
 {
   "name": "bbdump",
-  "version": "1.8.3",
+  "version": "1.9.0",
   "description": "Cross-platform PostgreSQL backup manager with automated scheduling, encryption, and modern UI",
   "main": "dist/main/main.js",
   "scripts": {
