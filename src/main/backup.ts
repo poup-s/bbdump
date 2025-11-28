@@ -10,11 +10,21 @@ import * as Electron from 'electron';
 
 const execAsync = promisify(exec);
 
+interface PgDumpVersion {
+  path: string;
+  version: string;
+  majorVersion: string;
+  source: 'libpq' | 'postgresql' | 'system';
+}
+
 export class BackupManager {
   private backupDir: string;
   private pgDumpPath: string;
   private pgRestorePath: string;
   private mainWindow: Electron.BrowserWindow | null = null;
+  private pgDumpVersionsCache: Map<string, PgDumpVersion[]> = new Map(); // Cache par version majeure
+  private allPgDumpVersions: PgDumpVersion[] = []; // Toutes les versions trouvées
+  private versionsDetected: boolean = false;
 
   constructor() {
     this.backupDir = pathManager.backupsPath;
@@ -28,6 +38,11 @@ export class BackupManager {
     this.initializePaths().catch((error) => {
       logger.warn(`Failed to initialize PostgreSQL paths: ${error.message}`);
     });
+    
+    // Détecter toutes les versions disponibles au démarrage
+    this.detectAllPgDumpVersions().catch((error) => {
+      logger.warn(`Failed to detect all pg_dump versions: ${error.message}`);
+    });
   }
 
   private async initializePaths(): Promise<void> {
@@ -38,6 +53,207 @@ export class BackupManager {
       logger.info(`pg_restore found: ${this.pgRestorePath}`);
     } catch (error: any) {
       logger.warn(`Failed to initialize PostgreSQL paths: ${error.message}`);
+    }
+  }
+
+  /**
+   * Détecte toutes les versions de pg_dump disponibles sur le système
+   */
+  private async detectAllPgDumpVersions(): Promise<void> {
+    if (this.versionsDetected) {
+      return; // Déjà détecté
+    }
+
+    try {
+      logger.info('Detecting all available pg_dump versions...');
+      const versions: PgDumpVersion[] = [];
+      const os = process.platform;
+
+      if (os === 'darwin') {
+        // Sur macOS, chercher dans Homebrew
+        await this.detectHomebrewVersions(versions);
+      } else if (os === 'linux') {
+        // Sur Linux, chercher dans les chemins standards
+        await this.detectLinuxVersions(versions);
+      }
+
+      // Ajouter aussi la version système (dans PATH)
+      try {
+        const { stdout } = await execAsync('which pg_dump 2>/dev/null || echo ""');
+        if (stdout.trim()) {
+          const systemPath = stdout.trim();
+          const version = await this.getPgDumpVersion(systemPath);
+          if (version) {
+            versions.push({
+              path: systemPath,
+              version: version,
+              majorVersion: version.split('.')[0],
+              source: 'system'
+            });
+          }
+        }
+      } catch (error) {
+        // Ignore
+      }
+
+      // Organiser par version majeure
+      const versionsByMajor = new Map<string, PgDumpVersion[]>();
+      for (const v of versions) {
+        if (!versionsByMajor.has(v.majorVersion)) {
+          versionsByMajor.set(v.majorVersion, []);
+        }
+        versionsByMajor.get(v.majorVersion)!.push(v);
+      }
+
+      this.pgDumpVersionsCache = versionsByMajor;
+      this.allPgDumpVersions = versions;
+
+      logger.info(`Found ${versions.length} pg_dump version(s):`);
+      for (const v of versions) {
+        logger.info(`  - ${v.version} at ${v.path} (${v.source})`);
+      }
+      
+      this.versionsDetected = true;
+    } catch (error: any) {
+      logger.error(`Error detecting pg_dump versions: ${error.message}`);
+    }
+  }
+
+  /**
+   * Détecte les versions dans Homebrew (macOS)
+   */
+  private async detectHomebrewVersions(versions: PgDumpVersion[]): Promise<void> {
+    const homebrewPrefixes = ['/opt/homebrew', '/usr/local'];
+    
+    for (const prefix of homebrewPrefixes) {
+      // Chercher dans libpq (client)
+      const libpqPath = `${prefix}/Cellar/libpq`;
+      if (fs.existsSync(libpqPath)) {
+        try {
+          const libpqVersions = fs.readdirSync(libpqPath);
+          for (const libpqVersion of libpqVersions) {
+            const pgDumpPath = `${libpqPath}/${libpqVersion}/bin/pg_dump`;
+            if (fs.existsSync(pgDumpPath)) {
+              const version = await this.getPgDumpVersion(pgDumpPath);
+              if (version) {
+                versions.push({
+                  path: pgDumpPath,
+                  version: version,
+                  majorVersion: version.split('.')[0],
+                  source: 'libpq'
+                });
+              }
+            }
+          }
+        } catch (error) {
+          // Ignore
+        }
+      }
+
+      // Chercher dans postgresql@* (serveur complet)
+      const cellarPath = `${prefix}/Cellar`;
+      if (fs.existsSync(cellarPath)) {
+        try {
+          const dirs = fs.readdirSync(cellarPath).filter(dir => dir.startsWith('postgresql@'));
+          for (const dir of dirs) {
+            const postgresPath = `${cellarPath}/${dir}`;
+            if (fs.existsSync(postgresPath)) {
+              const subDirs = fs.readdirSync(postgresPath);
+              for (const subDir of subDirs) {
+                const pgDumpPath = `${postgresPath}/${subDir}/bin/pg_dump`;
+                if (fs.existsSync(pgDumpPath)) {
+                  const version = await this.getPgDumpVersion(pgDumpPath);
+                  if (version) {
+                    versions.push({
+                      path: pgDumpPath,
+                      version: version,
+                      majorVersion: version.split('.')[0],
+                      source: 'postgresql'
+                    });
+                  }
+                }
+              }
+            }
+          }
+        } catch (error) {
+          // Ignore
+        }
+      }
+
+      // Chercher aussi dans /opt (liens symboliques)
+      const optPath = `${prefix}/opt`;
+      if (fs.existsSync(optPath)) {
+        try {
+          const dirs = fs.readdirSync(optPath).filter(dir => dir.startsWith('postgresql@'));
+          for (const dir of dirs) {
+            const pgDumpPath = `${optPath}/${dir}/bin/pg_dump`;
+            if (fs.existsSync(pgDumpPath)) {
+              const version = await this.getPgDumpVersion(pgDumpPath);
+              if (version) {
+                // Vérifier si on ne l'a pas déjà ajouté
+                if (!versions.some(v => v.path === pgDumpPath)) {
+                  versions.push({
+                    path: pgDumpPath,
+                    version: version,
+                    majorVersion: version.split('.')[0],
+                    source: 'postgresql'
+                  });
+                }
+              }
+            }
+          }
+        } catch (error) {
+          // Ignore
+        }
+      }
+    }
+  }
+
+  /**
+   * Détecte les versions sur Linux
+   */
+  private async detectLinuxVersions(versions: PgDumpVersion[]): Promise<void> {
+    const possiblePaths = [
+      '/usr/lib/postgresql',
+      '/usr/local/lib/postgresql',
+      '/opt/postgresql'
+    ];
+
+    for (const basePath of possiblePaths) {
+      if (fs.existsSync(basePath)) {
+        try {
+          const dirs = fs.readdirSync(basePath);
+          for (const dir of dirs) {
+            const pgDumpPath = `${basePath}/${dir}/bin/pg_dump`;
+            if (fs.existsSync(pgDumpPath)) {
+              const version = await this.getPgDumpVersion(pgDumpPath);
+              if (version) {
+                versions.push({
+                  path: pgDumpPath,
+                  version: version,
+                  majorVersion: version.split('.')[0],
+                  source: 'postgresql'
+                });
+              }
+            }
+          }
+        } catch (error) {
+          // Ignore
+        }
+      }
+    }
+  }
+
+  /**
+   * Obtient la version d'un pg_dump en l'exécutant
+   */
+  private async getPgDumpVersion(pgDumpPath: string): Promise<string | null> {
+    try {
+      const { stdout } = await execAsync(`"${pgDumpPath}" --version 2>&1`);
+      const versionMatch = stdout.match(/(\d+\.\d+)/);
+      return versionMatch ? versionMatch[1] : null;
+    } catch (error) {
+      return null;
     }
   }
 
@@ -87,6 +303,103 @@ export class BackupManager {
     // Utiliser le module centralisé toolDetector
     const { findPostgresCommand: findCommand } = await import('./tools/toolDetector');
     return findCommand(command);
+  }
+
+  /**
+   * Détecte la version du serveur PostgreSQL et trouve le pg_dump correspondant
+   * Utilise le cache des versions détectées pour une recherche rapide
+   */
+  private async findCompatiblePgDump(db: DatabaseConfig): Promise<string> {
+    logger.info(`Finding compatible pg_dump for database: ${db.name}`, db.name);
+    
+    // S'assurer que les versions sont détectées
+    if (!this.versionsDetected) {
+      await this.detectAllPgDumpVersions();
+    }
+    
+    try {
+      // Détecter la version du serveur PostgreSQL
+      let serverVersion: string | null = null;
+      let serverMajorVersion: string | null = null;
+      
+      try {
+        const { Client } = await import('pg');
+        const client = new Client({
+          host: db.host,
+          port: db.port,
+          user: db.user,
+          password: db.password || '',
+          database: db.connectionString ? undefined : (db.name || 'postgres'),
+          connectionString: db.connectionString,
+          ssl: db.ssl,
+          connectionTimeoutMillis: 5000
+        });
+
+        await client.connect();
+        try {
+          const result = await client.query('SELECT version()');
+          const versionMatch = result.rows[0]?.version?.match(/PostgreSQL (\d+\.\d+)/);
+          if (versionMatch && versionMatch[1]) {
+            const detectedVersion = versionMatch[1];
+            serverVersion = detectedVersion;
+            serverMajorVersion = detectedVersion.split('.')[0];
+            logger.info(`Detected PostgreSQL server version: ${detectedVersion}`, db.name);
+          } else {
+            logger.warn(`Could not parse PostgreSQL version from: ${result.rows[0]?.version || 'unknown'}`, db.name);
+          }
+        } finally {
+          await client.end();
+        }
+      } catch (error: any) {
+        logger.warn(`Could not detect server version: ${error.message}`, db.name);
+      }
+
+      // Si on a détecté une version, utiliser le cache pour trouver le pg_dump compatible
+      if (serverMajorVersion && this.pgDumpVersionsCache.has(serverMajorVersion)) {
+        const compatibleVersions = this.pgDumpVersionsCache.get(serverMajorVersion)!;
+        
+        // Préférer les versions exactes ou les plus proches
+        // Trier par préférence : postgresql > libpq > system
+        const sortedVersions = compatibleVersions.sort((a, b) => {
+          const sourcePriority = { 'postgresql': 1, 'libpq': 2, 'system': 3 };
+          return (sourcePriority[a.source] || 99) - (sourcePriority[b.source] || 99);
+        });
+        
+        // Prendre la première version compatible (meilleure correspondance)
+        const bestMatch = sortedVersions[0];
+        logger.info(`Found compatible pg_dump ${bestMatch.version} for PostgreSQL ${serverVersion}: ${bestMatch.path} (${bestMatch.source})`, db.name);
+        return bestMatch.path;
+      }
+
+      // Si pas trouvé dans le cache, essayer une recherche dynamique (fallback)
+      if (serverMajorVersion) {
+        logger.warn(`No cached pg_dump found for PostgreSQL ${serverVersion}, performing dynamic search...`, db.name);
+        // Re-détecter les versions au cas où de nouvelles versions auraient été installées
+        await this.detectAllPgDumpVersions();
+        
+        if (this.pgDumpVersionsCache.has(serverMajorVersion)) {
+          const compatibleVersions = this.pgDumpVersionsCache.get(serverMajorVersion)!;
+          const bestMatch = compatibleVersions[0];
+          logger.info(`Found compatible pg_dump ${bestMatch.version} for PostgreSQL ${serverVersion}: ${bestMatch.path}`, db.name);
+          return bestMatch.path;
+        }
+        
+        logger.warn(`Could not find pg_dump for PostgreSQL ${serverVersion} (major: ${serverMajorVersion})`, db.name);
+        logger.warn(`Available versions: ${Array.from(this.pgDumpVersionsCache.keys()).join(', ') || 'none'}`, db.name);
+        logger.warn(`This may cause version mismatch errors. Please install pg_dump version ${serverMajorVersion}.x`, db.name);
+      } else {
+        logger.warn(`Server version not detected, using default pg_dump: ${this.pgDumpPath}`, db.name);
+        if (this.allPgDumpVersions.length > 0) {
+          logger.info(`Available pg_dump versions: ${this.allPgDumpVersions.map(v => v.version).join(', ')}`, db.name);
+        }
+      }
+    } catch (error: any) {
+      logger.error(`Error finding compatible pg_dump: ${error.message}`, db.name);
+    }
+
+    // Fallback: utiliser le pg_dump par défaut
+    logger.info(`Using default pg_dump: ${this.pgDumpPath}`, db.name);
+    return this.pgDumpPath;
   }
 
   private ensureBackupDir(): void {
@@ -546,6 +859,21 @@ export class BackupManager {
     const jobs = db.jobs ?? 1;
     const timeout = db.backupTimeout ?? 30 * 60 * 1000; // 30 minutes par défaut
 
+    // Trouver le pg_dump compatible avec la version du serveur
+    const compatiblePgDump = await this.findCompatiblePgDump(db);
+    
+    // Vérifier la version de pg_dump pour s'assurer qu'elle correspond
+    try {
+      const { stdout } = await execAsync(`"${compatiblePgDump}" --version`);
+      const versionMatch = stdout.match(/(\d+\.\d+)/);
+      if (versionMatch) {
+        const pgDumpVersion = versionMatch[1];
+        logger.info(`Using pg_dump version: ${pgDumpVersion}`, db.name);
+      }
+    } catch (error: any) {
+      logger.warn(`Could not verify pg_dump version: ${error.message}`, db.name);
+    }
+
     return new Promise((resolve) => {
       // Construire les arguments pg_dump
       const args = [
@@ -577,7 +905,7 @@ export class BackupManager {
         args.push('--jobs', jobs.toString());
       }
 
-      logger.info(`Command: ${this.pgDumpPath} ${args.join(' ')}`, db.name);
+      logger.info(`Command: ${compatiblePgDump} ${args.join(' ')}`, db.name);
 
       const env: NodeJS.ProcessEnv = {
         ...process.env
@@ -593,7 +921,7 @@ export class BackupManager {
         env.PGPASSWORD = db.password;
       }
 
-      const pgDump = spawn(this.pgDumpPath, args, { env });
+      const pgDump = spawn(compatiblePgDump, args, { env });
 
       let errorOutput = '';
       let isTimedOut = false;
@@ -861,7 +1189,10 @@ export class BackupManager {
       };
       const args = [
         '-v',
-        '-c', // Clean (drop) database objects before recreating
+        '--no-owner', // Ne pas restaurer les propriétaires (évite les erreurs de permissions)
+        '--no-acl', // Ne pas restaurer les ACLs (évite les erreurs de permissions)
+        '--no-tablespaces', // Ne pas restaurer les tablespaces (évite les tablespaces n'existent pas)
+        // Ne pas utiliser --exit-on-error car cela arrête la restauration dès la première erreur non critique
       ];
 
       // Si une connection string est fournie, l'utiliser
@@ -876,6 +1207,7 @@ export class BackupManager {
         args.push('-d', target.name);
       }
 
+      // Ajouter le fichier de backup à la fin
       args.push(actualBackupPath);
 
       logger.info(`Command: ${this.pgRestorePath} ${args.join(' ')}`, target.name);
@@ -924,11 +1256,42 @@ export class BackupManager {
         // Toujours nettoyer le fichier temporaire déchiffré
         cleanupTempFile();
 
-        // pg_restore peut retourner 1 avec des warnings mais réussir quand même
-        // On considère code 0 ou 1 comme succès si pas d'erreur critique
         const combinedOutput = stdoutOutput + errorOutput;
-
-        if (code === 0 || code === 1) {
+        
+        // Liste des erreurs non critiques à ignorer (spécifiques à certains providers comme Neon)
+        const nonCriticalErrorPatterns = [
+          /unrecognized configuration parameter/i,
+          /transaction_timeout/i,
+          /does not exist/i,
+          /already exists/i,
+          /permission denied/i,
+          /role.*does not exist/i
+        ];
+        
+        // Vérifier si l'erreur est critique
+        const hasCriticalError = errorOutput.includes('FATAL') || 
+                                 (errorOutput.includes('ERROR') && 
+                                  !nonCriticalErrorPatterns.some(pattern => pattern.test(errorOutput)));
+        
+        // Vérifier si des données ont été restaurées (indicateurs de succès)
+        const hasRestoreActivity = combinedOutput.includes('CREATE TABLE') || 
+                                   combinedOutput.includes('CREATE INDEX') ||
+                                   combinedOutput.includes('CREATE SEQUENCE') ||
+                                   combinedOutput.includes('CREATE FUNCTION') ||
+                                   combinedOutput.includes('processing data for table') ||
+                                   combinedOutput.includes('COPY ') ||
+                                   combinedOutput.includes('INSERT INTO') ||
+                                   combinedOutput.includes('ALTER TABLE');
+        
+        // Vérifier si pg_restore indique explicitement que les erreurs ont été ignorées
+        const errorsIgnored = combinedOutput.includes('errors ignored on restore');
+        
+        // pg_restore peut retourner 1 avec des warnings mais réussir quand même
+        // Code 0 = succès complet
+        // Code 1 = warnings mais peut être un succès si des données ont été restaurées OU si les erreurs ont été ignorées
+        // Code > 1 = erreur critique
+        if (code === 0) {
+          // Succès complet
           const successMsg = `Restore successful from ${backupFile} to ${target.name}`;
           logger.info(successMsg, target.name);
           resolve({
@@ -938,8 +1301,23 @@ export class BackupManager {
             message: successMsg,
             output: combinedOutput
           });
+        } else if (code === 1 && (hasRestoreActivity || errorsIgnored) && !hasCriticalError) {
+          // Code 1 avec activité de restauration OU erreurs ignorées = succès malgré les warnings
+          const successMsg = `Restore completed${errorsIgnored ? ' (some errors were ignored)' : ' with warnings'} from ${backupFile} to ${target.name}`;
+          logger.info(successMsg, target.name);
+          if (errorOutput && !hasCriticalError) {
+            logger.warn(`Non-critical warnings during restore (ignored): ${errorOutput.substring(0, 500)}`, target.name);
+          }
+          resolve({
+            success: true,
+            database: target.name,
+            timestamp,
+            message: successMsg,
+            output: combinedOutput
+          });
         } else {
-          const errorMsg = `pg_restore failed with code ${code}\n${errorOutput}`;
+          // Échec réel
+          const errorMsg = `pg_restore failed with code ${code}${hasRestoreActivity ? ' (partial restore)' : ''}\n${errorOutput}`;
           logger.error(errorMsg, target.name);
           resolve({
             success: false,

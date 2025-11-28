@@ -81,7 +81,13 @@
     "mac": {
       "category": "public.app-category.utilities",
       "target": "dmg",
-      "icon": "logo.png"
+      "icon": "logo.png",
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "entitlements": null,
+      "entitlementsInherit": null,
+      "type": "distribution"
     },
     "win": {
       "target": [

@@ -138,6 +138,7 @@ export const translations = {
             databaseRemovedFromList: 'Database "{name}" removed from list',
             disconnectError: 'Failed to remove database from list',
             hiddenDatabases: 'hidden',
+            dbAlreadyDeleted: 'Database "{name}" was already deleted from PostgreSQL. Removing from configuration.',
             cannotDeleteSystemDatabase: 'Cannot delete system database "{name}". System databases (postgres, template0, template1) cannot be deleted.'
         },
         createDatabase: {
@@ -758,6 +759,7 @@ export const translations = {
             databaseRemovedFromList: 'Base de données "{name}" retirée de la liste',
             disconnectError: 'Échec du retrait de la base de données de la liste',
             hiddenDatabases: 'masquée(s)',
+            dbAlreadyDeleted: 'La base de données "{name}" a déjà été supprimée de PostgreSQL. Retrait de la configuration.',
             cannotDeleteSystemDatabase: 'Impossible de supprimer la base système "{name}". Les bases système (postgres, template0, template1) ne peuvent pas être supprimées.'
         },
         createDatabase: {

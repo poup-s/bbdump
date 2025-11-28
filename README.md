@@ -91,6 +91,77 @@ npm run dist
 
 Les exécutables seront générés dans le dossier `release/`.
 
+### Installation sur macOS depuis le DMG
+
+⚠️ **Important** : Si macOS affiche un message indiquant que l'application est "endommagée" ou "ne peut pas être ouverte", c'est normal car l'application n'est pas signée avec un certificat Apple Developer. macOS bloque les applications non signées pour des raisons de sécurité.
+
+#### 📋 Guide d'installation étape par étape
+
+**Étape 1 : Télécharger et monter le DMG**
+- Téléchargez le fichier `.dmg` depuis les releases GitHub
+- Double-cliquez sur le fichier `.dmg` pour le monter
+- Une fenêtre Finder s'ouvre avec `bbdump.app`
+
+**Étape 2 : Retirer le flag de quarantaine (nécessaire)**
+
+macOS ajoute un attribut de "quarantaine" aux fichiers téléchargés. Il faut le retirer avant d'installer :
+
+1. **Ouvrez l'application Terminal** (Applications > Utilitaires > Terminal)
+2. **Copiez-collez cette commande** dans Terminal et appuyez sur Entrée :
+   ```bash
+   xattr -cr /Volumes/bbdump*/bbdump.app
+   ```
+   *(Remplacez `bbdump*` par le nom exact du volume si différent)*
+3. Vous devriez voir le curseur revenir sans erreur
+
+**Étape 3 : Installer l'application**
+
+**Option A : Glisser-déposer (méthode simple)**
+- Dans la fenêtre Finder du DMG, **glissez** `bbdump.app` vers le dossier **Applications** dans la barre latérale
+- Attendez que la copie se termine
+
+**Option B : Copie manuelle**
+- Ouvrez le dossier **Applications** dans une nouvelle fenêtre Finder
+- **Glissez** `bbdump.app` depuis le DMG vers le dossier Applications
+
+**Étape 4 : Retirer le flag de quarantaine de la copie installée**
+
+Dans Terminal, copiez-collez cette commande :
+```bash
+xattr -cr /Applications/bbdump.app
+```
+
+**Étape 5 : Lancer l'application**
+
+1. Ouvrez le dossier **Applications** dans Finder
+2. **Double-cliquez** sur `bbdump.app`
+3. Si macOS affiche encore un avertissement :
+   - Faites un **clic droit** sur `bbdump.app`
+   - Sélectionnez **Ouvrir**
+   - Cliquez sur **Ouvrir** dans la boîte de dialogue de confirmation
+   - macOS mémorisera votre choix pour les prochaines fois
+
+#### 🔧 Si macOS bloque toujours l'application
+
+Si après toutes ces étapes macOS refuse toujours d'ouvrir l'application :
+
+1. Ouvrez **Terminal**
+2. Copiez-collez cette commande (vous devrez entrer votre mot de passe) :
+   ```bash
+   sudo spctl --master-disable
+   ```
+3. Lancez l'application normalement
+4. **Important** : Réactivez Gatekeeper après l'installation pour la sécurité :
+   ```bash
+   sudo spctl --master-enable
+   ```
+
+#### 💡 Pourquoi ces étapes sont nécessaires ?
+
+macOS Gatekeeper protège votre Mac en bloquant les applications non signées. Comme bbdump n'est pas signé avec un certificat Apple Developer (coût de 99$/an), macOS l'identifie comme potentiellement dangereuse. Retirer le flag de quarantaine indique à macOS que vous faites confiance à cette application.
+
+**Note** : Pour une distribution publique, il est recommandé de signer l'application avec un certificat Apple Developer pour éviter ces étapes.
+
 ## 📂 Structure du projet
 
 ```

@@ -179,26 +179,37 @@ const deleteDatabase = (db: Database) => {
     message: confirmMessage,
     confirmText: t('modal.deleteButton'),
     type: 'danger',
-    onConfirm: async () => {
-      try {
-        // Si c'est une base locale, supprimer complètement de PostgreSQL
-        if (isLocal) {
-          const result = await ipcRenderer.invoke('drop-postgres-database', db.name, db.port, true);
-          if (!result.success) {
-            addToast(result.error || t('postgresConfig.dropError'), 'error');
-            return;
+      onConfirm: async () => {
+        try {
+          // Si c'est une base locale, essayer de supprimer complètement de PostgreSQL
+          if (isLocal) {
+            const result = await ipcRenderer.invoke('drop-postgres-database', db.name, db.port, true);
+            if (!result.success) {
+              // Si la base n'existe plus dans PostgreSQL, on continue quand même à la supprimer de la config
+              const isNotFoundError = result.error && (
+                result.error.includes('does not exist') || 
+                result.error.includes('n\'existe pas')
+              );
+              
+              if (isNotFoundError) {
+                // La base n'existe plus dans PostgreSQL, on peut juste la retirer de la config
+                addToast(t('databases.dbAlreadyDeleted', { name: db.name }), 'warning');
+              } else {
+                // Autre erreur, afficher l'erreur mais continuer quand même à retirer de la config
+                addToast(result.error || t('postgresConfig.dropError'), 'warning');
+              }
+            }
           }
+          
+          // Toujours retirer de la configuration de l'application, même si la suppression PostgreSQL a échoué
+          await ipcRenderer.invoke('remove-database', db.name);
+          const config = await ipcRenderer.invoke('get-config');
+          store.databases = config.databases;
+          addToast(isLocal ? t('toasts.dbDeleted') : t('toasts.connectionDeleted'), 'success');
+        } catch (error: any) {
+          addToast('Error deleting database: ' + error.message, 'error');
         }
-        
-        // Retirer de la configuration de l'application
-        await ipcRenderer.invoke('remove-database', db.name);
-        const config = await ipcRenderer.invoke('get-config');
-        store.databases = config.databases;
-        addToast(isLocal ? t('toasts.dbDeleted') : t('toasts.connectionDeleted'), 'success');
-      } catch (error: any) {
-        addToast('Error deleting database: ' + error.message, 'error');
       }
-    }
   });
 };
 

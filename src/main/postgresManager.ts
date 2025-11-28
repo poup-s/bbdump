@@ -31,6 +31,46 @@ function getOS(): 'macos' | 'linux' | 'windows' {
 }
 
 /**
+ * Trouve le chemin de Homebrew de manière robuste
+ */
+async function findBrewPath(): Promise<string | null> {
+  try {
+    // Essayer d'abord avec la détection robuste
+    const { detectHomebrew } = await import('./tools/toolDetector');
+    const homebrewCheck = await detectHomebrew();
+    if (homebrewCheck.installed && homebrewCheck.path) {
+      return homebrewCheck.path;
+    }
+    
+    // Fallback: essayer avec which
+    try {
+      const { stdout } = await execAsync('which brew 2>/dev/null || echo ""');
+      if (stdout.trim()) {
+        return stdout.trim();
+      }
+    } catch {
+      // Ignore
+    }
+    
+    // Dernier fallback: essayer les chemins standards
+    const possiblePaths = ['/opt/homebrew/bin/brew', '/usr/local/bin/brew'];
+    for (const path of possiblePaths) {
+      try {
+        await execAsync(`"${path}" --version`);
+        return path;
+      } catch {
+        // Continue
+      }
+    }
+    
+    return null;
+  } catch (error: any) {
+    logger.warn(`Error finding Homebrew path: ${error.message}`);
+    return null;
+  }
+}
+
+/**
  * Vérifie si PostgreSQL est installé
  */
 export async function checkPostgresInstalled(): Promise<{ installed: boolean; version?: string; path?: string; method?: 'brew' | 'system' | 'unknown'; hasServer?: boolean }> {
@@ -60,18 +100,21 @@ export async function checkPostgresInstalled(): Promise<{ installed: boolean; ve
 
     // Vérifier si PostgreSQL SERVER est installé via brew (pas seulement libpq)
     try {
-      const { stdout: brewList } = await execAsync('brew list 2>/dev/null | grep "^postgresql@" || echo ""');
-      if (brewList.trim()) {
-        method = 'brew';
-        hasServer = true;
-        logger.info(`PostgreSQL server found via Homebrew: ${brewList.trim()}`);
-      } else {
-        // Vérifier si seulement libpq est installé
-        const { stdout: libpqCheck } = await execAsync('brew list 2>/dev/null | grep "^libpq" || echo ""');
-        if (libpqCheck.trim()) {
+      const brewPath = await findBrewPath();
+      if (brewPath) {
+        const { stdout: brewList } = await execAsync(`"${brewPath}" list 2>/dev/null | grep "^postgresql@" || echo ""`);
+        if (brewList.trim()) {
           method = 'brew';
-          hasServer = false;
-          logger.warn(`Only libpq (client) found via Homebrew, not PostgreSQL server: ${libpqCheck.trim()}`);
+          hasServer = true;
+          logger.info(`PostgreSQL server found via Homebrew: ${brewList.trim()}`);
+        } else {
+          // Vérifier si seulement libpq est installé
+          const { stdout: libpqCheck } = await execAsync(`"${brewPath}" list 2>/dev/null | grep "^libpq" || echo ""`);
+          if (libpqCheck.trim()) {
+            method = 'brew';
+            hasServer = false;
+            logger.warn(`Only libpq (client) found via Homebrew, not PostgreSQL server: ${libpqCheck.trim()}`);
+          }
         }
       }
     } catch {
@@ -96,10 +139,13 @@ export async function checkPostgresInstalled(): Promise<{ installed: boolean; ve
   } catch {
     // Vérifier quand même si PostgreSQL est installé via brew mais pas dans le PATH
     try {
-      const { stdout: brewList } = await execAsync('brew list 2>/dev/null | grep "^postgresql@" || echo ""');
-      if (brewList.trim()) {
-        logger.info(`PostgreSQL server found via Homebrew (not in PATH): ${brewList.trim()}`);
-        return { installed: true, method: 'brew', hasServer: true };
+      const brewPath = await findBrewPath();
+      if (brewPath) {
+        const { stdout: brewList } = await execAsync(`"${brewPath}" list 2>/dev/null | grep "^postgresql@" || echo ""`);
+        if (brewList.trim()) {
+          logger.info(`PostgreSQL server found via Homebrew (not in PATH): ${brewList.trim()}`);
+          return { installed: true, method: 'brew', hasServer: true };
+        }
       }
     } catch {
       // Ignore
@@ -203,23 +249,28 @@ async function installPostgresMacOS(
   onProgress: (progress: InstallationProgress) => void
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Vérifier si Homebrew est installé
+    // Vérifier si Homebrew est installé en utilisant la détection robuste
     onProgress({ step: 'checking', message: 'Checking Homebrew installation...', progress: 10 });
-    try {
-      await execAsync('brew --version');
-    } catch {
+    
+    const brewPath = await findBrewPath();
+    
+    if (!brewPath) {
       return {
         success: false,
-        error: 'Homebrew is not installed. Please install Homebrew first: https://brew.sh'
+        error: 'Homebrew is not installed or not found in PATH. Please install Homebrew first: https://brew.sh'
       };
     }
+    
+    logger.info(`Homebrew found at: ${brewPath}`);
 
     // Installer PostgreSQL
     onProgress({ step: 'installing', message: 'Installing PostgreSQL via Homebrew...', progress: 30 });
-    logger.info('Installing PostgreSQL via Homebrew...');
+    logger.info(`Installing PostgreSQL via Homebrew (using: ${brewPath || 'brew'})...`);
     
     return new Promise((resolve) => {
-      const brewProcess = spawn('brew', ['install', 'postgresql@16'], {
+      // Utiliser le chemin complet de brew si trouvé, sinon utiliser 'brew' (sera résolu via PATH)
+      const brewCommand = brewPath || 'brew';
+      const brewProcess = spawn(brewCommand, ['install', 'postgresql@16'], {
         stdio: ['ignore', 'pipe', 'pipe']
       });
 
@@ -723,7 +774,12 @@ async function initPostgresDatabase(
  */
 async function findBrewPostgresService(): Promise<string | null> {
   try {
-    const { stdout } = await execAsync('brew services list');
+    const brewPath = await findBrewPath();
+    if (!brewPath) {
+      return null;
+    }
+    
+    const { stdout } = await execAsync(`"${brewPath}" services list`);
     const lines = stdout.split('\n');
     
     for (const line of lines) {
@@ -742,7 +798,12 @@ async function findBrewPostgresService(): Promise<string | null> {
   
   // Si aucun service n'est trouvé dans brew services, essayer de trouver via brew list
   try {
-    const { stdout: brewList } = await execAsync('brew list 2>/dev/null | grep postgresql || echo ""');
+    const brewPath = await findBrewPath();
+    if (!brewPath) {
+      return null;
+    }
+    
+    const { stdout: brewList } = await execAsync(`"${brewPath}" list 2>/dev/null | grep postgresql || echo ""`);
     if (brewList.trim()) {
       // Extraire le nom du package PostgreSQL installé
       const packages = brewList.trim().split('\n').filter(p => p.includes('postgresql'));
@@ -788,8 +849,13 @@ export async function startPostgreSQL(
         onProgress({ step: 'starting', message: `Starting PostgreSQL service (${brewService})...`, progress: 60 });
         
         try {
+          const brewPath = await findBrewPath();
+          if (!brewPath) {
+            throw new Error('Homebrew not found');
+          }
+          
           logger.info(`Starting PostgreSQL service: ${brewService}`);
-          await execAsync(`brew services start ${brewService}`);
+          await execAsync(`"${brewPath}" services start ${brewService}`);
           
           // Attendre et vérifier plusieurs fois (jusqu'à 10 secondes)
           for (let i = 0; i < 5; i++) {
@@ -826,22 +892,25 @@ export async function startPostgreSQL(
           'postgresql' // Version générique
         ];
         
-        for (const service of servicesToTry) {
-          try {
-            logger.info(`Trying to start service: ${service}`);
-            const { stdout, stderr } = await execAsync(`brew services start ${service} 2>&1`);
-            logger.info(`Service ${service} output: ${stdout}${stderr ? ` Error: ${stderr}` : ''}`);
-            
-            await new Promise(resolve => setTimeout(resolve, 3000));
-            
-            const running = await checkPostgresRunning(port);
-            if (running.running) {
-              logger.info(`PostgreSQL started successfully via brew services (${service})`);
-              return { success: true };
+        const brewPath = await findBrewPath();
+        if (brewPath) {
+          for (const service of servicesToTry) {
+            try {
+              logger.info(`Trying to start service: ${service}`);
+              const { stdout, stderr } = await execAsync(`"${brewPath}" services start ${service} 2>&1`);
+              logger.info(`Service ${service} output: ${stdout}${stderr ? ` Error: ${stderr}` : ''}`);
+              
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              
+              const running = await checkPostgresRunning(port);
+              if (running.running) {
+                logger.info(`PostgreSQL started successfully via brew services (${service})`);
+                return { success: true };
+              }
+            } catch (error: any) {
+              logger.info(`Service ${service} not available or failed: ${error.message}`);
+              continue;
             }
-          } catch (error: any) {
-            logger.info(`Service ${service} not available or failed: ${error.message}`);
-            continue;
           }
         }
       }

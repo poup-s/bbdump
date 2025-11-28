@@ -416,17 +416,32 @@ export async function testDatabaseConnection(
  */
 export async function getPostgresConfigInfo(port: number = 5432): Promise<PostgresConfigInfo> {
   try {
-    // Vérifier si PostgreSQL est installé
-    const installed = await checkPostgresInstalled();
-    if (!installed.installed) {
-      throw new Error('PostgreSQL is not installed');
-    }
+    // Essayer d'abord de se connecter directement à PostgreSQL
+    // Si on peut se connecter, PostgreSQL est clairement installé et fonctionne
+    let version: string | undefined;
+    let isRunning = false;
     
-    // Vérifier si PostgreSQL est en cours d'exécution
-    const running = await checkPostgresRunning(port);
-    if (!running.running) {
+    try {
+      const client = await createPostgresConnection(port);
+      try {
+        // Obtenir la version depuis PostgreSQL directement
+        const versionResult = await client.query('SELECT version()');
+        const versionMatch = versionResult.rows[0]?.version?.match(/PostgreSQL (\d+\.\d+)/);
+        version = versionMatch ? versionMatch[1] : undefined;
+        isRunning = true;
+      } finally {
+        await client.end();
+      }
+    } catch (connectionError: any) {
+      // Si la connexion échoue, vérifier si PostgreSQL est installé mais pas démarré
+      const installed = await checkPostgresInstalled();
+      if (!installed.installed) {
+        throw new Error('PostgreSQL is not installed');
+      }
+      
+      // PostgreSQL est installé mais pas démarré
       return {
-        version: installed.version || 'unknown',
+        version: installed.version || version || 'unknown',
         port: port,
         isRunning: false,
         databases: [],
@@ -434,6 +449,7 @@ export async function getPostgresConfigInfo(port: number = 5432): Promise<Postgr
       };
     }
     
+    // Si on arrive ici, PostgreSQL est en cours d'exécution
     // Obtenir les bases de données et connexions
     const [databases, connections] = await Promise.all([
       listPostgresDatabases(port).catch(() => []),
@@ -454,8 +470,14 @@ export async function getPostgresConfigInfo(port: number = 5432): Promise<Postgr
       // Ignore
     }
     
+    // Si on n'a pas de version depuis la connexion, essayer de la récupérer autrement
+    if (!version) {
+      const installed = await checkPostgresInstalled();
+      version = installed.version;
+    }
+    
     return {
-      version: installed.version || 'unknown',
+      version: version || 'unknown',
       port: port,
       dataDirectory,
       isRunning: true,
