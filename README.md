@@ -103,11 +103,11 @@ Les exécutables seront générés dans le dossier `release/`.
 2. **Ouvrez Terminal** (Applications > Utilitaires > Terminal)
 3. **Copiez-collez cette commande** :
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/poup-s/bbdump/main/install-mac.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/poup-s/bbdump/main/scripts/install-mac.sh | bash
    ```
-   Ou si vous avez déjà téléchargé le script :
+   Ou si vous avez déjà téléchargé le script depuis le dépôt :
    ```bash
-   bash install-mac.sh
+   bash scripts/install-mac.sh
    ```
 
 Le script va automatiquement :
