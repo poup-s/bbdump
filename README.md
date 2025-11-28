@@ -99,9 +99,13 @@ Les exécutables seront générés dans le dossier `release/`.
 
 **Méthode la plus simple** : Utilisez le script d'installation automatique :
 
-1. **Téléchargez et montez le DMG** (double-clic sur le fichier `.dmg`)
-2. **Ouvrez Terminal** (Applications > Utilitaires > Terminal)
-3. **Copiez-collez cette commande** :
+1. **Téléchargez le DMG** depuis le dossier [`app/`](app/) :
+   - Pour Apple Silicon (M1/M2/M3) : [`bbdump-1.9.0-arm64.dmg`](app/bbdump-1.9.0-arm64.dmg)
+   - Pour Intel Mac : [`bbdump-1.9.0.dmg`](app/bbdump-1.9.0.dmg)
+2. **Montez le DMG** (double-clic sur le fichier `.dmg`)
+   - Une fenêtre Finder devrait s'ouvrir avec `bbdump.app`
+3. **Ouvrez Terminal** (Applications > Utilitaires > Terminal)
+4. **Copiez-collez cette commande** :
    ```bash
    curl -fsSL https://raw.githubusercontent.com/poup-s/bbdump/main/scripts/install-mac.sh | bash
    ```
@@ -111,9 +115,18 @@ Les exécutables seront générés dans le dossier `release/`.
    ```
 
 Le script va automatiquement :
+- Détecter le volume DMG monté (même si le nom est différent)
 - Retirer le flag de quarantaine
 - Installer l'application dans `/Applications`
 - Configurer les permissions nécessaires
+
+**Si le script ne trouve pas le volume** :
+- Le script affichera la liste des volumes montés
+- Vous pouvez spécifier manuellement le volume :
+  ```bash
+  export DMG_VOLUME="/Volumes/nom-du-volume"
+  curl -fsSL https://raw.githubusercontent.com/poup-s/bbdump/main/scripts/install-mac.sh | bash
+  ```
 
 #### 📋 Installation manuelle étape par étape
 
