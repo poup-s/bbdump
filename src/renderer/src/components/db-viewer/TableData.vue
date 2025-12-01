@@ -6,6 +6,7 @@ import { useConfirm } from '../../composables/useConfirm';
 import { ipcRenderer } from '../../electron';
 import { Database } from '../../types';
 import AddRowModal from './AddRowModal.vue';
+import { useDebounceFn } from '@vueuse/core';
 
 const props = defineProps<{
   db: Database | null;
@@ -24,6 +25,9 @@ const page = ref(1);
 const pageSize = ref(50);
 const totalRows = ref(0);
 const primaryKey = ref<string | null>(null);
+const searchQuery = ref('');
+const sortBy = ref<string | null>(null);
+const sortOrder = ref<'asc' | 'desc'>('asc');
 
 // Edit mode state
 const editMode = ref(false);
@@ -64,7 +68,10 @@ const loadData = async () => {
       db: dbConfig,
       table: props.table,
       page: page.value,
-      pageSize: pageSize.value
+      pageSize: pageSize.value,
+      search: searchQuery.value,
+      sortBy: sortBy.value,
+      sortOrder: sortOrder.value
     });
     
     rows.value = result.rows;
@@ -75,6 +82,21 @@ const loadData = async () => {
   } finally {
     loading.value = false;
   }
+};
+
+const debouncedSearch = useDebounceFn(() => {
+  page.value = 1;
+  loadData();
+}, 300);
+
+const handleSort = (columnName: string) => {
+  if (sortBy.value === columnName) {
+    sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortBy.value = columnName;
+    sortOrder.value = 'asc';
+  }
+  loadData();
 };
 
 const deleteRow = (row: any) => {
@@ -242,6 +264,9 @@ const handleRowAdded = () => {
 
 watch(() => props.table, () => {
   page.value = 1;
+  searchQuery.value = '';
+  sortBy.value = null;
+  sortOrder.value = 'asc';
   editMode.value = false;
   editedCells.value.clear();
   loadData();
@@ -255,12 +280,12 @@ onMounted(() => {
 <template>
   <div class="h-full flex flex-col">
     <!-- Toolbar -->
-    <div class="mb-4 flex justify-between items-center">
-      <div class="flex items-center gap-3">
+    <div class="mb-4 flex justify-between items-center gap-4">
+      <div class="flex items-center gap-3 flex-1">
         <button
           @click="loadData"
           :disabled="loading || saving"
-          class="p-2 text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors disabled:opacity-50"
+          class="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
           :title="t('viewer.refresh')"
         >
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -268,14 +293,30 @@ onMounted(() => {
           </svg>
         </button>
         
-        <div class="h-6 w-px bg-gray-200 dark:bg-zinc-700"></div>
+        <div class="h-6 w-px bg-white/10"></div>
+
+        <!-- Search Input -->
+        <div class="relative max-w-xs w-full">
+          <input
+            v-model="searchQuery"
+            @input="debouncedSearch"
+            type="text"
+            class="w-full pl-9 pr-3 py-1.5 bg-surface/50 border border-white/10 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all placeholder-gray-500 text-foreground"
+            :placeholder="t('viewer.searchData')"
+          />
+          <svg class="w-4 h-4 text-gray-500 absolute left-3 top-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+        </div>
+        
+        <div class="h-6 w-px bg-white/10"></div>
         
         <!-- Edit Mode Toggle -->
         <button
           v-if="!editMode"
           @click="toggleEditMode"
           :disabled="!primaryKey"
-          class="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          class="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           :title="!primaryKey ? 'No primary key - editing disabled' : ''"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -302,7 +343,7 @@ onMounted(() => {
           <button
             @click="cancelEdit"
             :disabled="saving"
-            class="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
+            class="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors disabled:opacity-50"
           >
             {{ t('viewer.cancel') }}
           </button>
@@ -313,7 +354,7 @@ onMounted(() => {
           v-if="!editMode"
           @click="showAddModal = true"
           :disabled="!primaryKey"
-          class="px-3 py-1.5 text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          class="px-3 py-1.5 text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           :title="!primaryKey ? 'No primary key - adding disabled' : ''"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -321,20 +362,17 @@ onMounted(() => {
           </svg>
           {{ t('viewer.addRow') }}
         </button>
-        
-        <div class="h-6 w-px bg-gray-200 dark:bg-zinc-700"></div>
-        
-        <span class="text-sm text-gray-500 dark:text-gray-400 font-medium">
-          {{ t('viewer.showing', { start: (page - 1) * pageSize + 1, end: Math.min(page * pageSize, totalRows), total: totalRows }) }}
-        </span>
       </div>
       
       <!-- Pagination -->
       <div class="flex items-center gap-2">
+        <span class="text-sm text-gray-500 dark:text-gray-400 font-medium mr-2">
+          {{ t('viewer.showing', { start: (page - 1) * pageSize + 1, end: Math.min(page * pageSize, totalRows), total: totalRows }) }}
+        </span>
         <button
           @click="prevPage"
           :disabled="page === 1 || loading"
-          class="p-2 border border-gray-200 dark:border-zinc-700 rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-600 dark:text-gray-300 transition-colors"
+          class="p-2 border border-gray-200 dark:border-white/10 rounded-lg hover:bg-gray-50 dark:hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed text-gray-600 dark:text-gray-400 transition-colors"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
@@ -344,7 +382,7 @@ onMounted(() => {
         <button
           @click="nextPage"
           :disabled="page * pageSize >= totalRows || loading"
-          class="p-2 border border-gray-200 dark:border-zinc-700 rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed text-gray-600 dark:text-gray-300 transition-colors"
+          class="p-2 border border-gray-200 dark:border-white/10 rounded-lg hover:bg-gray-50 dark:hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed text-gray-600 dark:text-gray-400 transition-colors"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
@@ -354,8 +392,8 @@ onMounted(() => {
     </div>
 
     <!-- Table -->
-    <div class="flex-1 overflow-auto border border-gray-200 dark:border-zinc-700 rounded-xl relative bg-white dark:bg-zinc-900 shadow-inner">
-      <div v-if="loading" class="absolute inset-0 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm flex items-center justify-center z-10">
+    <div class="flex-1 overflow-auto border border-gray-200 dark:border-white/10 rounded-xl relative bg-white/50 dark:bg-surface/30 shadow-inner">
+      <div v-if="loading" class="absolute inset-0 bg-white/80 dark:bg-surface/80 backdrop-blur-sm flex items-center justify-center z-10">
         <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
       </div>
 
@@ -363,47 +401,51 @@ onMounted(() => {
         {{ error }}
       </div>
 
-      <table v-else class="min-w-full divide-y divide-gray-200 dark:divide-zinc-800">
-        <thead class="bg-gray-50 dark:bg-zinc-800/50 sticky top-0 z-0 backdrop-blur-md">
+      <table v-else class="min-w-full divide-y divide-gray-200 dark:divide-white/10">
+        <thead class="bg-gray-50/80 dark:bg-surface/50 sticky top-0 z-0 backdrop-blur-md">
           <tr>
             <th
               v-for="col in columns"
               :key="col.column_name"
-              class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap"
+              @click="handleSort(col.column_name)"
+              class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap cursor-pointer hover:text-gray-700 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5 transition-colors select-none"
             >
               <div class="flex items-center gap-1.5">
                 {{ col.column_name }}
                 <span v-if="col.is_primary" class="text-yellow-500 text-[10px]" title="Primary Key">🔑</span>
+                <span v-if="sortBy === col.column_name" class="text-blue-500 dark:text-blue-400">
+                  {{ sortOrder === 'asc' ? '↑' : '↓' }}
+                </span>
               </div>
               <div class="text-[10px] text-gray-400 dark:text-gray-500 font-normal lowercase mt-0.5">{{ col.data_type }}</div>
             </th>
-            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider sticky right-0 bg-gray-50 dark:bg-zinc-800 shadow-l backdrop-blur-md">
+            <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider sticky right-0 bg-gray-50/80 dark:bg-surface/50 shadow-l backdrop-blur-md">
               {{ t('viewer.actions') }}
             </th>
           </tr>
         </thead>
-        <tbody class="bg-white dark:bg-zinc-900 divide-y divide-gray-200 dark:divide-zinc-800">
-          <tr v-for="(row, i) in rows" :key="i" class="hover:bg-gray-50 dark:hover:bg-zinc-800/50 transition-colors">
+        <tbody class="bg-transparent divide-y divide-gray-200 dark:divide-white/5">
+          <tr v-for="(row, i) in rows" :key="i" class="hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
             <td
               v-for="col in columns"
               :key="col.column_name"
               :contenteditable="editMode && !col.is_primary"
               @blur="editMode ? handleCellEdit(i, col.column_name, $event) : null"
               :class="[
-                'px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-200 max-w-xs overflow-hidden text-ellipsis font-mono',
-                editMode && !col.is_primary ? 'cursor-text hover:ring-2 hover:ring-blue-500 hover:ring-inset rounded' : '',
-                editedCells.has(`${i}:${col.column_name}`) ? 'ring-2 ring-blue-500 ring-inset bg-blue-50 dark:bg-blue-900/20' : ''
+                'px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-300 max-w-xs overflow-hidden text-ellipsis font-mono',
+                editMode && !col.is_primary ? 'cursor-text hover:ring-2 hover:ring-blue-500 hover:ring-inset rounded bg-white dark:bg-white/5' : '',
+                editedCells.has(`${i}:${col.column_name}`) ? 'ring-2 ring-blue-500 ring-inset bg-blue-50 dark:bg-blue-500/10' : ''
               ]"
               :title="String(row[col.column_name])"
             >
-              <span v-if="row[col.column_name] === null" class="text-gray-400 italic text-xs">NULL</span>
+              <span v-if="row[col.column_name] === null" class="text-gray-400 dark:text-gray-600 italic text-xs">NULL</span>
               <template v-else>{{ String(row[col.column_name]) }}</template>
             </td>
-            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium sticky right-0 bg-white dark:bg-zinc-900 shadow-l group-hover:bg-gray-50 dark:group-hover:bg-zinc-800/50 transition-colors">
+            <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium sticky right-0 bg-white/50 dark:bg-surface/30 shadow-l group-hover:bg-gray-100/50 dark:group-hover:bg-surface/50 transition-colors">
               <button
                 v-if="!editMode"
                 @click="deleteRow(row)"
-                class="text-red-600 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 p-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                class="text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 p-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-white dark:bg-transparent border border-gray-200 dark:border-transparent shadow-sm dark:shadow-none"
                 :disabled="!primaryKey"
                 :title="!primaryKey ? 'No Primary Key' : t('viewer.delete')"
               >
@@ -417,12 +459,12 @@ onMounted(() => {
       </table>
       
       <div v-if="!loading && !error && rows.length === 0" class="flex flex-col items-center justify-center py-16 text-center">
-        <div class="w-12 h-12 bg-gray-100 dark:bg-zinc-800 rounded-full flex items-center justify-center mb-3">
-          <svg class="w-6 h-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div class="w-12 h-12 bg-surface/50 rounded-full flex items-center justify-center mb-3 border border-white/10">
+          <svg class="w-6 h-6 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
           </svg>
         </div>
-        <p class="text-gray-500 dark:text-gray-400">{{ t('viewer.noData') }}</p>
+        <p class="text-gray-500">{{ t('viewer.noData') }}</p>
       </div>
     </div>
     

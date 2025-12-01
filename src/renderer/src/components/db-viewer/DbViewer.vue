@@ -98,32 +98,32 @@ onMounted(() => {
         />
 
         <!-- Main Content -->
-        <div class="flex-1 flex items-center overflow-hidden bg-white dark:bg-zinc-900 relative">
+        <div class="flex-1 flex flex-col overflow-hidden bg-white dark:bg-surface/50 backdrop-blur-md relative">
           <!-- Loading State -->
-          <div v-if="loading" class="absolute inset-0 z-10 flex flex-col items-center justify-center p-8 text-center bg-white dark:bg-zinc-900">
+          <div v-if="loading" class="absolute inset-0 z-10 flex flex-col items-center justify-center p-8 text-center bg-white/80 dark:bg-surface/80 backdrop-blur-sm">
             <div class="mb-6">
               <div class="relative w-16 h-16 mx-auto">
-                <div class="absolute inset-0 border-4 border-blue-200 dark:border-blue-800 rounded-full"></div>
-                <div class="absolute inset-0 border-4 border-blue-600 dark:border-blue-400 border-t-transparent rounded-full animate-spin"></div>
+                <div class="absolute inset-0 border-4 border-blue-500/30 rounded-full"></div>
+                <div class="absolute inset-0 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
               </div>
             </div>
-            <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Loading database...</h3>
-            <p class="text-sm text-gray-500 dark:text-gray-400">Fetching tables and schema information</p>
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-foreground mb-2">Loading database...</h3>
+            <p class="text-sm text-gray-500">Fetching tables and schema information</p>
           </div>
           
           <!-- Error State -->
-          <div v-else-if="error" class="absolute inset-0 z-10 flex flex-col items-center justify-center p-8 text-center bg-white dark:bg-zinc-900">
-            <div class="mb-6 p-6 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl max-w-md">
-              <div class="w-12 h-12 bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 rounded-full flex items-center justify-center mx-auto mb-4">
+          <div v-else-if="error" class="absolute inset-0 z-10 flex flex-col items-center justify-center p-8 text-center bg-white/80 dark:bg-surface/80 backdrop-blur-sm">
+            <div class="mb-6 p-6 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-2xl max-w-md">
+              <div class="w-12 h-12 bg-red-100 dark:bg-red-500/20 text-red-600 dark:text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
                 <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
               </div>
-              <h3 class="text-lg font-bold text-red-900 dark:text-red-200 mb-2">Connection Failed</h3>
-              <p class="text-sm text-red-700 dark:text-red-300 mb-4">{{ error }}</p>
+              <h3 class="text-lg font-bold text-red-700 dark:text-red-500 mb-2">Connection Failed</h3>
+              <p class="text-sm text-red-600 dark:text-red-400 mb-4">{{ error }}</p>
               <button 
                 @click="loadTables" 
-                class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-red-500/20"
+                class="px-4 py-2 bg-red-600 dark:bg-red-500 hover:bg-red-700 dark:hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-red-500/20"
               >
                 Retry Connection
               </button>
@@ -133,7 +133,7 @@ onMounted(() => {
           <!-- Success State -->
           <div v-else-if="!loading && selectedTable" class="flex flex-col h-full">
             <!-- Tabs -->
-            <div class="border-b border-gray-200 dark:border-zinc-800 px-6 bg-gray-50/50 dark:bg-zinc-900/50 backdrop-blur-sm">
+            <div class="border-b border-gray-200 dark:border-white/10 px-6 bg-gray-50/50 dark:bg-surface/30 backdrop-blur-sm">
               <nav class="-mb-px flex space-x-6">
                 <button
                   v-for="tab in ['data', 'relations', 'schema']"
@@ -142,7 +142,7 @@ onMounted(() => {
                   :class="[
                     activeTab === tab
                       ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                      : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-zinc-700',
+                      : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600',
                     'whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors duration-200 capitalize'
                   ]"
                 >
@@ -152,12 +152,13 @@ onMounted(() => {
             </div>
 
             <!-- Content -->
-            <div class="flex-1 overflow-hidden p-6 bg-gray-50/30 dark:bg-black/20">
-              <div class="h-full bg-white dark:bg-zinc-800 rounded-xl border border-gray-200 dark:border-zinc-700 shadow-sm overflow-hidden">
+            <div class="flex-1 overflow-hidden p-6">
+              <div class="h-full bg-white dark:bg-surface/30 rounded-xl border border-gray-200 dark:border-white/10 shadow-inner overflow-hidden flex flex-col">
                 <TableData
                   v-if="activeTab === 'data'"
                   :db="store.viewerDb"
                   :table="selectedTable"
+                  class="flex-1 overflow-hidden"
                 />
                 <TableRelations
                   v-if="activeTab === 'relations'"
@@ -174,8 +175,8 @@ onMounted(() => {
           </div>
           
           <!-- Empty State -->
-          <div v-else-if="!loading && !error" class="flex-1 flex flex-col items-center justify-center text-gray-400 dark:text-gray-600">
-            <div class="w-16 h-16 bg-gray-100 dark:bg-zinc-800 rounded-full flex items-center justify-center mb-4">
+          <div v-else-if="!loading && !error" class="flex-1 flex flex-col items-center justify-center text-gray-500">
+            <div class="w-16 h-16 bg-gray-100 dark:bg-surface/50 rounded-full flex items-center justify-center mb-4 border border-gray-200 dark:border-white/10">
               <svg class="w-8 h-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 10h18M3 14h18m-9-4v8m-7-6h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2z" />
               </svg>

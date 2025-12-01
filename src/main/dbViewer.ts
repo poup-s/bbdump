@@ -193,7 +193,14 @@ export async function getTableRelations(params: ConnectionParams & { table: stri
 /**
  * Récupère les données d'une table avec LIMIT, OFFSET et recherche optionnelle
  */
-export async function getTableData(params: ConnectionParams & { table: string; limit: number; offset?: number; search?: string }) {
+export async function getTableData(params: ConnectionParams & {
+  table: string;
+  limit: number;
+  offset?: number;
+  search?: string;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+}) {
   const client = await createConnection(params);
 
   try {
@@ -202,6 +209,12 @@ export async function getTableData(params: ConnectionParams & { table: string; l
     let queryParams: any[];
     let countParams: any[];
     const offset = params.offset || 0;
+
+    // Validate sort order
+    const sortOrder = (params.sortOrder?.toLowerCase() === 'desc') ? 'DESC' : 'ASC';
+    // Default sort if not provided (or use primary key if available - handled by caller or default to first col)
+    // Here we'll just append ORDER BY if sortBy is provided
+    const orderByClause = params.sortBy ? format('ORDER BY %I %s', params.sortBy, sortOrder) : '';
 
     if (params.search && params.search.trim() !== '') {
       // Si recherche active, construire une requête avec WHERE sur toutes les colonnes
@@ -221,7 +234,7 @@ export async function getTableData(params: ConnectionParams & { table: string; l
       // Construire la clause WHERE pour la requête COUNT
       const whereConditionsCount = columns.map(col => format('%I::text ILIKE $1', col)).join(' OR ');
 
-      query = format('SELECT * FROM %I WHERE %s LIMIT $1 OFFSET $2', params.table, whereConditionsMain);
+      query = format('SELECT * FROM %I WHERE %s %s LIMIT $1 OFFSET $2', params.table, whereConditionsMain, orderByClause);
       queryParams = [params.limit, offset, `%${params.search}%`];
 
       // Compter le total de résultats pour la recherche
@@ -229,7 +242,7 @@ export async function getTableData(params: ConnectionParams & { table: string; l
       countParams = [`%${params.search}%`];
     } else {
       // Pas de recherche, juste SELECT avec LIMIT et OFFSET
-      query = format('SELECT * FROM %I LIMIT $1 OFFSET $2', params.table);
+      query = format('SELECT * FROM %I %s LIMIT $1 OFFSET $2', params.table, orderByClause);
       queryParams = [params.limit, offset];
 
       // Compter le total de lignes dans la table
