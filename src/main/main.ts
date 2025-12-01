@@ -88,6 +88,8 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    titleBarStyle: 'hidden',
+    trafficLightPosition: { x: 20, y: 20 },
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
