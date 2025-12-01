@@ -4,6 +4,7 @@ import { useI18n } from '../../composables/useI18n';
 import { useToast } from '../../composables/useToast';
 import { ipcRenderer } from '../../electron';
 import { Database } from '../../types';
+import { Combobox, ComboboxInput, ComboboxOptions, ComboboxOption, ComboboxButton } from '@headlessui/vue';
 
 const props = defineProps<{
   db: Database | null;
@@ -20,6 +21,9 @@ const columns = ref<any[]>([]);
 const formData = ref<Record<string, any>>({});
 const loading = ref(false);
 const submitting = ref(false);
+const fkOptions = ref<Record<string, any[]>>({});
+const fkLoading = ref<Record<string, boolean>>({});
+const fkSearch = ref<Record<string, string>>({});
 
 const loadSchema = async () => {
   if (!props.db || !props.table) return;
@@ -44,11 +48,23 @@ const loadSchema = async () => {
     
     // Initialize form data with defaults
     formData.value = {};
+    const now = new Date().toISOString(); // Current timestamp
+
     columns.value.forEach(col => {
-      if (col.column_default) {
+      // Default Timestamps
+      if (['created_at', 'updated_at', 'timestamp'].includes(col.column_name) && 
+          (col.data_type.includes('timestamp') || col.data_type.includes('date'))) {
+        // Format for datetime-local input: YYYY-MM-DDThh:mm
+        formData.value[col.column_name] = now.slice(0, 16);
+      } else if (col.column_default) {
         formData.value[col.column_name] = null; // Let DB handle defaults
       } else if (col.is_nullable === 'NO' && !col.is_primary) {
         formData.value[col.column_name] = '';
+      }
+
+      // Load FK options if applicable
+      if (col.is_foreign && col.foreign_key) {
+        loadFkOptions(col.column_name, col.foreign_key.table, col.foreign_key.column);
       }
     });
   } catch (err: any) {
@@ -56,6 +72,62 @@ const loadSchema = async () => {
     addToast('Error loading schema: ' + err.message, 'error');
   } finally {
     loading.value = false;
+  }
+};
+
+const loadFkOptions = async (columnName: string, foreignTable: string, foreignColumn: string, search = '') => {
+  if (!props.db) return;
+  
+  fkLoading.value[columnName] = true;
+  try {
+    const dbConfig = {
+      name: props.db.name,
+      host: props.db.host,
+      port: props.db.port,
+      user: props.db.user,
+      password: props.db.password,
+      connectionString: props.db.connectionString
+    };
+
+    // Fetch data from the referenced table
+    // We'll fetch the ID column and maybe a descriptive column if we can guess one
+    const result = await ipcRenderer.invoke('get-table-data', {
+      db: dbConfig,
+      table: foreignTable,
+      limit: 50,
+      search: search,
+      sortBy: foreignColumn, // Sort by the ID usually
+      sortOrder: 'asc'
+    });
+
+    fkOptions.value[columnName] = result.rows.map((row: any) => ({
+      value: row[foreignColumn],
+      label: formatFkLabel(row, foreignColumn)
+    }));
+  } catch (err) {
+    console.error(`Error loading FK options for ${columnName}:`, err);
+  } finally {
+    fkLoading.value[columnName] = false;
+  }
+};
+
+const formatFkLabel = (row: any, idColumn: string) => {
+  // Try to find a descriptive column (name, title, email, etc.)
+  const descriptiveKeys = ['name', 'title', 'email', 'username', 'label', 'description', 'slug'];
+  const foundKey = descriptiveKeys.find(key => Object.prototype.hasOwnProperty.call(row, key));
+  
+  if (foundKey) {
+    return `${row[foundKey]} (${row[idColumn]})`;
+  }
+  return String(row[idColumn]);
+};
+
+const handleFkSearch = (columnName: string, query: string) => {
+  fkSearch.value[columnName] = query;
+  const col = columns.value.find(c => c.column_name === columnName);
+  if (col && col.foreign_key) {
+    // Debounce this in a real app, but for now direct call is okay or use existing debounce
+    loadFkOptions(columnName, col.foreign_key.table, col.foreign_key.column, query);
   }
 };
 
@@ -126,6 +198,8 @@ watch(() => props.show, (newVal) => {
     // Reset form when closing
     columns.value = [];
     formData.value = {};
+    fkOptions.value = {};
+    fkSearch.value = {};
   }
 });
 </script>
@@ -163,8 +237,71 @@ watch(() => props.show, (newVal) => {
               <span class="text-xs text-gray-400 dark:text-gray-500 font-normal ml-2">{{ col.data_type }}</span>
             </label>
             
+            <!-- Foreign Key Selection -->
+            <div v-if="col.is_foreign" class="relative">
+               <Combobox v-model="formData[col.column_name]">
+                <div class="relative mt-1">
+                  <div class="relative w-full cursor-default overflow-hidden rounded-lg bg-white dark:bg-zinc-800 text-left border border-gray-200 dark:border-zinc-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-opacity-75 focus-visible:ring-offset-2 focus-visible:ring-offset-teal-300 sm:text-sm">
+                    <ComboboxInput
+                      class="w-full border-none py-2 pl-3 pr-10 text-sm leading-5 text-gray-900 dark:text-white bg-transparent focus:ring-0 outline-none"
+                      :displayValue="(val: any) => {
+                        const option = fkOptions[col.column_name]?.find(o => o.value === val);
+                        return option ? option.label : val;
+                      }"
+                      @change="handleFkSearch(col.column_name, $event.target.value)"
+                      :placeholder="`Select ${col.foreign_key?.table}...`"
+                    />
+                    <ComboboxButton class="absolute inset-y-0 right-0 flex items-center pr-2">
+                      <svg class="h-5 w-5 text-gray-400" viewBox="0 0 20 20" fill="none" stroke="currentColor">
+                        <path d="M7 7l3-3 3 3m0 6l-3 3-3-3" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                      </svg>
+                    </ComboboxButton>
+                  </div>
+                  <ComboboxOptions class="absolute mt-1 max-h-60 w-full overflow-auto rounded-md bg-white dark:bg-zinc-800 py-1 text-base shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none sm:text-sm z-50">
+                    <div v-if="fkLoading[col.column_name]" class="relative cursor-default select-none py-2 px-4 text-gray-700 dark:text-gray-300">
+                      Loading...
+                    </div>
+                    <div v-else-if="!fkOptions[col.column_name]?.length" class="relative cursor-default select-none py-2 px-4 text-gray-700 dark:text-gray-300">
+                      No results found.
+                    </div>
+                    <ComboboxOption
+                      v-for="option in fkOptions[col.column_name]"
+                      :key="option.value"
+                      :value="option.value"
+                      v-slot="{ selected, active }"
+                    >
+                      <li
+                        class="relative cursor-default select-none py-2 pl-10 pr-4"
+                        :class="{
+                          'bg-blue-600 text-white': active,
+                          'text-gray-900 dark:text-white': !active,
+                        }"
+                      >
+                        <span
+                          class="block truncate"
+                          :class="{ 'font-medium': selected, 'font-normal': !selected }"
+                        >
+                          {{ option.label }}
+                        </span>
+                        <span
+                          v-if="selected"
+                          class="absolute inset-y-0 left-0 flex items-center pl-3"
+                          :class="{ 'text-white': active, 'text-blue-600': !active }"
+                        >
+                          <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                          </svg>
+                        </span>
+                      </li>
+                    </ComboboxOption>
+                  </ComboboxOptions>
+                </div>
+              </Combobox>
+            </div>
+
+            <!-- Standard Input -->
             <input
-              v-if="getInputType(col.data_type) !== 'checkbox'"
+              v-else-if="getInputType(col.data_type) !== 'checkbox'"
               v-model="formData[col.column_name]"
               :type="getInputType(col.data_type)"
               :placeholder="col.column_default || `Enter ${col.column_name}`"

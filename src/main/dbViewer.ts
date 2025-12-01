@@ -128,28 +128,40 @@ export async function getTableSchema(params: ConnectionParams & { table: string 
     const pkResult = await client.query(pkQuery, [params.table]);
     const primaryKeys = pkResult.rows.map(row => row.column_name);
 
-    // Récupérer les clés étrangères
+    // Récupérer les clés étrangères avec les tables référencées
     const fkQuery = `
       SELECT
-        kcu.column_name
+        kcu.column_name,
+        ccu.table_name AS foreign_table_name,
+        ccu.column_name AS foreign_column_name
       FROM information_schema.table_constraints AS tc
       JOIN information_schema.key_column_usage AS kcu
         ON tc.constraint_name = kcu.constraint_name
         AND tc.table_schema = kcu.table_schema
+      JOIN information_schema.constraint_column_usage AS ccu
+        ON ccu.constraint_name = tc.constraint_name
+        AND ccu.table_schema = tc.table_schema
       WHERE tc.constraint_type = 'FOREIGN KEY'
       AND tc.table_name = $1
       AND tc.table_schema = 'public';
     `;
 
     const fkResult = await client.query(fkQuery, [params.table]);
-    const foreignKeys = fkResult.rows.map(row => row.column_name);
+    const foreignKeys = fkResult.rows; // Array of { column_name, foreign_table_name, foreign_column_name }
 
     // Ajouter les informations de clés aux colonnes
-    const columns = columnsResult.rows.map(col => ({
-      ...col,
-      is_primary: primaryKeys.includes(col.column_name),
-      is_foreign: foreignKeys.includes(col.column_name)
-    }));
+    const columns = columnsResult.rows.map(col => {
+      const fkInfo = foreignKeys.find(fk => fk.column_name === col.column_name);
+      return {
+        ...col,
+        is_primary: primaryKeys.includes(col.column_name),
+        is_foreign: !!fkInfo,
+        foreign_key: fkInfo ? {
+          table: fkInfo.foreign_table_name,
+          column: fkInfo.foreign_column_name
+        } : null
+      };
+    });
 
     return { columns };
   } finally {
