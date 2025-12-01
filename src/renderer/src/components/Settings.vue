@@ -2,7 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
-import { ipcRenderer } from '../electron';
+import { ipcRenderer, shell } from '../electron';
 import { store } from '../store';
 import PostgresConfig from './PostgresConfig.vue';
 
@@ -11,6 +11,29 @@ const { addToast } = useToast();
 
 const currentLang = ref('en');
 const defaultPath = ref('');
+const isCheckingUpdates = ref(false);
+
+const checkForUpdates = async () => {
+  isCheckingUpdates.value = true;
+  try {
+    const result = await ipcRenderer.invoke('check-for-updates');
+    if (result.updateAvailable) {
+      addToast(t('settings.updateAvailable', { version: result.version }), 'info');
+      // Open release page
+      if (result.url) {
+        shell.openExternal(result.url);
+      }
+    } else if (result.error) {
+      addToast(t('settings.updateError') + ': ' + result.error, 'error');
+    } else {
+      addToast(t('settings.noUpdateAvailable'), 'success');
+    }
+  } catch (error: any) {
+    addToast(t('settings.updateError') + ': ' + error.message, 'error');
+  } finally {
+    isCheckingUpdates.value = false;
+  }
+};
 
 const loadSettings = async () => {
   try {
@@ -112,6 +135,28 @@ onMounted(() => {
             class="px-4 py-2 bg-white dark:bg-zinc-800 border border-border rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-700 transition-colors text-sm font-medium"
           >
             {{ t('settings.replayOnboarding') || 'Replay Onboarding' }}
+          </button>
+        </div>
+      </div>
+      
+      <!-- Updates -->
+      <div class="bg-white dark:bg-zinc-900 rounded-2xl p-6 border border-border shadow-sm">
+        <h3 class="text-lg font-semibold mb-4">{{ t('settings.updates') }}</h3>
+        <div class="flex items-center justify-between p-4 bg-surface rounded-xl">
+          <div>
+            <div class="font-medium">{{ t('settings.checkForUpdates') }}</div>
+            <div class="text-sm text-gray-500 mt-1">{{ t('settings.checkForUpdatesDesc') }}</div>
+          </div>
+          <button
+            @click="checkForUpdates"
+            :disabled="isCheckingUpdates"
+            class="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            <svg v-if="isCheckingUpdates" class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            {{ isCheckingUpdates ? t('settings.checking') : t('settings.checkNow') }}
           </button>
         </div>
       </div>

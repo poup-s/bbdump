@@ -1,16 +1,13 @@
-// Simple wrapper to get electron modules in renderer with nodeIntegration: true
+// Wrapper to get electron modules from preload script
 
 let ipcRenderer: any;
 let shell: any;
 
-// @ts-ignore
-if (window.require) {
-    // @ts-ignore
-    const electron = window.require('electron');
-    ipcRenderer = electron.ipcRenderer;
-    shell = electron.shell;
+if (window.electron) {
+    ipcRenderer = window.electron.ipcRenderer;
+    shell = window.electron.shell;
 } else {
-    console.warn('Electron not detected. IPC calls will fail.');
+    console.warn('Electron preload not detected. IPC calls will fail.');
     ipcRenderer = {
         invoke: (...args: any[]) => {
             console.log('Mock invoke:', args);
@@ -18,10 +15,12 @@ if (window.require) {
         },
         on: (...args: any[]) => {
             console.log('Mock on:', args);
+            return () => { };
         },
         send: (...args: any[]) => {
             console.log('Mock send:', args);
         },
+        removeListener: () => { },
         removeAllListeners: () => { }
     };
     shell = {

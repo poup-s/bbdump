@@ -25,3 +25,4 @@ bash scripts/install-mac.sh
 - DMG monté (double-clic sur le fichier `.dmg`)
 - Terminal ouvert
 
+

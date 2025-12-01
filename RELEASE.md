@@ -49,3 +49,18 @@ Après publication, vérifier que :
 - Seuls les fichiers dans `release/` doivent être uploadés
 - Les fichiers `.blockmap` peuvent être uploadés aussi pour les mises à jour automatiques
 
+
+## Troubleshooting
+
+### "bbdump est endommagé et ne peut pas être ouvert"
+
+Si vous rencontrez cette erreur sur macOS, c'est parce que l'application n'est pas signée numériquement. Pour corriger cela :
+
+1. Ouvrez le Terminal
+2. Exécutez la commande suivante :
+   ```bash
+   xattr -cr /Applications/bbdump.app
+   ```
+   (Adaptez le chemin si l'application n'est pas dans le dossier Applications)
+3. Relancez l'application
+

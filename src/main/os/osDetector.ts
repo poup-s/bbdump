@@ -75,3 +75,4 @@ export function getOSType(): OSType {
   return detectOS().type;
 }
 
+

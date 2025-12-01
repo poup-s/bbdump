@@ -203,3 +203,4 @@ export async function installMissingPrerequisites(
 - ✅ **Cohérence** : Même logique de détection partout
 - ✅ **Extensibilité** : Prêt pour Linux/Windows sans refactoring majeur
 
+

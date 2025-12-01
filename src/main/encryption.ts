@@ -52,20 +52,20 @@ class EncryptionManager {
     try {
       // Générer un IV (Initialization Vector) aléatoire
       const iv = crypto.randomBytes(IV_LENGTH);
-      
+
       // Créer le cipher
       const cipher = crypto.createCipheriv(ALGORITHM, this.encryptionKey, iv);
-      
+
       // Chiffrer le texte
       let encrypted = cipher.update(text, 'utf8', 'hex');
       encrypted += cipher.final('hex');
-      
+
       // Récupérer l'auth tag
       const authTag = cipher.getAuthTag();
-      
+
       // Combiner IV + authTag + texte chiffré
       const result = iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
-      
+
       return result;
     } catch (error) {
       logger.error(`Erreur lors du chiffrement: ${error}`);
@@ -90,20 +90,20 @@ class EncryptionManager {
       const iv = Buffer.from(parts[0], 'hex');
       const authTag = Buffer.from(parts[1], 'hex');
       const encrypted = parts[2];
-      
+
       // Créer le decipher
       const decipher = crypto.createDecipheriv(ALGORITHM, this.encryptionKey, iv);
       decipher.setAuthTag(authTag);
-      
+
       // Déchiffrer
       let decrypted = decipher.update(encrypted, 'hex', 'utf8');
       decrypted += decipher.final('utf8');
-      
+
       return decrypted;
     } catch (error) {
       logger.error(`Erreur lors du déchiffrement: ${error}`);
-      // En cas d'erreur, retourner le texte original (compatibilité)
-      return encryptedText;
+      // Throw error to let the caller know decryption failed
+      throw new Error(`Decryption failed: ${error}`);
     }
   }
 

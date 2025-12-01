@@ -330,7 +330,15 @@ export const translations = {
             importError: '✗ Import error: {error}',
             copyPath: '📋 Path copied to clipboard!',
             copyError: '✗ Error during key export',
-            replayOnboarding: 'Replay Onboarding'
+            replayOnboarding: 'Replay Onboarding',
+            updates: 'Updates',
+            checkForUpdates: 'Check for updates',
+            checkForUpdatesDesc: 'Check if a new version of bbdump is available on GitHub',
+            checkNow: 'Check now',
+            checking: 'Checking...',
+            updateAvailable: '🎉 New version available: {version}',
+            noUpdateAvailable: '✓ You are using the latest version',
+            updateError: 'Error checking for updates'
         },
         postgresConfig: {
             title: 'PostgreSQL Configuration',
@@ -1005,7 +1013,15 @@ export const translations = {
             importError: '✗ Erreur lors de l\'import : {error}',
             copyPath: '📋 Chemin copié dans le presse-papier !',
             copyError: '✗ Erreur lors de l\'export de la clé',
-            replayOnboarding: 'Rejouer l\'introduction'
+            replayOnboarding: 'Rejouer l\'introduction',
+            updates: 'Mises à jour',
+            checkForUpdates: 'Vérifier les mises à jour',
+            checkForUpdatesDesc: 'Vérifier si une nouvelle version de bbdump est disponible sur GitHub',
+            checkNow: 'Vérifier',
+            checking: 'Vérification...',
+            updateAvailable: '🎉 Nouvelle version disponible : {version}',
+            noUpdateAvailable: '✓ Vous utilisez la dernière version',
+            updateError: 'Erreur lors de la vérification'
         },
         postgresConfig: {
             title: 'Configuration PostgreSQL',

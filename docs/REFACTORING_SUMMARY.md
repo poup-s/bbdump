@@ -103,3 +103,4 @@ src/main/
 - Les wildcards dans les chemins sont automatiquement résolus (ex: `/opt/homebrew/opt/postgresql@*/bin/pg_dump`)
 - L'initialisation des chemins dans `backup.ts` est asynchrone pour ne pas bloquer le constructeur
 
+

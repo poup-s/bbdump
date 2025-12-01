@@ -13,6 +13,8 @@ import * as dbViewer from './dbViewer';
 import * as databaseCreator from './databaseCreator';
 import { checkPostgresInstalled } from './postgresManager';
 import * as postgresConfig from './postgresConfig';
+import { checkForUpdates } from './updateChecker';
+import { sanitizeAppConfig, sanitizeDatabaseConfig } from './configHelper';
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 
@@ -33,17 +35,8 @@ function loadConfig(): AppConfig {
       // Migrer les mots de passe non chiffrés
       loadedConfig = encryptionManager.migrateConfig(loadedConfig);
 
-      // Ensure databases array exists
-      if (!loadedConfig.databases || !Array.isArray(loadedConfig.databases)) {
-        loadedConfig.databases = [];
-      }
-
-      // S'assurer que isLocalBbdump est préservé pour toutes les bases (même si undefined dans le JSON)
-      loadedConfig.databases = loadedConfig.databases.map((db: DatabaseConfig) => ({
-        ...db,
-        // Préserver isLocalBbdump s'il existe, sinon false
-        isLocalBbdump: db.isLocalBbdump === true ? true : false
-      }));
+      // Sanitize the entire configuration using the helper
+      loadedConfig = sanitizeAppConfig(loadedConfig);
 
       // Sauvegarder si migration effectuée pour s'assurer que isLocalBbdump est toujours présent
       const originalData = JSON.parse(data);
@@ -81,15 +74,8 @@ function loadConfig(): AppConfig {
 // Sauvegarder la configuration
 function saveConfig(newConfig: AppConfig): void {
   try {
-    // S'assurer que isLocalBbdump est explicitement préservé pour toutes les bases
-    const configToSave = {
-      ...newConfig,
-      databases: (newConfig.databases || []).map((db: DatabaseConfig) => ({
-        ...db,
-        // S'assurer que isLocalBbdump est toujours présent (même si undefined, on le met explicitement)
-        isLocalBbdump: db.isLocalBbdump === true ? true : false
-      }))
-    };
+    // Sanitize before saving to ensure consistency
+    const configToSave = sanitizeAppConfig(newConfig);
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(configToSave, null, 2), 'utf8');
     logger.info('Configuration saved');
   } catch (error) {
@@ -103,8 +89,10 @@ function createWindow(): void {
     width: 1200,
     height: 800,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, '../preload/index.js'),
+      sandbox: false // Required for some node modules if not fully sandboxed, but contextIsolation is the key
     }
   });
 
@@ -166,12 +154,14 @@ ipcMain.handle('get-config', async (): Promise<AppConfig> => {
   // S'assurer que toutes les propriétés sont préservées, notamment isLocalBbdump
   return {
     ...config,
-    databases: (config.databases || []).map(db => ({
-      ...db,
-      password: '••••••••', // Masquer les mots de passe dans l'UI
-      // S'assurer que isLocalBbdump est explicitement préservé
-      isLocalBbdump: db.isLocalBbdump ?? false
-    }))
+    databases: (config.databases || []).map(db => {
+      // Use helper to ensure consistency, then mask password
+      const sanitized = sanitizeDatabaseConfig(db);
+      return {
+        ...sanitized,
+        password: '••••••••' // Masquer les mots de passe dans l'UI
+      };
+    })
   };
 });
 
@@ -193,7 +183,7 @@ async function checkPrerequisites(): Promise<{
 }> {
   const { checkPrerequisites: checkPrereqs } = await import('./prerequisites/prerequisitesManager');
   const prerequisites = await checkPrereqs();
-  
+
   // Convertir le format pour compatibilité avec l'interface existante
   return {
     pgDump: {
@@ -282,10 +272,10 @@ ipcMain.handle('create-local-database', async (_, params: { name: string; displa
   try {
     // Récupérer les ports existants
     const existingPorts = config.databases.map(db => db.port);
-    
+
     // Créer la base de données avec callback de progression
     let lastProgress: { step: string; message: string; progress: number } | undefined;
-    
+
     const result = await databaseCreator.createLocalDatabase(
       params,
       existingPorts,
@@ -297,7 +287,7 @@ ipcMain.handle('create-local-database', async (_, params: { name: string; displa
         }
       }
     );
-    
+
     if (!result.success || !result.database) {
       return {
         success: false,
@@ -308,9 +298,9 @@ ipcMain.handle('create-local-database', async (_, params: { name: string; displa
 
     // Obtenir le chemin par défaut
     const defaultPath = config.defaultBackupPath || pathManager.backupsPath;
-    
+
     // Créer la configuration de la base de données
-    const newDb: DatabaseConfig = {
+    const newDb: DatabaseConfig = sanitizeDatabaseConfig({
       name: result.database.name,
       displayName: result.database.displayName,
       host: result.database.host,
@@ -324,7 +314,7 @@ ipcMain.handle('create-local-database', async (_, params: { name: string; displa
       enabled: false,
       ssl: false,
       isLocalBbdump: true
-    };
+    });
 
     // Ajouter la base à la configuration
     config.databases.push(newDb);
@@ -348,51 +338,59 @@ ipcMain.handle('create-local-database', async (_, params: { name: string; displa
   }
 });
 
-ipcMain.handle('duplicate-external-to-local', async (_, params: { 
-  sourceDb: DatabaseConfig; 
-  targetName: string; 
+ipcMain.handle('duplicate-external-to-local', async (_, params: {
+  sourceDb: DatabaseConfig;
+  targetName: string;
   targetPassword?: string;
   targetPort: number;
 }): Promise<{ success: boolean; error?: string; database?: DatabaseConfig }> => {
   const tempBackupPath = path.join(os.tmpdir(), `bbdump-duplicate-${Date.now()}.backup`);
-  
+
   // Envoyer la progression au renderer
   const sendProgress = (step: string, message: string, progress: number) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('duplicate-progress', { step, message, progress });
     }
   };
-  
+
   try {
     // 1. Faire un dump de la base externe
     sendProgress('backup', `Creating backup from external database "${params.sourceDb.name}"...`, 10);
     logger.info(`Creating backup from external database "${params.sourceDb.name}"`);
-    
+
     const sourceDbConfig: DatabaseConfig = {
-      ...params.sourceDb,
-      password: params.sourceDb.encrypted 
-        ? encryptionManager.decrypt(params.sourceDb.password) 
-        : params.sourceDb.password
+      ...params.sourceDb
     };
-    
+
+    try {
+      if (params.sourceDb.encrypted) {
+        sourceDbConfig.password = encryptionManager.decrypt(params.sourceDb.password);
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to decrypt source database password: ${error}`
+      };
+    }
+
     const backupResult = await backupManager.executeBackup(sourceDbConfig);
-    
+
     if (!backupResult.success) {
       return {
         success: false,
         error: `Failed to backup source database: ${backupResult.error || 'Unknown error'}`
       };
     }
-    
+
     // Mettre à jour le lastBackup de la base source
     const sourceDbInConfig = config.databases.find(d => d.name === params.sourceDb.name);
     if (sourceDbInConfig && backupResult.timestamp) {
       sourceDbInConfig.lastBackup = backupResult.timestamp;
       saveConfig(config);
     }
-    
+
     sendProgress('backup', 'Backup created successfully', 30);
-    
+
     // Trouver le fichier de backup créé - il devrait être le plus récent dans le dossier output
     const backupDir = sourceDbConfig.output || config.defaultBackupPath || pathManager.backupsPath;
     const backupFiles = fs.readdirSync(backupDir)
@@ -403,46 +401,47 @@ ipcMain.handle('duplicate-external-to-local', async (_, params: {
         time: fs.statSync(path.join(backupDir, f)).mtime.getTime()
       }))
       .sort((a, b) => b.time - a.time);
-    
+
     if (backupFiles.length === 0) {
       return {
         success: false,
         error: 'Backup file not found after backup operation'
       };
     }
-    
+
     const backupFile = backupFiles[0].path;
     logger.info(`Backup created successfully: ${backupFile}`);
-    
+
     // 2. Créer une nouvelle base locale
     sendProgress('creating', `Creating local database "${params.targetName}"...`, 40);
     logger.info(`Creating local database "${params.targetName}"`);
-    
+
     const existingPorts = config.databases.map(db => db.port);
     const createResult = await databaseCreator.createLocalDatabase(
       {
         name: params.targetName,
         displayName: params.targetName,
-        port: params.targetPort
+        port: params.targetPort,
+        password: params.targetPassword
       },
       existingPorts
     );
-    
+
     if (!createResult.success || !createResult.database) {
       return {
         success: false,
         error: `Failed to create local database: ${createResult.error || 'Unknown error'}`
       };
     }
-    
+
     sendProgress('creating', 'Local database created successfully', 60);
     logger.info(`Local database "${params.targetName}" created successfully`);
-    
+
     // 3. Restaurer le dump dans la nouvelle base locale
     sendProgress('restoring', `Restoring backup to local database "${params.targetName}"...`, 70);
     logger.info(`Restoring backup to local database "${params.targetName}"`);
-    
-    const targetDbConfig: DatabaseConfig = {
+
+    const targetDbConfig: DatabaseConfig = sanitizeDatabaseConfig({
       name: params.targetName,
       displayName: params.targetName,
       host: 'localhost',
@@ -456,8 +455,8 @@ ipcMain.handle('duplicate-external-to-local', async (_, params: {
       enabled: false,
       ssl: false,
       isLocalBbdump: true
-    };
-    
+    });
+
     // Utiliser seulement le nom du fichier pour restoreBackup (il ajoute le chemin du dossier backups)
     const backupFileName = path.basename(backupFile);
     const restoreResult = await backupManager.restoreBackup(backupFileName, {
@@ -468,7 +467,7 @@ ipcMain.handle('duplicate-external-to-local', async (_, params: {
       password: params.targetPassword || '',
       connectionString: undefined
     });
-    
+
     if (!restoreResult.success) {
       // Nettoyer la base créée en cas d'échec
       try {
@@ -487,33 +486,33 @@ ipcMain.handle('duplicate-external-to-local', async (_, params: {
       } catch (cleanupError: any) {
         logger.warn(`Failed to cleanup database after restore failure: ${cleanupError?.message || cleanupError}`);
       }
-      
+
       return {
         success: false,
         error: `Failed to restore backup: ${restoreResult.error || 'Unknown error'}`
       };
     }
-    
+
     sendProgress('restoring', 'Backup restored successfully', 90);
     logger.info(`Backup restored successfully to "${params.targetName}"`);
-    
+
     // 4. Ajouter la nouvelle base à la configuration
     sendProgress('complete', 'Adding database to configuration...', 95);
-    
+
     // Utiliser le timestamp du backup créé comme lastBackup pour la nouvelle base
     if (backupResult.timestamp) {
       targetDbConfig.lastBackup = backupResult.timestamp;
     }
-    
+
     config.databases.push(targetDbConfig);
     saveConfig(config);
-    
+
     // Planifier les backups
     cronManager.scheduleBackup(targetDbConfig);
-    
+
     sendProgress('complete', 'Database duplicated successfully', 100);
     logger.info(`Database "${params.targetName}" duplicated and added to configuration`);
-    
+
     return {
       success: true,
       database: targetDbConfig
@@ -534,8 +533,12 @@ ipcMain.handle('duplicate-external-to-local', async (_, params: {
 ipcMain.handle('add-database', async (_, db: DatabaseConfig): Promise<AppConfig> => {
   // Chiffrer le mot de passe uniquement si encrypted est true (par défaut true)
   const shouldEncrypt = db.encrypted !== false; // Par défaut, on chiffre
+
+  // Use helper to sanitize input first
+  const sanitizedDb = sanitizeDatabaseConfig(db);
+
   const dbToSave = {
-    ...db,
+    ...sanitizedDb,
     encrypted: shouldEncrypt,
     password: shouldEncrypt ? encryptionManager.encrypt(db.password) : db.password
   };
@@ -577,13 +580,17 @@ ipcMain.handle('update-database', async (_, name: string, updatedDb: DatabaseCon
       }
     }
 
-    // Préserver isLocalBbdump de la base existante
-    const dbToSave = {
+    // Préserver isLocalBbdump de la base existante via le helper
+    // Note: sanitizeDatabaseConfig will preserve isLocalBbdump if present in updatedDb,
+    // but we want to ensure we keep the existing value if updatedDb doesn't specify it correctly
+    // or if we want to enforce the existing state.
+
+    const dbToSave = sanitizeDatabaseConfig({
       ...updatedDb,
       encrypted: shouldEncrypt,
       password: passwordToSave,
-      isLocalBbdump: existingDb.isLocalBbdump === true ? true : false // Préserver explicitement
-    };
+      isLocalBbdump: existingDb.isLocalBbdump // Ensure we keep the existing flag
+    });
 
     config.databases[index] = dbToSave;
     saveConfig(config);
@@ -610,29 +617,40 @@ ipcMain.handle('toggle-schedule', async (_, name: string, enabled: boolean): Pro
   if (db) {
     // Préserver explicitement isLocalBbdump avant de modifier enabled
     const wasLocalBbdump = db.isLocalBbdump === true;
-    
+
     logger.info(`Toggling schedule for ${name}: enabled=${enabled}, isLocalBbdump=${wasLocalBbdump}`);
-    
+
     // Modifier seulement enabled
     db.enabled = enabled;
-    
-    // Réassigner explicitement isLocalBbdump pour s'assurer qu'il est préservé
-    db.isLocalBbdump = wasLocalBbdump;
-    
+
+    // Re-sanitize to be safe (though modifying enabled directly on the object reference in config.databases works too)
+    // But let's be explicit
+    const index = config.databases.findIndex(d => d.name === name);
+    if (index !== -1) {
+      config.databases[index] = sanitizeDatabaseConfig(db);
+    }
+
     // Vérifier avant sauvegarde
     logger.info(`Before save: db.isLocalBbdump=${db.isLocalBbdump}`);
-    
+
     saveConfig(config);
-    
+
     // Vérifier après sauvegarde
     const savedDb = config.databases.find(d => d.name === name);
     logger.info(`After save: savedDb.isLocalBbdump=${savedDb?.isLocalBbdump}`);
 
     // Replanifier toutes les tâches (le CronManager gérera l'état enabled)
-    const decryptedDatabases = config.databases.map(db => ({
-      ...db,
-      password: db.encrypted ? encryptionManager.decrypt(db.password) : db.password
-    }));
+    const decryptedDatabases = config.databases.map(db => {
+      try {
+        return {
+          ...db,
+          password: db.encrypted ? encryptionManager.decrypt(db.password) : db.password
+        };
+      } catch (error) {
+        logger.error(`Failed to decrypt password for ${db.name}: ${error}`);
+        return db;
+      }
+    });
     cronManager.rescheduleAll(decryptedDatabases);
 
     logger.info(`Scheduled tasks ${enabled ? 'enabled' : 'paused'} for ${name} (isLocalBbdump: ${db.isLocalBbdump})`, name);
@@ -654,10 +672,22 @@ ipcMain.handle('backup-now', async (_, name: string): Promise<BackupResult> => {
   }
 
   // Déchiffrer le mot de passe avant utilisation (uniquement si chiffré)
-  const decryptedDb = {
-    ...db,
-    password: db.encrypted ? encryptionManager.decrypt(db.password) : db.password
-  };
+  // Déchiffrer le mot de passe avant utilisation (uniquement si chiffré)
+  let decryptedDb = { ...db };
+  try {
+    if (db.encrypted) {
+      decryptedDb.password = encryptionManager.decrypt(db.password);
+    }
+  } catch (error) {
+    const msg = `Failed to decrypt password for ${db.name}: ${error}`;
+    logger.error(msg);
+    return {
+      success: false,
+      database: name,
+      timestamp: new Date().toISOString(),
+      error: msg
+    };
+  }
 
   // Émettre l'événement de démarrage du backup
   if (mainWindow) {
@@ -772,6 +802,10 @@ ipcMain.handle('check-encryption-key', async () => {
     exists: fs.existsSync(keyPath),
     path: keyPath
   };
+});
+
+ipcMain.handle('check-for-updates', async () => {
+  return await checkForUpdates();
 });
 
 ipcMain.handle('export-encryption-key', async () => {
@@ -894,13 +928,22 @@ const getDbConfig = (dbName: string) => {
   if (!config || !config.databases || !Array.isArray(config.databases)) {
     throw new Error(`Configuration not loaded or databases array is missing`);
   }
-  
+
   const db = config.databases.find(d => d.name === dbName);
   if (!db) {
     throw new Error(`Database "${dbName}" not found in configuration`);
   }
 
-  const password = db.encrypted ? encryptionManager.decrypt(db.password) : db.password;
+  let password = db.password;
+  try {
+    if (db.encrypted) {
+      password = encryptionManager.decrypt(db.password);
+    }
+  } catch (error) {
+    logger.error(`Failed to decrypt password for ${dbName}: ${error}`);
+    // We'll throw here because we can't connect without a valid password
+    throw new Error(`Failed to decrypt password for ${dbName}`);
+  }
 
   return {
     host: db.host,
@@ -918,7 +961,7 @@ ipcMain.handle('get-db-tables', async (_, params: { db: { name: string } }) => {
   try {
     // Recharger la config pour s'assurer qu'elle est à jour
     config = loadConfig();
-    
+
     logger.info(`Getting tables for database: ${params.db.name}`);
     const dbConfig = getDbConfig(params.db.name);
     return await dbViewer.getDatabaseTables(dbConfig);
@@ -1113,10 +1156,7 @@ ipcMain.handle('select-directory', async () => {
   return result.filePaths[0];
 });
 
-ipcMain.handle('check-for-updates', async () => {
-  // Mock update check for now
-  return { updateAvailable: false };
-});
+
 
 // Alias handlers for frontend compatibility
 ipcMain.handle('check-key-status', async () => {
@@ -1214,10 +1254,17 @@ app.on('ready', () => {
   config = loadConfig();
 
   // Déchiffrer les mots de passe pour le cron manager (uniquement si chiffré)
-  const decryptedDatabases = config.databases.map(db => ({
-    ...db,
-    password: db.encrypted ? encryptionManager.decrypt(db.password) : db.password
-  }));
+  const decryptedDatabases = config.databases.map(db => {
+    try {
+      return {
+        ...db,
+        password: db.encrypted ? encryptionManager.decrypt(db.password) : db.password
+      };
+    } catch (error) {
+      logger.error(`Failed to decrypt password for ${db.name} during startup: ${error}`);
+      return db;
+    }
+  });
 
   // Planifier les sauvegardes automatiques
   cronManager.rescheduleAll(decryptedDatabases);

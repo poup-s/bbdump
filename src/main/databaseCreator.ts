@@ -9,6 +9,7 @@ interface CreateDatabaseParams {
   name: string;
   displayName?: string;
   port: number;
+  password?: string;
 }
 
 interface CreateDatabaseResult {
@@ -24,73 +25,33 @@ interface CreateDatabaseResult {
   };
 }
 
-/**
- * Vérifie si un port est disponible
- */
-function isPortAvailable(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const server = net.createServer();
-    
-    server.listen(port, () => {
-      server.once('close', () => {
-        resolve(true);
-      });
-      server.close();
-    });
-    
-    server.on('error', () => {
-      resolve(false);
-    });
-  });
-}
 
-/**
- * Trouve un port disponible en vérifiant les ports utilisés par les bases existantes
- */
-async function findAvailablePort(startPort: number, existingPorts: number[]): Promise<number> {
-  // Vérifier d'abord si le port demandé est disponible
-  if (!existingPorts.includes(startPort)) {
-    const available = await isPortAvailable(startPort);
-    if (available) {
-      return startPort;
-    }
-  }
-
-  // Chercher un port disponible en incrémentant
-  for (let port = startPort; port <= 65535; port++) {
-    if (!existingPorts.includes(port)) {
-      const available = await isPortAvailable(port);
-      if (available) {
-        return port;
-      }
-    }
-  }
-
-  throw new Error('No available port found');
-}
 
 /**
  * Vérifie si PostgreSQL est accessible sur un port donné
  * Essaie plusieurs fois avec des délais pour laisser le temps à PostgreSQL de démarrer
  */
-async function checkPostgresServer(port: number): Promise<{ available: boolean; error?: string }> {
+async function checkPostgresServer(port: number, password?: string): Promise<{ available: boolean; error?: string }> {
   // Essayer plusieurs fois avec des délais (au cas où PostgreSQL est en train de démarrer)
   const maxAttempts = 5;
   const delayBetweenAttempts = 2000; // 2 secondes
   let lastError: string = '';
-  
+
   // Détecter l'utilisateur PostgreSQL à utiliser
   const os = await import('os');
   const currentUser = os.userInfo().username;
   const usersToTry = [currentUser, 'postgres', process.env.USER || '', process.env.USERNAME || ''];
-  
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // Essayer avec différents utilisateurs et mots de passe
     const passwords = ['', 'postgres', 'admin', 'password'];
+    if (password) {
+      passwords.unshift(password);
+    }
 
     for (const user of usersToTry) {
       if (!user) continue;
-      
+
       for (const password of passwords) {
         const testClient = new Client({
           host: 'localhost',
@@ -116,7 +77,7 @@ async function checkPostgresServer(port: number): Promise<{ available: boolean; 
         }
       }
     }
-    
+
     // Si ce n'est pas le dernier essai, attendre avant de réessayer
     if (attempt < maxAttempts) {
       logger.info(`PostgreSQL not accessible yet, waiting ${delayBetweenAttempts}ms before retry (attempt ${attempt}/${maxAttempts})...`);
@@ -125,8 +86,15 @@ async function checkPostgresServer(port: number): Promise<{ available: boolean; 
   }
 
   // Vérifier si le port est ouvert (pour donner un meilleur message d'erreur)
-  const portAvailable = await isPortAvailable(port);
-  
+  const portAvailable = await new Promise<boolean>((resolve) => {
+    const server = net.createServer();
+    server.listen(port, () => {
+      server.once('close', () => resolve(true));
+      server.close();
+    });
+    server.on('error', () => resolve(false));
+  });
+
   if (portAvailable) {
     return {
       available: false,
@@ -143,24 +111,24 @@ async function checkPostgresServer(port: number): Promise<{ available: boolean; 
 /**
  * Détecte l'utilisateur PostgreSQL à utiliser
  */
-async function detectPostgresUser(port: number): Promise<string> {
+async function detectPostgresUser(port: number, password?: string): Promise<string> {
   const os = await import('os');
   const currentUser = os.userInfo().username;
   const usersToTry = [currentUser, 'postgres', process.env.USER || '', process.env.USERNAME || ''];
-  
+
   for (const user of usersToTry) {
     if (!user) continue;
-    
+
     try {
       const testClient = new Client({
         host: 'localhost',
         port: port,
         user: user,
-        password: '',
+        password: password || '',
         database: 'postgres',
         connectionTimeoutMillis: 3000
       });
-      
+
       await testClient.connect();
       await testClient.end();
       logger.info(`Detected PostgreSQL user: ${user}`);
@@ -169,7 +137,7 @@ async function detectPostgresUser(port: number): Promise<string> {
       continue;
     }
   }
-  
+
   // Par défaut, utiliser l'utilisateur système
   logger.info(`Using system user as default: ${currentUser}`);
   return currentUser;
@@ -178,19 +146,22 @@ async function detectPostgresUser(port: number): Promise<string> {
 /**
  * Crée une connexion au serveur PostgreSQL (sans spécifier de base)
  */
-async function connectToPostgresServer(port: number): Promise<Client> {
+async function connectToPostgresServer(port: number, password?: string): Promise<Client> {
   // Vérifier d'abord si le serveur est accessible
-  const check = await checkPostgresServer(port);
+  const check = await checkPostgresServer(port, password);
   if (!check.available) {
     throw new Error(check.error || `Cannot connect to PostgreSQL server on port ${port}`);
   }
 
   // Détecter l'utilisateur PostgreSQL à utiliser
-  const postgresUser = await detectPostgresUser(port);
-  
+  const postgresUser = await detectPostgresUser(port, password);
+
   // Essayer de se connecter avec différents mots de passe
   const passwords = ['', 'postgres', 'admin', 'password'];
-  
+  if (password) {
+    passwords.unshift(password);
+  }
+
   for (const password of passwords) {
     const client = new Client({
       host: 'localhost',
@@ -267,7 +238,7 @@ export async function createLocalDatabase(
     // Vérifier d'abord si PostgreSQL est accessible sur le port demandé
     reportProgress('checking', `Checking PostgreSQL server accessibility on port ${params.port}...`, 50);
     logger.info(`Checking PostgreSQL server accessibility on port ${params.port}`);
-    const check = await checkPostgresServer(params.port);
+    const check = await checkPostgresServer(params.port, params.password);
     if (!check.available) {
       logger.error(`PostgreSQL server not accessible: ${check.error}`);
       return {
@@ -282,14 +253,14 @@ export async function createLocalDatabase(
     logger.info(`Connecting to PostgreSQL server on port ${serverPort} for database ${params.name}`);
 
     // Se connecter au serveur PostgreSQL
-    client = await connectToPostgresServer(serverPort);
+    client = await connectToPostgresServer(serverPort, params.password);
     logger.info(`Connected to PostgreSQL server on port ${serverPort}`);
 
     // Vérifier si la base existe déjà
     reportProgress('checking', `Checking if database "${params.name}" already exists...`, 60);
     const checkQuery = `SELECT 1 FROM pg_database WHERE datname = $1`;
     const checkResult = await client.query(checkQuery, [params.name]);
-    
+
     if (checkResult.rows.length > 0) {
       await client.end();
       return {
@@ -308,8 +279,8 @@ export async function createLocalDatabase(
     reportProgress('complete', `Database "${params.name}" created successfully`, 100);
 
     // Détecter l'utilisateur PostgreSQL utilisé pour cette connexion
-    const postgresUser = await detectPostgresUser(serverPort);
-    
+    const postgresUser = await detectPostgresUser(serverPort, params.password);
+
     // Retourner les informations de connexion avec l'utilisateur détecté
     return {
       success: true,
@@ -319,7 +290,7 @@ export async function createLocalDatabase(
         host: 'localhost',
         port: serverPort,
         user: postgresUser,
-        password: '' // Mot de passe vide par défaut pour les installations locales
+        password: params.password || '' // Utiliser le mot de passe fourni ou vide
       }
     };
   } catch (error: any) {

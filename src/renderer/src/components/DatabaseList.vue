@@ -67,7 +67,8 @@ const showDuplicateModal = ref(false);
 const duplicateSourceDb = ref<Database | null>(null);
 const duplicateForm = ref({
   name: '',
-  password: ''
+  password: '',
+  port: 5432
 });
 const isDuplicating = ref(false);
 const duplicateProgress = ref<{ step: string; message: string; progress: number } | null>(null);
@@ -76,7 +77,8 @@ const openDuplicateModal = (db: Database) => {
   duplicateSourceDb.value = db;
   duplicateForm.value = {
     name: `${db.name}_local`,
-    password: ''
+    password: '',
+    port: 5432
   };
   showDuplicateModal.value = true;
 };
@@ -128,7 +130,7 @@ const duplicateToLocal = async () => {
       sourceDb: sourceDbConfig,
       targetName: duplicateForm.value.name.trim(),
       targetPassword: duplicateForm.value.password || undefined,
-      targetPort: 5432
+      targetPort: duplicateForm.value.port
     });
     
     ipcRenderer.removeListener('duplicate-progress', progressHandler);
@@ -727,6 +729,18 @@ const disconnectDatabase = async (db: Database) => {
                   :placeholder="t('database.password')"
                 />
                 <p class="text-xs text-gray-500 mt-1">{{ t('databases.duplicatePasswordHint') }}</p>
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  {{ t('database.port') }}
+                </label>
+                <input
+                  v-model.number="duplicateForm.port"
+                  type="number"
+                  class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
+                  placeholder="5432"
+                />
               </div>
 
               <div class="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800">

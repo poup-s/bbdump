@@ -70,6 +70,17 @@ const loadAppInfo = async () => {
   }
 };
 
+const checkForUpdates = async () => {
+  try {
+    const result = await ipcRenderer.invoke('check-for-updates');
+    if (result.updateAvailable) {
+      addToast(t('settings.updateAvailable', { version: result.version }), 'info');
+    }
+  } catch (error) {
+    console.error('Error checking for updates:', error);
+  }
+};
+
 // IPC Listeners
 const setupListeners = () => {
   ipcRenderer.on('backup-complete', (_: any, result: any) => {
@@ -99,6 +110,7 @@ const setupListeners = () => {
 onMounted(() => {
   loadConfig();
   loadAppInfo();
+  checkForUpdates();
   setupListeners();
 });
 
