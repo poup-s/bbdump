@@ -1,4 +1,4 @@
-import { Client } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import format from 'pg-format';
 import { DatabaseConfig } from '../types/config';
 import { logger } from './logger';
@@ -14,17 +14,48 @@ interface ConnectionParams {
 }
 
 /**
- * Crée une connexion PostgreSQL client
+ * Gestionnaire de pool de connexions pour optimiser les performances
  */
-async function createConnection(params: ConnectionParams): Promise<Client> {
-  const client = new Client(
-    params.connectionString
+class ConnectionPoolManager {
+  private pools: Map<string, Pool> = new Map();
+  private lastAccess: Map<string, number> = new Map();
+  private CLEANUP_INTERVAL = 60 * 1000; // 1 minute
+  private POOL_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+
+  constructor() {
+    // Nettoyer les pools inutilisés périodiquement
+    setInterval(() => this.cleanup(), this.CLEANUP_INTERVAL);
+  }
+
+  private getKey(params: ConnectionParams): string {
+    if (params.connectionString) {
+      return params.connectionString;
+    }
+    return `${params.user}@${params.host}:${params.port}/${params.database}`;
+  }
+
+  /**
+   * Obtient un pool existant ou en crée un nouveau
+   */
+  public getPool(params: ConnectionParams): Pool {
+    const key = this.getKey(params);
+    this.lastAccess.set(key, Date.now());
+
+    if (this.pools.has(key)) {
+      return this.pools.get(key)!;
+    }
+
+    logger.info(`Creating new connection pool for ${params.database}`);
+
+    const poolConfig = params.connectionString
       ? {
         connectionString: params.connectionString,
-        // Retirer channel_binding s'il est présent
         ssl: params.ssl || params.connectionString.includes('sslmode=require')
           ? { rejectUnauthorized: false }
-          : undefined
+          : undefined,
+        max: 10, // Max clients in pool
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000,
       }
       : {
         host: params.host,
@@ -32,58 +63,103 @@ async function createConnection(params: ConnectionParams): Promise<Client> {
         user: params.user,
         password: params.password,
         database: params.database,
-        ssl: params.ssl ? { rejectUnauthorized: false } : undefined
-      }
-  );
+        ssl: params.ssl ? { rejectUnauthorized: false } : undefined,
+        max: 10,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000,
+      };
 
-  await client.connect();
-  return client;
+    const pool = new Pool(poolConfig);
+
+    pool.on('error', (err) => {
+      logger.error(`Unexpected error on idle client for ${key}: ${err.message}`);
+    });
+
+    this.pools.set(key, pool);
+    return pool;
+  }
+
+  /**
+   * Ferme les pools inactifs
+   */
+  private async cleanup() {
+    const now = Date.now();
+    for (const [key, lastAccess] of this.lastAccess.entries()) {
+      if (now - lastAccess > this.POOL_TIMEOUT) {
+        logger.info(`Closing idle connection pool for ${key}`);
+        const pool = this.pools.get(key);
+        if (pool) {
+          await pool.end();
+          this.pools.delete(key);
+          this.lastAccess.delete(key);
+        }
+      }
+    }
+  }
+
+  /**
+   * Ferme tous les pools (à l'arrêt de l'application)
+   */
+  public async closeAll() {
+    for (const pool of this.pools.values()) {
+      await pool.end();
+    }
+    this.pools.clear();
+    this.lastAccess.clear();
+  }
+}
+
+const poolManager = new ConnectionPoolManager();
+
+/**
+ * Obtient un client du pool
+ */
+async function getClient(params: ConnectionParams): Promise<PoolClient> {
+  const pool = poolManager.getPool(params);
+  return await pool.connect();
 }
 
 /**
- * Récupère la liste des tables d'une base de données
+ * Récupère la liste des tables d'une base de données de manière optimisée
  */
 export async function getDatabaseTables(params: ConnectionParams) {
-  const client = await createConnection(params);
+  const client = await getClient(params);
 
   try {
+    // Requête optimisée : on récupère les tables et une estimation du nombre de lignes
+    // via pg_class au lieu de faire un COUNT(*) sur chaque table (ce qui est très lent)
     const query = `
       SELECT
-        table_name as name,
-        (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = t.table_name AND table_schema = t.table_schema) as column_count
+        t.table_name as name,
+        (
+          SELECT COUNT(*) 
+          FROM information_schema.columns 
+          WHERE table_name = t.table_name 
+          AND table_schema = t.table_schema
+        ) as column_count,
+        COALESCE(pc.reltuples::bigint, 0) as row_count_estimate
       FROM information_schema.tables t
-      WHERE table_schema = 'public'
-      AND table_type = 'BASE TABLE'
-      ORDER BY table_name;
+      LEFT JOIN pg_class pc ON pc.relname = t.table_name AND pc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = t.table_schema)
+      WHERE t.table_schema = 'public'
+      AND t.table_type = 'BASE TABLE'
+      ORDER BY t.table_name;
     `;
 
     const result = await client.query(query);
-    logger.info(`getDatabaseTables query result rows: ${JSON.stringify(result.rows)}`); // DEBUG LOG
+    logger.info(`getDatabaseTables found ${result.rows.length} tables`);
 
-    // Pour chaque table, récupérer le nombre de lignes
-    const tablesWithCount = await Promise.all(
-      result.rows.map(async (table) => {
-        try {
-          const countQuery = format('SELECT COUNT(*) as count FROM %I', table.name);
-          const countResult = await client.query(countQuery);
-          return {
-            ...table,
-            row_count: parseInt(countResult.rows[0].count)
-          };
-        } catch (error) {
-          logger.error(`Error counting rows for table ${table.name}: ${error}`); // DEBUG LOG
-          return {
-            ...table,
-            row_count: null
-          };
-        }
-      })
-    );
+    // On map pour garder la compatibilité avec l'interface attendue
+    const tables = result.rows.map(row => ({
+      name: row.name,
+      column_count: parseInt(row.column_count),
+      // On utilise l'estimation comme row_count pour l'affichage instantané
+      // Pour une valeur exacte, il faudrait une requête séparée à la demande
+      row_count: parseInt(row.row_count_estimate)
+    }));
 
-    logger.info(`getDatabaseTables returning: ${JSON.stringify(tablesWithCount)}`); // DEBUG LOG
-    return { tables: tablesWithCount };
+    return { tables };
   } finally {
-    await client.end();
+    client.release();
   }
 }
 
@@ -91,7 +167,7 @@ export async function getDatabaseTables(params: ConnectionParams) {
  * Récupère le schéma d'une table
  */
 export async function getTableSchema(params: ConnectionParams & { table: string }) {
-  const client = await createConnection(params);
+  const client = await getClient(params);
 
   try {
     // Récupérer les colonnes
@@ -147,7 +223,7 @@ export async function getTableSchema(params: ConnectionParams & { table: string 
     `;
 
     const fkResult = await client.query(fkQuery, [params.table]);
-    const foreignKeys = fkResult.rows; // Array of { column_name, foreign_table_name, foreign_column_name }
+    const foreignKeys = fkResult.rows;
 
     // Ajouter les informations de clés aux colonnes
     const columns = columnsResult.rows.map(col => {
@@ -165,7 +241,7 @@ export async function getTableSchema(params: ConnectionParams & { table: string 
 
     return { columns };
   } finally {
-    await client.end();
+    client.release();
   }
 }
 
@@ -173,7 +249,7 @@ export async function getTableSchema(params: ConnectionParams & { table: string 
  * Récupère les relations (foreign keys) d'une table
  */
 export async function getTableRelations(params: ConnectionParams & { table: string }) {
-  const client = await createConnection(params);
+  const client = await getClient(params);
 
   try {
     const query = `
@@ -198,7 +274,7 @@ export async function getTableRelations(params: ConnectionParams & { table: stri
 
     return { relations: result.rows };
   } finally {
-    await client.end();
+    client.release();
   }
 }
 
@@ -213,7 +289,7 @@ export async function getTableData(params: ConnectionParams & {
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
 }) {
-  const client = await createConnection(params);
+  const client = await getClient(params);
 
   try {
     let query: string;
@@ -224,13 +300,11 @@ export async function getTableData(params: ConnectionParams & {
 
     // Validate sort order
     const sortOrder = (params.sortOrder?.toLowerCase() === 'desc') ? 'DESC' : 'ASC';
-    // Default sort if not provided (or use primary key if available - handled by caller or default to first col)
-    // Here we'll just append ORDER BY if sortBy is provided
+
     const orderByClause = params.sortBy ? format('ORDER BY %I %s', params.sortBy, sortOrder) : '';
 
     if (params.search && params.search.trim() !== '') {
       // Si recherche active, construire une requête avec WHERE sur toutes les colonnes
-      // D'abord, récupérer les colonnes de la table
       const columnsQuery = `
         SELECT column_name
         FROM information_schema.columns
@@ -241,28 +315,26 @@ export async function getTableData(params: ConnectionParams & {
       const columnsResult = await client.query(columnsQuery, [params.table]);
       const columns = columnsResult.rows.map(row => row.column_name);
 
-      // Construire la clause WHERE pour la requête principale
       const whereConditionsMain = columns.map(col => format('%I::text ILIKE $3', col)).join(' OR ');
-      // Construire la clause WHERE pour la requête COUNT
       const whereConditionsCount = columns.map(col => format('%I::text ILIKE $1', col)).join(' OR ');
 
       query = format('SELECT * FROM %I WHERE %s %s LIMIT $1 OFFSET $2', params.table, whereConditionsMain, orderByClause);
       queryParams = [params.limit, offset, `%${params.search}%`];
 
-      // Compter le total de résultats pour la recherche
       countQuery = format('SELECT COUNT(*) FROM %I WHERE %s', params.table, whereConditionsCount);
       countParams = [`%${params.search}%`];
     } else {
-      // Pas de recherche, juste SELECT avec LIMIT et OFFSET
       query = format('SELECT * FROM %I %s LIMIT $1 OFFSET $2', params.table, orderByClause);
       queryParams = [params.limit, offset];
 
-      // Compter le total de lignes dans la table
+      // Optimisation: Utiliser l'estimation pour le total si pas de recherche
+      // Mais pour la pagination précise, COUNT(*) est souvent préférable si la table n'est pas énorme.
+      // Pour l'instant, on garde COUNT(*) ici car getDatabaseTables a déjà traité le cas global.
+      // Sur une vue détaillée, l'utilisateur s'attend à un nombre de pages exact.
       countQuery = format('SELECT COUNT(*) FROM %I', params.table);
       countParams = [];
     }
 
-    // Exécuter les deux requêtes en parallèle
     const [result, countResult] = await Promise.all([
       client.query(query, queryParams),
       client.query(countQuery, countParams)
@@ -277,7 +349,7 @@ export async function getTableData(params: ConnectionParams & {
       hasMore: offset + result.rows.length < totalCount
     };
   } finally {
-    await client.end();
+    client.release();
   }
 }
 
@@ -295,10 +367,9 @@ export async function updateTableData(params: ConnectionParams & {
     newValue: any;
   }>;
 }) {
-  const client = await createConnection(params);
+  const client = await getClient(params);
 
   try {
-    // Commencer une transaction
     await client.query('BEGIN');
 
     const results = [];
@@ -308,13 +379,11 @@ export async function updateTableData(params: ConnectionParams & {
       let whereValues: any[] = [];
       let paramIndex = 1;
 
-      // Utiliser la clé primaire si disponible
       if (change.rowId && change.primaryKeyColumn) {
         whereClause = format('%I = $1', change.primaryKeyColumn);
         whereValues = [change.rowId];
         paramIndex++;
       }
-      // Sinon, utiliser toutes les colonnes de la ligne
       else if (change.rowData) {
         const whereConditions: string[] = [];
         for (const [key, value] of Object.entries(change.rowData)) {
@@ -338,8 +407,6 @@ export async function updateTableData(params: ConnectionParams & {
         continue;
       }
 
-      // Construire la requête UPDATE
-      // Note: paramIndex est déjà incrémenté pour la valeur à mettre à jour
       const updateQuery = format(
         'UPDATE %I SET %I = $%s WHERE %s',
         params.table,
@@ -366,7 +433,6 @@ export async function updateTableData(params: ConnectionParams & {
       }
     }
 
-    // Vérifier si tous les updates ont réussi
     const allSuccess = results.every(r => r.success);
 
     if (allSuccess) {
@@ -380,7 +446,7 @@ export async function updateTableData(params: ConnectionParams & {
     await client.query('ROLLBACK');
     throw new Error(`Failed to update table data: ${error.message}`);
   } finally {
-    await client.end();
+    client.release();
   }
 }
 
@@ -392,7 +458,7 @@ export async function deleteTableRow(params: ConnectionParams & {
   rowId: any;
   primaryKeyColumn: string;
 }) {
-  const client = await createConnection(params);
+  const client = await getClient(params);
 
   try {
     const query = format('DELETE FROM %I WHERE %I = $1', params.table, params.primaryKeyColumn);
@@ -405,7 +471,7 @@ export async function deleteTableRow(params: ConnectionParams & {
   } catch (error: any) {
     throw new Error(`Failed to delete row: ${error.message}`);
   } finally {
-    await client.end();
+    client.release();
   }
 }
 
@@ -416,7 +482,7 @@ export async function insertTableRow(params: ConnectionParams & {
   table: string;
   rowData: any;
 }) {
-  const client = await createConnection(params);
+  const client = await getClient(params);
 
   try {
     const columns = Object.keys(params.rowData);
@@ -439,7 +505,7 @@ export async function insertTableRow(params: ConnectionParams & {
   } catch (error: any) {
     throw new Error(`Failed to insert row: ${error.message}`);
   } finally {
-    await client.end();
+    client.release();
   }
 }
 
@@ -449,7 +515,7 @@ export async function insertTableRow(params: ConnectionParams & {
 export async function getEnumValues(params: ConnectionParams & {
   typeName: string;
 }) {
-  const client = await createConnection(params);
+  const client = await getClient(params);
 
   try {
     const query = `
@@ -466,6 +532,6 @@ export async function getEnumValues(params: ConnectionParams & {
       values: result.rows.map(row => row.value)
     };
   } finally {
-    await client.end();
+    client.release();
   }
 }

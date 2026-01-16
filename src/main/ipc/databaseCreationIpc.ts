@@ -1,0 +1,253 @@
+import { ipcMain, BrowserWindow } from 'electron';
+import * as databaseCreator from '../databaseCreator';
+import { backupManager } from '../backup';
+import { logger } from '../logger';
+import { getConfig, saveConfig } from './configIpc';
+import { sanitizeDatabaseConfig } from '../configHelper';
+import { encryptionManager } from '../encryption';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import { pathManager } from '../paths';
+import { DatabaseConfig } from '../../types/config';
+
+// Define explicit types for database objects to avoid TS errors
+interface DatabaseInfo {
+    name: string;
+    displayName?: string;
+    host: string;
+    port: number;
+    user: string;
+    password?: string;
+    encrypted?: boolean; // Add optional encrypted property
+}
+
+export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | null) {
+
+    ipcMain.handle('create-local-database', async (_, params: { name: string; displayName?: string; port: number; password?: string }) => {
+        try {
+            const config = getConfig();
+            const existingPorts = config.databases.map(db => db.port);
+
+            let lastProgress: { step: string; message: string; progress: number } | undefined;
+
+            const result = await databaseCreator.createLocalDatabase(
+                params,
+                existingPorts,
+                (progress: { step: string; message: string; progress: number }) => {
+                    lastProgress = progress;
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('create-database-progress', progress);
+                    }
+                }
+            );
+
+            if (!result.success || !result.database) {
+                return {
+                    success: false,
+                    error: result.error,
+                    progress: lastProgress
+                };
+            }
+
+            // Cast to DatabaseInfo to handle optional properties safely
+            const newDb = result.database as DatabaseInfo;
+            const shouldEncrypt = newDb.encrypted !== false;
+            const sanitizedDb = sanitizeDatabaseConfig(newDb as any); // Cast to any for helper compatibility if needed
+
+            const dbToSave = {
+                ...sanitizedDb,
+                encrypted: shouldEncrypt,
+                password: shouldEncrypt && newDb.password ? encryptionManager.encrypt(newDb.password) : (newDb.password || ''),
+                isLocalBbdump: true
+            };
+
+            config.databases.push(dbToSave);
+            saveConfig(config);
+
+            logger.info(`New local database added to config: ${newDb.name}`);
+
+            return {
+                success: true,
+                database: newDb
+            };
+
+        } catch (error: any) {
+            logger.error(`Error creating local database: ${error.message}`);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    });
+
+    ipcMain.handle('duplicate-external-to-local', async (_, params: {
+        sourceDb: any;
+        targetName: string;
+        targetPort: number;
+        targetPassword?: string;
+    }) => {
+        const tempBackupPath = path.join(os.tmpdir(), `bbdump-duplicate-${Date.now()}.backup`);
+
+        // Helper to send progress
+        const sendProgress = (step: string, message: string, progress: number) => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('duplicate-progress', { step, message, progress });
+            }
+        };
+
+        try {
+            const config = getConfig();
+            // Use provided sourceDb or look it up if only name is provided (flexibility)
+            // But frontend provides the whole object.
+
+            const sourceDbName = params.sourceDb.name;
+            const sourceDb = config.databases.find(d => d.name === sourceDbName);
+
+            if (!sourceDb) {
+                // If not found in config, maybe we can use the passed object directly?
+                // But we need the credentials which might be encrypted.
+                // If the frontend passed the full object including decrypted password (if it had it), we could use it.
+                // However, security-wise, we should look up in config.
+                throw new Error(`Source database not found: ${sourceDbName}`);
+            }
+
+            // 1. Decrypt password if needed
+            let sourcePassword = sourceDb.password;
+            if (sourceDb.encrypted) {
+                sourcePassword = encryptionManager.decrypt(sourceDb.password);
+            }
+
+            // 2. Backup Source
+            sendProgress('backup', `Creating backup from external database "${sourceDb.name}"...`, 10);
+            logger.info(`Creating backup from external database "${sourceDb.name}"`);
+
+            // Create a temporary config for the backup
+            const sourceDbConfig: DatabaseConfig = {
+                ...sourceDb,
+                password: sourcePassword // Decrypted for usage
+            };
+
+            const backupResult = await backupManager.executeBackup(sourceDbConfig);
+
+            if (!backupResult.success) {
+                return {
+                    success: false,
+                    error: `Failed to backup source database: ${backupResult.error || 'Unknown error'}`
+                };
+            }
+
+            // Update source DB last backup time
+            if (backupResult.timestamp) {
+                const sourceIndex = config.databases.findIndex(d => d.name === sourceDbName);
+                if (sourceIndex !== -1) {
+                    config.databases[sourceIndex].lastBackup = backupResult.timestamp;
+                    saveConfig(config);
+                }
+            }
+
+            sendProgress('backup', 'Backup created successfully', 30);
+
+            // Find the created backup file
+            const backupDir = sourceDbConfig.output || config.defaultBackupPath || pathManager.backupsPath;
+            const backupFiles = fs.readdirSync(backupDir)
+                .filter(f => f.startsWith(`${sourceDbConfig.name}_`) && f.endsWith('.backup'))
+                .map(f => ({
+                    name: f,
+                    path: path.join(backupDir, f),
+                    time: fs.statSync(path.join(backupDir, f)).mtime.getTime()
+                }))
+                .sort((a, b) => b.time - a.time);
+
+            if (backupFiles.length === 0) {
+                return {
+                    success: false,
+                    error: 'Backup file not found after backup operation'
+                };
+            }
+            const backupFile = backupFiles[0].path;
+
+            // 3. Create Local Database
+            sendProgress('creating', `Creating local database "${params.targetName}"...`, 40);
+            const existingPorts = config.databases.map(db => db.port);
+            const createResult = await databaseCreator.createLocalDatabase(
+                {
+                    name: params.targetName,
+                    displayName: params.targetName,
+                    port: params.targetPort,
+                    password: params.targetPassword
+                },
+                existingPorts
+            );
+
+            if (!createResult.success || !createResult.database) {
+                return {
+                    success: false,
+                    error: `Failed to create local database: ${createResult.error || 'Unknown error'}`
+                };
+            }
+
+            sendProgress('creating', 'Local database created successfully', 60);
+
+            // 4. Restore Backup to Local DB
+            sendProgress('restoring', `Restoring backup to local database "${params.targetName}"...`, 70);
+
+            const newDbUser = createResult.database.user;
+
+            // We pass just the filename to restoreBackup, it looks in backups folder
+            const backupFileName = path.basename(backupFile);
+
+            const restoreResult = await backupManager.restoreBackup(backupFileName, {
+                name: params.targetName,
+                host: 'localhost',
+                port: params.targetPort,
+                user: newDbUser,
+                password: '', // Local DBs usually trust local connections or use ident/peer
+                connectionString: undefined
+            });
+
+            if (!restoreResult.success) {
+                return {
+                    success: false,
+                    error: `Failed to restore backup: ${restoreResult.error || 'Unknown error'}`
+                };
+            }
+
+            sendProgress('restoring', 'Backup restored successfully', 90);
+
+            // 5. Add new DB to config
+            sendProgress('complete', 'Adding database to configuration...', 95);
+
+            const targetDbConfig: DatabaseConfig = sanitizeDatabaseConfig({
+                name: params.targetName,
+                displayName: params.targetName,
+                host: 'localhost',
+                port: params.targetPort,
+                user: newDbUser,
+                password: params.targetPassword || '',
+                encrypted: !!params.targetPassword,
+                encryptBackups: false,
+                cron: '0 0 * * *',
+                output: config.defaultBackupPath || pathManager.backupsPath,
+                enabled: false,
+                ssl: false,
+                isLocalBbdump: true
+            });
+
+            if (backupResult.timestamp) {
+                targetDbConfig.lastBackup = backupResult.timestamp;
+            }
+
+            config.databases.push(targetDbConfig);
+            saveConfig(config);
+
+            sendProgress('complete', 'Database duplicated successfully', 100);
+
+            return { success: true };
+
+        } catch (error: any) {
+            logger.error(`Error duplicating database: ${error.message}`);
+            return { success: false, error: error.message };
+        }
+    });
+}

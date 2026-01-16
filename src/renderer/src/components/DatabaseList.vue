@@ -73,10 +73,33 @@ const duplicateForm = ref({
 const isDuplicating = ref(false);
 const duplicateProgress = ref<{ step: string; message: string; progress: number } | null>(null);
 
-const openDuplicateModal = (db: Database) => {
+const openDuplicateModal = async (db: Database) => {
   duplicateSourceDb.value = db;
+  
+  // Générer un nom unique
+  let baseName = `${db.name}_local`;
+  let potentialName = baseName;
+  let counter = 1;
+  
+  // Combiner les bases de la config ET les bases physiques réelles
+  const existingNames = new Set(store.databases.map(d => d.name));
+  
+  try {
+    const result = await ipcRenderer.invoke('get-postgres-config');
+    if (result && result.databases) {
+      result.databases.forEach((d: any) => existingNames.add(d.name));
+    }
+  } catch (e) {
+    console.error('Failed to fetch physical databases for name check', e);
+  }
+  
+  while (existingNames.has(potentialName)) {
+    potentialName = `${baseName}_${counter}`;
+    counter++;
+  }
+
   duplicateForm.value = {
-    name: `${db.name}_local`,
+    name: potentialName,
     password: '',
     port: 5432
   };

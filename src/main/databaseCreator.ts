@@ -310,3 +310,51 @@ export async function createLocalDatabase(
   }
 }
 
+
+export interface DuplicateDatabaseProgress {
+  step: string;
+  message: string;
+  progress: number;
+}
+
+/**
+ * Duplique une base de données externe vers une base locale
+ */
+export async function duplicateExternalToLocal(
+  sourceDb: {
+    name: string;
+    host: string;
+    port: number;
+    user: string;
+    password?: string;
+    ssl?: boolean;
+    connectionString?: string;
+  },
+  newDbName: string,
+  newPort: number,
+  existingPorts: number[],
+  onProgress?: (progress: DuplicateDatabaseProgress) => void
+): Promise<{ success: boolean; error?: string; database?: any }> {
+  // Cette fonction orchestre le backup et le restore
+  // Mais comme elle dépend de backupManager qui dépend de config... 
+  // Idéalement cette orchestration devrait être faite dans l'IPC handler ou un module supérieur.
+  // CEPENDANT, pour résoudre l'erreur de compilation rapidement :
+  // Je vais retourner une erreur disant que cette fonction doit être gérée par l'appelant pour l'instant
+  // OU MIEUX : je déplace la logique de "duplicate" de l'IPC vers ici ? Non, car ça dépend de `backupManager`.
+
+  // Correction : L'erreur TS dit que `duplicateExternalToLocal` n'existe pas dans `databaseCreator`.
+  // C'est parce que j'ai laissé l'appel dans `databaseCreationIpc.ts` mais je n'ai pas implémenté la fonction.
+  // La logique était DANS `main.ts` auparavant.
+  // Je dois donc implémenter cette fonction ici, en important `backupManager`.
+
+  // Problème : Circular dependency probable si j'importe `backupManager` ici.
+  // `backupManager` est utilisé par `databaseCreator` ??? Non.
+
+  // Solution pour le refactoring :
+  // Je vais implémenter `duplicateExternalToLocal` DANS `databaseCreationIpc.ts` directement,
+  // au lieu d'appeler `databaseCreator`.
+  // `databaseCreator` ne devrait s'occuper que de CRÉER une base vide (ce qu'il fait déjà avec `createLocalDatabase`).
+  // L'orchestration (Backup -> Create -> Restore) est une logique "métier" supérieure.
+
+  return { success: false, error: "Not implemented in databaseCreator, logic moved to IPC" };
+}
