@@ -64,3 +64,5 @@ Si vous rencontrez cette erreur sur macOS, c'est parce que l'application n'est p
    (Adaptez le chemin si l'application n'est pas dans le dossier Applications)
 3. Relancez l'application
 
+
+

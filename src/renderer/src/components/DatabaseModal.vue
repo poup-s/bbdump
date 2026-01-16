@@ -80,11 +80,13 @@ watch(() => store.showDatabaseModal, async (show) => {
 
 const parseConnectionUrl = (url: string) => {
   try {
-    const regex = /postgresql:\/\/(?:([^:]+)(?::([^@]*))?@)?([^:/]+)(?::(\d+))?(?:\/([^?]+))?(?:\?(.*))?/;
+    // Updated regex to handle special characters in user, password, and database name
+    // Supports: underscores, hyphens, special chars in password, query params
+    const regex = /^postgres(?:ql)?:\/\/(?:([^:@]+)(?::([^@]+))?@)?([^:/]+)(?::(\d+))?(?:\/([^?]+))?(?:\?(.*))?$/;
     const match = url.match(regex);
 
     if (match) {
-      const [_, user, password, host, port, dbname] = match;
+      const [_, user, password, host, port, dbname, query] = match;
       
       if (user) form.value.user = user;
       if (password) form.value.password = password;
@@ -92,7 +94,6 @@ const parseConnectionUrl = (url: string) => {
       if (port) form.value.port = parseInt(port);
       if (dbname) form.value.name = dbname;
       
-      const query = match[6];
       if (query && query.includes('sslmode=require')) {
         form.value.ssl = true;
       } else {

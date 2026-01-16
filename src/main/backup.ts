@@ -1215,6 +1215,7 @@ export class BackupManager {
 
       if (db.ssl) {
         env.PGSSLMODE = 'require';
+        env.PGSSLCERT = 'disable'; // Accept self-signed certificates
       }
 
       // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string et si un mot de passe est fourni
@@ -1520,6 +1521,12 @@ export class BackupManager {
       const env: NodeJS.ProcessEnv = {
         ...process.env
       };
+
+      // Support SSL avec certificats auto-signés
+      if (target.connectionString && target.connectionString.includes('sslmode=require')) {
+        env.PGSSLMODE = 'require';
+        env.PGSSLCERT = 'disable'; // Accept self-signed certificates
+      }
 
       // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string et si un mot de passe est fourni
       if (!target.connectionString && target.password && target.password.trim().length > 0) {

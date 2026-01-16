@@ -204,3 +204,5 @@ export async function installMissingPrerequisites(
 - ✅ **Extensibilité** : Prêt pour Linux/Windows sans refactoring majeur
 
 
+
+
