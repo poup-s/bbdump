@@ -10,7 +10,26 @@ export const translations = {
             logs: 'Logs',
             tasks: 'Scheduled Tasks',
             settings: 'Settings',
-            about: 'About'
+            about: 'About',
+            dashboard: 'Dashboard'
+        },
+        dashboard: {
+            title: 'Dashboard',
+            subtitle: 'Overview of your database backups',
+            totalDatabases: 'Total Databases',
+            totalBackups: 'Total Backups',
+            storageUsed: 'Storage Used',
+            systemStatus: 'System Status',
+            recentBackups: 'Recent Backups',
+            local: 'Local',
+            external: 'External',
+            storedLocally: 'Stored locally',
+            totalBackupSize: 'Total backup size',
+            healthy: 'Healthy',
+            postgresConnected: 'PostgreSQL connected',
+            noRecentBackups: 'No recent backups found.',
+            success: 'Success',
+            encrypted: 'Encrypted'
         },
         common: {
             new: 'New',
@@ -639,7 +658,26 @@ export const translations = {
             logs: 'Journaux',
             tasks: 'Tâches planifiées',
             settings: 'Paramètres',
-            about: 'À propos'
+            about: 'À propos',
+            dashboard: 'Tableau de bord'
+        },
+        dashboard: {
+            title: 'Tableau de bord',
+            subtitle: 'Vue d\'ensemble de vos sauvegardes',
+            totalDatabases: 'Total Bases',
+            totalBackups: 'Total Sauvegardes',
+            storageUsed: 'Espace Utilisé',
+            systemStatus: 'État Système',
+            recentBackups: 'Sauvegardes Récentes',
+            local: 'Locales',
+            external: 'Externes',
+            storedLocally: 'Stockées localement',
+            totalBackupSize: 'Taille totale des backups',
+            healthy: 'Opérationnel',
+            postgresConnected: 'PostgreSQL connecté',
+            noRecentBackups: 'Aucune sauvegarde récente.',
+            success: 'Succès',
+            encrypted: 'Chiffré'
         },
         common: {
             new: 'Nouveau',

@@ -7,6 +7,7 @@ import { ipcRenderer } from './electron';
 import { useDark, useToggle } from '@vueuse/core';
 
 // Components
+import Dashboard from './components/Dashboard.vue';
 import DatabaseList from './components/DatabaseList.vue';
 import BackupList from './components/BackupList.vue';
 import LogViewer from './components/LogViewer.vue';
@@ -34,6 +35,7 @@ const activeTab = computed({
 });
 
 const tabs = [
+  { id: 'dashboard', label: 'nav.dashboard', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z' },
   { id: 'databases', label: 'nav.databases', icon: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4' },
   { id: 'backups', label: 'nav.backups', icon: 'M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4' },
   { id: 'logs', label: 'nav.logs', icon: 'M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
@@ -192,6 +194,7 @@ onUnmounted(() => {
           mode="out-in"
         >
           <component :is="{
+            dashboard: Dashboard,
             databases: DatabaseList,
             backups: BackupList,
             logs: LogViewer,
