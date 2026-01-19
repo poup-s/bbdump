@@ -27,6 +27,7 @@ export const store = reactive({
     restoreBackupFile: null as string | null,
     restoreTargetDb: null as Database | null,
     editingDatabase: null as Database | null,
+    modalTargetSection: null as 'schedule' | null,
     showBackupModal: false,
     backupProgress: null as {
         status: string;

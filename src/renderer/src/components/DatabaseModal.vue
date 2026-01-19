@@ -38,6 +38,19 @@ watch(() => store.showDatabaseModal, async (show) => {
     if (store.editingDatabase) {
       // Edit mode - skip wizard, show all fields
       form.value = { ...store.editingDatabase };
+      
+      // If output path is missing (e.g. auto-imported), fallback to global default
+      if (!form.value.output) {
+        try {
+          const defaultPath = await ipcRenderer.invoke('get-default-path');
+          if (defaultPath) {
+            form.value.output = defaultPath;
+          }
+        } catch (e) {
+          console.error('Failed to get default path during edit', e);
+        }
+      }
+
       if (form.value.connectionString) {
         connectionMode.value = 'url';
         connectionUrl.value = form.value.connectionString;
@@ -232,6 +245,23 @@ const close = () => {
 
 // Skip wizard in edit mode
 const showWizard = computed(() => !isEditing.value);
+
+const scrollToSection = async (section: 'schedule') => {
+  await new Promise(resolve => setTimeout(resolve, 100)); // Wait for modal transition
+  const container = document.querySelector('.overflow-y-auto.custom-scrollbar');
+  const target = document.querySelector(`[data-${section}-section]`);
+  if (container && target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Clear the target after scrolling
+    store.modalTargetSection = null;
+  }
+};
+
+watch(() => store.showDatabaseModal, (show) => {
+  if (show && store.modalTargetSection) {
+    scrollToSection(store.modalTargetSection);
+  }
+});
 </script>
 
 <template>
@@ -623,7 +653,7 @@ const showWizard = computed(() => !isEditing.value);
                       <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                         {{ t('database.cron') }}
                       </label>
-                      <CronEditor v-model="form.cron" />
+                      <CronEditor v-model="form.cron!" />
                     </div>
                   </div>
                 </Transition>
@@ -789,7 +819,7 @@ const showWizard = computed(() => !isEditing.value);
               </div>
 
               <!-- Backup Settings -->
-              <div class="space-y-4">
+              <div class="space-y-4" data-schedule-section>
                 <h4 class="text-sm font-medium text-gray-500 uppercase tracking-wider">{{ t('database.backupSettings') }}</h4>
                 
                 <div>
@@ -812,7 +842,7 @@ const showWizard = computed(() => !isEditing.value);
 
                 <div>
                   <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t('database.cron') }}</label>
-                  <CronEditor v-model="form.cron" />
+                  <CronEditor v-model="form.cron!" />
                 </div>
 
                 <div class="flex items-center gap-4">

@@ -29,6 +29,12 @@ const getLastBackupDate = (dateParam: string | Date | undefined) => {
     if (!dateParam) return t('databases.never');
     return new Date(dateParam).toLocaleDateString();
 };
+
+const handleStatusClick = () => {
+  store.editingDatabase = props.db;
+  store.modalTargetSection = 'schedule';
+  store.showDatabaseModal = true;
+};
 </script>
 
 <template>
@@ -42,14 +48,19 @@ const getLastBackupDate = (dateParam: string | Date | undefined) => {
     style="transform-style: preserve-3d;"
   >
     <!-- Status Indicator -->
-    <div class="absolute top-6 right-6 flex gap-2 items-center">
-      <div 
+    <div class="absolute top-6 right-6">
+      <button 
+        @click.stop="handleStatusClick"
         :class="[
-          'w-3 h-3 rounded-full shadow-sm',
-          db.enabled ? 'bg-green-500 shadow-green-500/50' : 'bg-gray-300 dark:bg-gray-600'
+          'text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border transition-all duration-300 hover:scale-105 active:scale-95',
+          db.enabled 
+            ? 'text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 hover:bg-emerald-100 dark:hover:bg-emerald-900/50' 
+            : 'text-gray-400 dark:text-gray-500 border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-800/50'
         ]"
         :title="getBackupStatusTitle(db.enabled)"
-      ></div>
+      >
+        {{ db.enabled ? t('databases.backupUp') : t('databases.backupDown') }}
+      </button>
     </div>
     
     <!-- Local Badge -->

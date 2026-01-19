@@ -107,15 +107,15 @@ onMounted(() => {
       <p class="text-gray-500 max-w-sm">{{ t('backup.noBackupsDesc') }}</p>
     </div>
 
-    <div v-else class="bg-white dark:bg-zinc-900 rounded-2xl border border-border overflow-hidden shadow-sm">
-      <div class="overflow-x-auto">
-        <table class="w-full text-left">
-          <thead class="bg-surface border-b border-border">
+    <div v-else class="flex-1 min-h-0 bg-white dark:bg-zinc-900 rounded-2xl border border-border overflow-hidden shadow-sm flex flex-col">
+      <div class="overflow-x-auto overflow-y-auto flex-1">
+        <table class="w-full text-left border-separate border-spacing-0">
+          <thead class="bg-surface sticky top-0 z-10 shadow-[0_1px_0_0_rgba(0,0,0,0.1)] dark:shadow-[0_1px_0_0_rgba(255,255,255,0.05)]">
             <tr>
-              <th class="px-6 py-4 font-medium text-sm text-gray-500">{{ t('backup.tableDatabase') }}</th>
-              <th class="px-6 py-4 font-medium text-sm text-gray-500">{{ t('backup.tableDate') }}</th>
-              <th class="px-6 py-4 font-medium text-sm text-gray-500">{{ t('backup.tableSize') }}</th>
-              <th class="px-6 py-4 font-medium text-sm text-gray-500 text-right">{{ t('backup.tableActions') }}</th>
+              <th class="px-6 py-4 font-medium text-sm text-gray-500 bg-surface whitespace-nowrap">{{ t('backup.tableDatabase') }}</th>
+              <th class="px-6 py-4 font-medium text-sm text-gray-500 bg-surface whitespace-nowrap">{{ t('backup.tableDate') }}</th>
+              <th class="px-6 py-4 font-medium text-sm text-gray-500 bg-surface whitespace-nowrap">{{ t('backup.tableSize') }}</th>
+              <th class="px-6 py-4 font-medium text-sm text-gray-500 bg-surface text-right whitespace-nowrap">{{ t('backup.tableActions') }}</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-border">
@@ -124,17 +124,17 @@ onMounted(() => {
               :key="backup.filename"
               class="group hover:bg-surface/50 transition-colors"
             >
-              <td class="px-6 py-4">
-                <div class="font-medium">{{ backup.database }}</div>
+              <td class="px-6 py-4 border-b border-border/50">
+                <div class="font-medium text-gray-900 dark:text-gray-100">{{ backup.database }}</div>
                 <div class="text-xs text-gray-500 font-mono mt-0.5">{{ backup.filename }}</div>
               </td>
-              <td class="px-6 py-4 text-sm text-gray-500">
+              <td class="px-6 py-4 text-sm text-gray-500 border-b border-border/50">
                 {{ new Date(backup.created).toLocaleString() }}
               </td>
-              <td class="px-6 py-4 text-sm font-mono text-gray-500">
+              <td class="px-6 py-4 text-sm font-mono text-gray-500 border-b border-border/50">
                 {{ formatSize(backup.size) }}
               </td>
-              <td class="px-6 py-4 text-right">
+              <td class="px-6 py-4 text-right border-b border-border/50">
                 <div class="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
                     @click="restoreBackup(backup)"

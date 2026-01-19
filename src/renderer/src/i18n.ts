@@ -163,7 +163,13 @@ export const translations = {
             disconnectError: 'Failed to remove database from list',
             hiddenDatabases: 'hidden',
             dbAlreadyDeleted: 'Database "{name}" was already deleted from PostgreSQL. Removing from configuration.',
-            cannotDeleteSystemDatabase: 'Cannot delete system database "{name}". System databases (postgres, template0, template1) cannot be deleted.'
+            cannotDeleteSystemDatabase: 'Cannot delete system database "{name}". System databases (postgres, template0, template1) cannot be deleted.',
+            removeFromList: 'Hide from list',
+            removeFromListConfirm: 'Are you sure you want to hide database "{name}" from your list? The database will remain in PostgreSQL but will no longer be managed by bbdump.',
+            removeFromListSuccess: 'Database "{name}" hidden',
+            removeFromListError: 'Failed to hide database from list',
+            backupUp: 'backup up',
+            backupDown: 'backup down'
         },
         createDatabase: {
             nameHint: 'Only letters, numbers, and underscores. Must start with a letter.',
@@ -817,7 +823,13 @@ export const translations = {
             disconnectError: 'Échec du retrait de la base de données de la liste',
             hiddenDatabases: 'masquée(s)',
             dbAlreadyDeleted: 'La base de données "{name}" a déjà été supprimée de PostgreSQL. Retrait de la configuration.',
-            cannotDeleteSystemDatabase: 'Impossible de supprimer la base système "{name}". Les bases système (postgres, template0, template1) ne peuvent pas être supprimées.'
+            cannotDeleteSystemDatabase: 'Impossible de supprimer la base système "{name}". Les bases système (postgres, template0, template1) ne peuvent pas être supprimées.',
+            removeFromList: 'Masquer de la liste des bases de données',
+            removeFromListConfirm: 'Êtes-vous sûr de vouloir masquer la base de données "{name}" de votre liste ? La base restera dans PostgreSQL mais ne sera plus gérée par bbdump.',
+            removeFromListSuccess: 'Base de données "{name}" masquée',
+            removeFromListError: 'Échec du masquage de la base de données',
+            backupUp: 'backup up',
+            backupDown: 'backup down'
         },
         createDatabase: {
             nameHint: 'Uniquement des lettres, chiffres et underscores. Doit commencer par une lettre.',
