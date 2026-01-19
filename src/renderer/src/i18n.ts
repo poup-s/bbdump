@@ -142,6 +142,7 @@ export const translations = {
             tableDatabase: 'Database',
             tableHost: 'Host / Connection',
             tableSchedule: 'Schedule',
+            scrollToExternal: 'Go to External Connections',
             tableEncryption: 'Encryption',
             tableBackup: 'Backup',
             tableActions: 'Actions',
@@ -435,8 +436,8 @@ export const translations = {
             license: 'License'
         },
         modal: {
-            addDatabase: 'Add a connection',
-            createDatabase: 'Create Database',
+            addDatabase: 'Add External Connection',
+            createDatabase: 'Create Local DB',
             createDatabaseTitle: 'Create Local PostgreSQL Database',
             createDatabaseDesc: 'Create a new PostgreSQL database managed by bbdump',
             editDatabase: 'Edit database',
@@ -800,6 +801,7 @@ export const translations = {
             tableDatabase: 'Base de données',
             tableHost: 'Hôte / Connexion',
             tableSchedule: 'Planification',
+            scrollToExternal: 'Voir les connexions externes',
             tableEncryption: 'Chiffrement',
             tableBackup: 'Backup',
             tableActions: 'Actions',
@@ -1142,8 +1144,8 @@ export const translations = {
             license: 'Licence'
         },
         modal: {
-            addDatabase: 'Ajouter une connexion',
-            createDatabase: 'Créer une base de données',
+            addDatabase: 'Ajouter une connexion externe',
+            createDatabase: 'Créer une db locale',
             createDatabaseTitle: 'Créer une base PostgreSQL locale',
             createDatabaseDesc: 'Créer une nouvelle base de données PostgreSQL gérée par bbdump',
             editDatabase: 'Modifier la base de données',

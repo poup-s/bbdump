@@ -224,6 +224,13 @@ const disconnectDatabase = async (db: Database) => {
     }
   });
 };
+
+const scrollToExternal = () => {
+  const externalSection = document.querySelector('[data-external-connections]');
+  if (externalSection) {
+    externalSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+};
 </script>
 
 <template>
@@ -245,7 +252,7 @@ const disconnectDatabase = async (db: Database) => {
               <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
             </svg>
           </div>
-          <span class="relative z-10">{{ t('databases.createButton') }}</span>
+          <span class="relative z-10">{{ t('modal.createDatabase') }}</span>
           <div class="absolute inset-0 rounded-xl bg-gradient-to-r from-blue-400/0 via-blue-400/50 to-blue-400/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 blur-sm"></div>
         </button>
         
@@ -279,6 +286,19 @@ const disconnectDatabase = async (db: Database) => {
     <div v-else class="space-y-8 pb-8">
       <!-- Bases de données locales Bbdump -->
       <div v-if="store.databases.filter(db => db.isLocalBbdump).length > 0">
+        <!-- Lien vers connexions externes si > 3 bases locales -->
+        <div v-if="store.databases.filter(db => db.isLocalBbdump).length > 3 && store.databases.filter(db => !db.isLocalBbdump).length > 0" class="flex justify-start mb-4">
+          <button 
+            @click="scrollToExternal"
+            class="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1.5 group transition-colors px-1"
+          >
+            <span>{{ t('databases.scrollToExternal') }}</span>
+            <svg class="w-3.5 h-3.5 transform group-hover:translate-y-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+        </div>
+        
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-3">
             <div class="flex items-center gap-2">
@@ -342,7 +362,7 @@ const disconnectDatabase = async (db: Database) => {
       </div>
 
       <!-- Connexions externes -->
-      <div v-if="store.databases.filter(db => !db.isLocalBbdump).length > 0">
+      <div v-if="store.databases.filter(db => !db.isLocalBbdump).length > 0" data-external-connections>
         <div class="flex items-center gap-3 mb-4">
           <div class="flex items-center gap-2">
             <svg class="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
