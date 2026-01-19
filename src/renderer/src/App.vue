@@ -23,6 +23,7 @@ import RestoreConfirmModal from './components/RestoreConfirmModal.vue';
 import DbViewer from './components/db-viewer/DbViewer.vue';
 import Onboarding from './components/Onboarding.vue';
 import ThreeBackground from './components/ThreeBackground.vue';
+import VideoLoader from './components/VideoLoader.vue';
 
 const { t, setLanguage } = useI18n();
 const { addToast } = useToast();
@@ -121,10 +122,16 @@ onUnmounted(() => {
   ipcRenderer.removeAllListeners('backup-progress');
   ipcRenderer.removeAllListeners('backup-started');
 });
+
+const handleLoaderComplete = () => {
+  store.isLoading = false;
+};
 </script>
 
 <template>
-  <Onboarding v-if="!store.onboardingCompleted" />
+  <VideoLoader v-if="store.isLoading" @complete="handleLoaderComplete" />
+  
+  <Onboarding v-else-if="!store.onboardingCompleted" />
   
   <div v-else class="h-screen flex bg-background text-foreground font-sans overflow-hidden relative transition-colors duration-300">
     <ThreeBackground />

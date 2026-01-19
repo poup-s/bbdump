@@ -36,5 +36,6 @@ export const store = reactive({
     newlyAddedDbName: null as string | null,
     onboardingCompleted: false,
     language: 'en' as 'en' | 'fr',
-    activeTab: 'dashboard' as string
+    activeTab: 'dashboard' as string,
+    isLoading: true
 });
