@@ -138,12 +138,12 @@ onMounted(() => {
                 <div class="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
                     @click="restoreBackup(backup)"
-                    class="p-2 rounded-lg hover:bg-foreground/10 text-gray-500 hover:text-foreground transition-colors"
-                    :title="t('backup.restore')"
+                    class="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg hover:bg-blue-100 dark:hover:bg-blue-900/40 transition-all active:scale-95 shadow-sm hover:shadow"
                   >
-                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                     </svg>
+                    {{ t('backup.restore') }}
                   </button>
                   <button
                     @click="deleteBackup(backup)"

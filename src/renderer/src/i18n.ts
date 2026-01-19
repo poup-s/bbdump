@@ -599,6 +599,7 @@ export const translations = {
             tableDate: 'Date',
             tableSize: 'Size',
             tableActions: 'Actions',
+            restore: 'Restore',
             started: 'Backup started: {db}'
         },
         cron: {
@@ -1254,6 +1255,7 @@ export const translations = {
             tableDate: 'Date',
             tableSize: 'Taille',
             tableActions: 'Actions',
+            restore: 'Restaurer',
             started: 'Sauvegarde démarrée : {db}'
         },
         cron: {

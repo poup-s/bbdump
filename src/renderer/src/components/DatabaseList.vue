@@ -320,28 +320,33 @@ const scrollToExternal = () => {
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
               </button>
-              <div v-if="hiddenDatabasesCount > 0" class="flex items-center gap-1.5 focus-within:ring-2 ring-amber-500/20 rounded-full transition-all">
-                <div class="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-full border border-amber-200 dark:border-amber-800">
-                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <button
+                v-if="hiddenDatabasesCount > 0"
+                @click="importAllHidden"
+                :disabled="isImportingHidden"
+                class="group flex items-center bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-full overflow-hidden hover:border-amber-300 dark:hover:border-amber-700 transition-all shadow-sm hover:shadow-md disabled:opacity-70 disabled:cursor-not-allowed ml-2"
+              >
+                <div class="flex items-center gap-1.5 px-2.5 py-1 border-r border-amber-200 dark:border-amber-800 bg-white/50 dark:bg-zinc-800/50">
+                  <svg class="w-3.5 h-3.5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  {{ hiddenDatabasesCount }} {{ t('databases.hiddenDatabases') }}
+                  <span class="text-[11px] font-bold text-amber-600 dark:text-amber-400 whitespace-nowrap">
+                    {{ hiddenDatabasesCount }} {{ t('databases.hiddenDatabases') }}
+                  </span>
                 </div>
-                <button
-                  @click="importAllHidden"
-                  :disabled="isImportingHidden"
-                  class="flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-white bg-amber-500 hover:bg-amber-600 active:bg-amber-700 rounded-full shadow-sm hover:shadow-md transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
-                >
-                  <svg v-if="isImportingHidden" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                <div class="flex items-center gap-1.5 px-3 py-1 bg-amber-500 group-hover:bg-amber-600 active:bg-amber-700 text-white transition-colors">
+                  <svg v-if="isImportingHidden" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                  <svg v-else class="w-3 h-3 transform group-hover:translate-x-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg v-else class="w-3.5 h-3.5 transform group-hover:translate-x-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  {{ isImportingHidden ? t('databases.importingHidden') : t('databases.importHidden') }}
-                </button>
-              </div>
+                  <span class="text-[11px] font-bold uppercase tracking-wider whitespace-nowrap">
+                    {{ isImportingHidden ? t('databases.importingHidden') : t('databases.importHidden') }}
+                  </span>
+                </div>
+              </button>
             </div>
           </div>
         </div>
