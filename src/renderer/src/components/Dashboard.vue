@@ -16,6 +16,12 @@ const {
   externalDatabases 
 } = useDashboardData();
 
+const goToTab = (tab: string) => {
+  import('../store').then(({ store }) => {
+    store.activeTab = tab;
+  });
+};
+
 onMounted(() => {
   loadDashboardData();
 });
@@ -58,22 +64,46 @@ onMounted(() => {
       </div>
 
       <!-- Databases -->
-      <div class="bg-white dark:bg-zinc-900 rounded-xl p-5 border border-gray-200 dark:border-zinc-800">
-        <p class="text-xs text-gray-500 dark:text-gray-400 font-medium">{{ t('dashboard.totalDatabases') }}</p>
+      <div 
+        @click="goToTab('databases')"
+        class="bg-white dark:bg-zinc-900 rounded-xl p-5 border border-gray-200 dark:border-zinc-800 cursor-pointer hover:border-blue-500/50 hover:shadow-lg hover:shadow-blue-500/5 transition-all duration-300 group"
+      >
+        <div class="flex justify-between items-start">
+          <p class="text-xs text-gray-500 dark:text-gray-400 font-medium">{{ t('dashboard.totalDatabases') }}</p>
+          <svg class="w-4 h-4 text-gray-300 group-hover:text-blue-500 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+        </div>
         <p class="text-2xl font-semibold text-gray-900 dark:text-white mt-1">{{ totalDatabases }}</p>
         <p class="text-xs text-gray-400 mt-1">{{ localDatabases }} {{ t('dashboard.local') }} · {{ externalDatabases }} {{ t('dashboard.external') }}</p>
       </div>
 
       <!-- Backups -->
-      <div class="bg-white dark:bg-zinc-900 rounded-xl p-5 border border-gray-200 dark:border-zinc-800">
-        <p class="text-xs text-gray-500 dark:text-gray-400 font-medium">{{ t('dashboard.totalBackups') }}</p>
+      <div 
+        @click="goToTab('backups')"
+        class="bg-white dark:bg-zinc-900 rounded-xl p-5 border border-gray-200 dark:border-zinc-800 cursor-pointer hover:border-purple-500/50 hover:shadow-lg hover:shadow-purple-500/5 transition-all duration-300 group"
+      >
+        <div class="flex justify-between items-start">
+          <p class="text-xs text-gray-500 dark:text-gray-400 font-medium">{{ t('dashboard.totalBackups') }}</p>
+          <svg class="w-4 h-4 text-gray-300 group-hover:text-purple-500 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+        </div>
         <p class="text-2xl font-semibold text-gray-900 dark:text-white mt-1">{{ stats.total }}</p>
         <p class="text-xs text-gray-400 mt-1">{{ t('dashboard.storedLocally') }}</p>
       </div>
 
       <!-- Storage -->
-      <div class="bg-white dark:bg-zinc-900 rounded-xl p-5 border border-gray-200 dark:border-zinc-800">
-        <p class="text-xs text-gray-500 dark:text-gray-400 font-medium">{{ t('dashboard.storageUsed') }}</p>
+      <div 
+        @click="goToTab('backups')"
+        class="bg-white dark:bg-zinc-900 rounded-xl p-5 border border-gray-200 dark:border-zinc-800 cursor-pointer hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-500/5 transition-all duration-300 group"
+      >
+        <div class="flex justify-between items-start">
+          <p class="text-xs text-gray-500 dark:text-gray-400 font-medium">{{ t('dashboard.storageUsed') }}</p>
+          <svg class="w-4 h-4 text-gray-300 group-hover:text-emerald-500 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+          </svg>
+        </div>
         <p class="text-2xl font-semibold text-gray-900 dark:text-white mt-1">{{ formatFileSize(stats.totalSize) }}</p>
         <p class="text-xs text-gray-400 mt-1">{{ t('dashboard.totalBackupSize') }}</p>
       </div>

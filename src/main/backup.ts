@@ -1210,7 +1210,9 @@ export class BackupManager {
       logger.info(`Command: ${compatiblePgDump} ${args.join(' ')}`, db.name);
 
       const env: NodeJS.ProcessEnv = {
-        ...process.env
+        ...process.env,
+        LC_ALL: 'C',
+        LANG: 'C'
       };
 
       if (db.ssl) {
@@ -1519,7 +1521,9 @@ export class BackupManager {
       logger.info(`Command: ${compatiblePgRestorePath} ${args.join(' ')}`, target.name);
 
       const env: NodeJS.ProcessEnv = {
-        ...process.env
+        ...process.env,
+        LC_ALL: 'C',
+        LANG: 'C'
       };
 
       // Support SSL avec certificats auto-signés
@@ -1570,14 +1574,16 @@ export class BackupManager {
 
         const combinedOutput = stdoutOutput + errorOutput;
 
-        // Liste des erreurs non critiques à ignorer (spécifiques à certains providers comme Neon)
+        // Liste des erreurs non critiques à ignorer (spécifiques à certains providers comme Neon ou versions PG différentes)
         const nonCriticalErrorPatterns = [
           /unrecognized configuration parameter/i,
           /transaction_timeout/i,
           /does not exist/i,
           /already exists/i,
           /permission denied/i,
-          /role.*does not exist/i
+          /role.*does not exist/i,
+          /errors ignored on restore/i,
+          /erreurs ignorées lors de la restauration/i // Backup fallback for French
         ];
 
         // Vérifier si l'erreur est critique
@@ -1586,17 +1592,24 @@ export class BackupManager {
             !nonCriticalErrorPatterns.some(pattern => pattern.test(errorOutput)));
 
         // Vérifier si des données ont été restaurées (indicateurs de succès)
-        const hasRestoreActivity = combinedOutput.includes('CREATE TABLE') ||
+        // On cherche à la fois en Anglais (C locale) et en Français (au cas où C échouerait localement)
+        const hasRestoreActivity =
+          // English (Target Locale C)
+          combinedOutput.includes('CREATE TABLE') ||
           combinedOutput.includes('CREATE INDEX') ||
           combinedOutput.includes('CREATE SEQUENCE') ||
           combinedOutput.includes('CREATE FUNCTION') ||
           combinedOutput.includes('processing data for table') ||
           combinedOutput.includes('COPY ') ||
           combinedOutput.includes('INSERT INTO') ||
-          combinedOutput.includes('ALTER TABLE');
+          combinedOutput.includes('ALTER TABLE') ||
+          // French (Backup fallback)
+          combinedOutput.includes('création de TABLE') ||
+          combinedOutput.includes('traitement des données de la table');
 
         // Vérifier si pg_restore indique explicitement que les erreurs ont été ignorées
-        const errorsIgnored = combinedOutput.includes('errors ignored on restore');
+        const errorsIgnored = combinedOutput.includes('errors ignored on restore') ||
+          combinedOutput.includes('erreurs ignorées lors de la restauration');
 
         // pg_restore peut retourner 1 avec des warnings mais réussir quand même
         // Code 0 = succès complet

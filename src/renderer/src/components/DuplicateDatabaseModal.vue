@@ -3,7 +3,7 @@ import { ref, onMounted } from 'vue';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
 import { ipcRenderer } from '../electron';
-import { Database, DatabaseConfig } from '../types';
+import { Database } from '../types';
 import { store } from '../store';
 import PrerequisitesLoader from './PrerequisitesLoader.vue';
 
@@ -84,7 +84,7 @@ const duplicateToLocal = async () => {
   try {
     // Créer un objet simple sérialisable pour éviter les erreurs de clonage IPC
     const sourceDb = props.sourceDb;
-    const sourceDbConfig: Partial<DatabaseConfig> = {
+    const sourceDbConfig: Partial<Database> = {
       name: sourceDb.name,
       displayName: sourceDb.displayName,
       host: sourceDb.host,
@@ -118,6 +118,7 @@ const duplicateToLocal = async () => {
     ipcRenderer.removeListener('duplicate-progress', progressHandler);
     
     if (result.success) {
+      isDuplicating.value = false;
       addToast(t('databases.duplicateSuccess', { name: formName }), 'success');
       emit('success', formName);
       closeModal();
@@ -160,10 +161,10 @@ const duplicateToLocal = async () => {
         <div class="p-6 space-y-4">
           <!-- Loading State -->
           <div v-if="isDuplicating" class="flex flex-col items-center justify-center py-8">
-            <div class="w-full h-48 mb-4">
+            <div class="w-full h-48">
               <PrerequisitesLoader />
             </div>
-            <div class="w-full space-y-2">
+            <div class="w-full space-y-2 mt-8">
               <div class="flex items-center justify-between mb-2">
                 <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ duplicateProgress?.message || t('databases.duplicating') }}</span>
                 <span class="text-xs text-gray-500">{{ duplicateProgress?.progress || 0 }}%</span>
