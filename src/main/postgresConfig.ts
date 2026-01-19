@@ -10,7 +10,7 @@ export interface PostgresDatabase {
   ctype: string;
   size: string;
   connections?: number;
-  isActive?: boolean;
+  hasConnections?: boolean;
 }
 
 export interface PostgresConnection {
@@ -26,6 +26,8 @@ export interface PostgresConnection {
 
 export interface PostgresConfigInfo {
   version: string;
+  binVersion?: string;
+  binPath?: string;
   port: number;
   dataDirectory?: string;
   isRunning: boolean;
@@ -41,12 +43,12 @@ async function createPostgresConnection(port: number = 5432): Promise<Client> {
   const os = await import('os');
   const currentUser = os.userInfo().username;
   const usersToTry = [currentUser, 'postgres', process.env.USER || '', process.env.USERNAME || ''];
-  
+
   for (const user of usersToTry) {
     if (!user) continue;
-    
+
     const passwords = ['', 'postgres', 'admin', 'password'];
-    
+
     for (const password of passwords) {
       const client = new Client({
         host: 'localhost',
@@ -70,7 +72,7 @@ async function createPostgresConnection(port: number = 5432): Promise<Client> {
       }
     }
   }
-  
+
   throw new Error(`Cannot connect to PostgreSQL server on port ${port}`);
 }
 
@@ -79,7 +81,7 @@ async function createPostgresConnection(port: number = 5432): Promise<Client> {
  */
 export async function listPostgresDatabases(port: number = 5432): Promise<PostgresDatabase[]> {
   const client = await createPostgresConnection(port);
-  
+
   try {
     const query = `
       SELECT 
@@ -94,9 +96,9 @@ export async function listPostgresDatabases(port: number = 5432): Promise<Postgr
       WHERE d.datistemplate = false
       ORDER BY d.datname;
     `;
-    
+
     const result = await client.query(query);
-    
+
     return result.rows.map(row => ({
       name: row.name,
       owner: row.owner,
@@ -105,7 +107,7 @@ export async function listPostgresDatabases(port: number = 5432): Promise<Postgr
       ctype: row.ctype,
       size: row.size,
       connections: parseInt(row.connections) || 0,
-      isActive: parseInt(row.connections) > 0
+      hasConnections: parseInt(row.connections) > 0
     }));
   } finally {
     await client.end();
@@ -117,7 +119,7 @@ export async function listPostgresDatabases(port: number = 5432): Promise<Postgr
  */
 export async function listActiveConnections(port: number = 5432): Promise<PostgresConnection[]> {
   const client = await createPostgresConnection(port);
-  
+
   try {
     const query = `
       SELECT 
@@ -133,9 +135,9 @@ export async function listActiveConnections(port: number = 5432): Promise<Postgr
       WHERE datname IS NOT NULL
       ORDER BY pid;
     `;
-    
+
     const result = await client.query(query);
-    
+
     return result.rows.map(row => ({
       pid: parseInt(row.pid),
       database: row.database,
@@ -156,38 +158,38 @@ export async function listActiveConnections(port: number = 5432): Promise<Postgr
  */
 export async function killConnection(pid: number, port: number = 5432): Promise<{ success: boolean; error?: string }> {
   const client = await createPostgresConnection(port);
-  
+
   try {
     // Vérifier d'abord que la connexion existe
     const checkQuery = `SELECT pid FROM pg_stat_activity WHERE pid = $1`;
     const checkResult = await client.query(checkQuery, [pid]);
-    
+
     // Si la connexion n'existe pas, elle a peut-être déjà été fermée
     // On essaie quand même de la tuer au cas où elle existerait encore
     if (checkResult.rows.length === 0) {
       logger.warn(`Connection with PID ${pid} not found in pg_stat_activity, attempting to terminate anyway`);
     }
-    
+
     // Utiliser pg_terminate_backend pour tuer la connexion
     // Cette fonction retourne false si le PID n'existe pas, mais ne génère pas d'erreur
     const terminateQuery = `SELECT pg_terminate_backend($1) as terminated`;
     const result = await client.query(terminateQuery, [pid]);
-    
+
     // Vérifier le résultat
     const terminated = result.rows[0]?.terminated;
-    
+
     if (checkResult.rows.length === 0 && !terminated) {
       // La connexion n'existait pas et n'a pas pu être tuée
       return { success: false, error: `Connection with PID ${pid} does not exist or has already been closed` };
     }
-    
+
     if (!terminated) {
       return { success: false, error: `Failed to terminate connection with PID ${pid}` };
     }
-    
+
     // Attendre un peu pour que PostgreSQL mette à jour ses statistiques
     await new Promise(resolve => setTimeout(resolve, 300));
-    
+
     logger.info(`Terminated PostgreSQL connection with PID ${pid}`);
     return { success: true };
   } catch (error: any) {
@@ -203,16 +205,16 @@ export async function killConnection(pid: number, port: number = 5432): Promise<
  */
 export async function disconnectDatabase(dbName: string, port: number = 5432): Promise<{ success: boolean; error?: string; disconnectedCount?: number }> {
   const client = await createPostgresConnection(port);
-  
+
   try {
     // Vérifier que la base existe
     const checkQuery = `SELECT 1 FROM pg_database WHERE datname = $1`;
     const checkResult = await client.query(checkQuery, [dbName]);
-    
+
     if (checkResult.rows.length === 0) {
       return { success: false, error: `Database "${dbName}" does not exist` };
     }
-    
+
     // Compter d'abord les connexions actives
     const countQuery = `
       SELECT count(*) as count
@@ -221,21 +223,21 @@ export async function disconnectDatabase(dbName: string, port: number = 5432): P
     `;
     const countResult = await client.query(countQuery, [dbName]);
     const connectionCount = parseInt(countResult.rows[0]?.count || '0', 10);
-    
+
     if (connectionCount === 0) {
       logger.info(`No active connections to disconnect from database "${dbName}"`);
       return { success: true, disconnectedCount: 0 };
     }
-    
+
     // Tuer toutes les connexions actives à cette base de données
     const terminateQuery = `
       SELECT pg_terminate_backend(pid)
       FROM pg_stat_activity
       WHERE datname = $1 AND pid <> pg_backend_pid()
     `;
-    
+
     await client.query(terminateQuery, [dbName]);
-    
+
     logger.info(`Disconnected ${connectionCount} connection(s) from database "${dbName}"`);
     return { success: true, disconnectedCount: connectionCount };
   } catch (error: any) {
@@ -251,22 +253,22 @@ export async function disconnectDatabase(dbName: string, port: number = 5432): P
  */
 export async function dropDatabase(dbName: string, port: number = 5432, forceDisconnect: boolean = true): Promise<{ success: boolean; error?: string }> {
   const client = await createPostgresConnection(port);
-  
+
   try {
     // Vérifier que la base existe
     const checkQuery = `SELECT 1 FROM pg_database WHERE datname = $1`;
     const checkResult = await client.query(checkQuery, [dbName]);
-    
+
     if (checkResult.rows.length === 0) {
       return { success: false, error: `Database "${dbName}" does not exist` };
     }
-    
+
     // Empêcher la suppression des bases système critiques
     const systemDatabases = ['postgres', 'template0', 'template1'];
     if (systemDatabases.includes(dbName)) {
       return { success: false, error: `Cannot drop system database "${dbName}"` };
     }
-    
+
     // Déconnecter toutes les connexions actives si demandé
     if (forceDisconnect) {
       const disconnectResult = await disconnectDatabase(dbName, port);
@@ -277,12 +279,12 @@ export async function dropDatabase(dbName: string, port: number = 5432, forceDis
       // Attendre un peu pour que les connexions se terminent
       await new Promise(resolve => setTimeout(resolve, 500));
     }
-    
+
     // Supprimer la base de données
     const format = await import('pg-format');
     const dropQuery = format.default('DROP DATABASE %I', dbName);
     await client.query(dropQuery);
-    
+
     logger.info(`Database "${dbName}" dropped successfully`);
     return { success: true };
   } catch (error: any) {
@@ -297,12 +299,12 @@ export async function dropDatabase(dbName: string, port: number = 5432, forceDis
  * Teste la connexion à une base de données PostgreSQL et retourne les informations de connexion
  */
 export async function testDatabaseConnection(
-  dbName: string, 
-  port: number = 5432, 
+  dbName: string,
+  port: number = 5432,
   password?: string
-): Promise<{ 
-  success: boolean; 
-  error?: string; 
+): Promise<{
+  success: boolean;
+  error?: string;
   needsPassword?: boolean;
   connectionInfo?: {
     host: string;
@@ -316,12 +318,12 @@ export async function testDatabaseConnection(
   const os = await import('os');
   const currentUser = os.userInfo().username;
   const usersToTry = [currentUser, 'postgres', process.env.USER || '', process.env.USERNAME || ''];
-  
+
   // Si un mot de passe est fourni, essayer avec ce mot de passe
   if (password !== undefined) {
     for (const user of usersToTry) {
       if (!user) continue;
-      
+
       const client = new Client({
         host: 'localhost',
         port: port,
@@ -336,7 +338,7 @@ export async function testDatabaseConnection(
         await client.query('SELECT 1');
         await client.end();
         logger.info(`Successfully connected to database "${dbName}" as ${user}`);
-        return { 
+        return {
           success: true,
           connectionInfo: {
             host: 'localhost',
@@ -362,11 +364,11 @@ export async function testDatabaseConnection(
     }
     return { success: false, error: 'Authentication failed with provided password' };
   }
-  
+
   // Essayer sans mot de passe d'abord
   for (const user of usersToTry) {
     if (!user) continue;
-    
+
     const client = new Client({
       host: 'localhost',
       port: port,
@@ -381,7 +383,7 @@ export async function testDatabaseConnection(
       await client.query('SELECT 1');
       await client.end();
       logger.info(`Successfully connected to database "${dbName}" as ${user} (no password)`);
-      return { 
+      return {
         success: true,
         connectionInfo: {
           host: 'localhost',
@@ -397,17 +399,17 @@ export async function testDatabaseConnection(
       } catch {
         // Ignore
       }
-      
+
       // Si c'est une erreur d'authentification, on a besoin d'un mot de passe
       if (error.message.includes('password') || error.message.includes('authentication')) {
         return { success: false, needsPassword: true, error: 'Password required' };
       }
-      
+
       // Autre erreur (base n'existe pas, etc.)
       return { success: false, error: error.message };
     }
   }
-  
+
   return { success: false, needsPassword: true, error: 'Password required' };
 }
 
@@ -420,7 +422,7 @@ export async function getPostgresConfigInfo(port: number = 5432): Promise<Postgr
     // Si on peut se connecter, PostgreSQL est clairement installé et fonctionne
     let version: string | undefined;
     let isRunning = false;
-    
+
     try {
       const client = await createPostgresConnection(port);
       try {
@@ -438,7 +440,7 @@ export async function getPostgresConfigInfo(port: number = 5432): Promise<Postgr
       if (!installed.installed) {
         throw new Error('PostgreSQL is not installed');
       }
-      
+
       // PostgreSQL est installé mais pas démarré
       return {
         version: installed.version || version || 'unknown',
@@ -448,14 +450,14 @@ export async function getPostgresConfigInfo(port: number = 5432): Promise<Postgr
         activeConnections: []
       };
     }
-    
+
     // Si on arrive ici, PostgreSQL est en cours d'exécution
     // Obtenir les bases de données et connexions
     const [databases, connections] = await Promise.all([
       listPostgresDatabases(port).catch(() => []),
       listActiveConnections(port).catch(() => [])
     ]);
-    
+
     // Obtenir le répertoire de données si possible
     let dataDirectory: string | undefined;
     try {
@@ -469,15 +471,14 @@ export async function getPostgresConfigInfo(port: number = 5432): Promise<Postgr
     } catch {
       // Ignore
     }
-    
-    // Si on n'a pas de version depuis la connexion, essayer de la récupérer autrement
-    if (!version) {
-      const installed = await checkPostgresInstalled();
-      version = installed.version;
-    }
-    
+
+    // Obtenir les informations sur les outils installés
+    const installed = await checkPostgresInstalled();
+
     return {
       version: version || 'unknown',
+      binVersion: installed.version,
+      binPath: installed.path,
       port: port,
       dataDirectory,
       isRunning: true,

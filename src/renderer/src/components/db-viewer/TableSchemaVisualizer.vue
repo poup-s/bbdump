@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { ref, onMounted, markRaw } from 'vue';
-import { VueFlow } from '@vue-flow/core';
+import { ref, onMounted, markRaw, nextTick } from 'vue';
+import { VueFlow, useVueFlow } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { ipcRenderer } from '../../electron';
 import { Database } from '../../types';
 import { useI18n } from '../../composables/useI18n';
 import TableNode from './TableNode.vue';
+import dagre from 'dagre';
 
 // Import Vue Flow styles
 import '@vue-flow/core/dist/style.css';
@@ -17,6 +18,7 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
+const { fitView } = useVueFlow();
 const nodes = ref<any[]>([]);
 const edges = ref<any[]>([]);
 const loading = ref(true);
@@ -24,6 +26,49 @@ const error = ref<string | null>(null);
 
 const nodeTypes = {
   table: markRaw(TableNode),
+};
+
+const layoutNodes = (nodesToLayout: any[], edgesToLayout: any[]) => {
+  const dagreGraph = new dagre.graphlib.Graph();
+  dagreGraph.setDefaultEdgeLabel(() => ({}));
+  
+  // Graph settings
+  dagreGraph.setGraph({ 
+    rankdir: 'LR', // Left to Right layout usually works best for ER diagrams
+    nodesep: 100,
+    ranksep: 200,
+    marginx: 50,
+    marginy: 50
+  });
+
+  // Add nodes to dagre
+  nodesToLayout.forEach((node) => {
+    // We need an estimate of the node size. 
+    // Table nodes vary in height based on columns. 
+    // Approx: width 280, height = 60 + (colCount * 32)
+    const height = 60 + (node.data.columns.length * 32);
+    dagreGraph.setNode(node.id, { width: 280, height });
+  });
+
+  // Add edges to dagre
+  edgesToLayout.forEach((edge) => {
+    dagreGraph.setEdge(edge.source, edge.target);
+  });
+
+  // Calculate layout
+  dagre.layout(dagreGraph);
+
+  // Map results back to nodes
+  return nodesToLayout.map((node) => {
+    const nodeWithPosition = dagreGraph.node(node.id);
+    return {
+      ...node,
+      position: {
+        x: nodeWithPosition.x - nodeWithPosition.width / 2,
+        y: nodeWithPosition.y - nodeWithPosition.height / 2,
+      },
+    };
+  });
 };
 
 const loadFullSchema = async () => {
@@ -44,8 +89,8 @@ const loadFullSchema = async () => {
     
     const schema = await ipcRenderer.invoke('get-db-full-schema', { db: dbConfig });
     
-    // Create nodes
-    nodes.value = schema.tables.map((table: any, index: number) => {
+    // 1. Prepare raw nodes
+    const rawNodes = schema.tables.map((table: any) => {
       const tableColumns = schema.columns.filter((c: any) => c.table_name === table.name);
       const tablePks = schema.primaryKeys
         .filter((pk: any) => pk.table_name === table.name)
@@ -54,7 +99,7 @@ const loadFullSchema = async () => {
       return {
         id: table.name,
         type: 'table',
-        position: { x: (index % 3) * 350, y: Math.floor(index / 3) * 500 },
+        position: { x: 0, y: 0 },
         data: {
           label: table.name,
           columns: tableColumns,
@@ -63,8 +108,8 @@ const loadFullSchema = async () => {
       };
     });
 
-    // Create edges
-    edges.value = schema.foreignKeys.map((fk: any, index: number) => ({
+    // 2. Prepare raw edges
+    const rawEdges = schema.foreignKeys.map((fk: any, index: number) => ({
       id: `e-${fk.constraint_name}-${index}`,
       source: fk.target_table,
       target: fk.source_table,
@@ -76,6 +121,14 @@ const loadFullSchema = async () => {
       labelStyle: { fill: '#94a3b8', fontSize: 10, fontWeight: 500 }
     }));
 
+    // 3. Apply Dagre layout
+    nodes.value = layoutNodes(rawNodes, rawEdges);
+    edges.value = rawEdges;
+
+    // 4. Center the view after layout
+    await nextTick();
+    fitView({ padding: 0.2, duration: 800 });
+
   } catch (err: any) {
     console.error('Error loading full schema:', err);
     error.value = err.message || 'Failed to load schema';
@@ -84,6 +137,11 @@ const loadFullSchema = async () => {
   }
 };
 
+const triggerLayout = async () => {
+  nodes.value = layoutNodes(nodes.value, edges.value);
+  await nextTick();
+  fitView({ padding: 0.2, duration: 800 });
+};
 onMounted(() => {
   loadFullSchema();
 });
@@ -122,6 +180,19 @@ onMounted(() => {
       
       <template #panel-top-right>
         <div class="m-4 flex gap-2">
+          <!-- Magic Layout Button -->
+          <button 
+            @click="triggerLayout" 
+            class="px-3 py-2 bg-blue-600 text-white rounded-lg shadow-lg hover:bg-blue-700 transition-all flex items-center gap-2 text-sm font-medium"
+            :title="t('viewer.magicLayout')"
+          >
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            {{ t('viewer.magicLayout') }}
+          </button>
+
+          <!-- Refresh Button -->
           <button 
             @click="loadFullSchema" 
             class="p-2 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-white/10 rounded-lg shadow-lg hover:bg-gray-50 dark:hover:bg-zinc-700 transition-all"

@@ -19,6 +19,7 @@ interface PostgresDatabase {
   size: string;
   connections?: number;
   isActive?: boolean;
+  hasConnections?: boolean;
 }
 
 interface PostgresConnection {
@@ -34,6 +35,8 @@ interface PostgresConnection {
 
 interface PostgresConfigInfo {
   version: string;
+  binVersion?: string;
+  binPath?: string;
   port: number;
   dataDirectory?: string;
   isRunning: boolean;
@@ -53,10 +56,29 @@ const passwordModalDbName = ref('');
 const passwordInput = ref('');
 const isConnecting = ref(false);
 
+const copyToClipboard = (text: string) => {
+  navigator.clipboard.writeText(text);
+  addToast(t('postgresConfig.pathCopied'), 'success');
+};
+
 const loadConfig = async () => {
   isLoading.value = true;
   try {
-    configInfo.value = await ipcRenderer.invoke('get-postgres-config', selectedPort.value);
+    const info = await ipcRenderer.invoke('get-postgres-config', selectedPort.value);
+    
+    // Enrich with isActive from app store
+    if (info && info.databases) {
+      info.databases = info.databases.map((db: PostgresDatabase) => ({
+        ...db,
+        isActive: store.databases.some(managedDb => 
+          managedDb.name === db.name && 
+          managedDb.port === selectedPort.value && 
+          managedDb.host === 'localhost'
+        )
+      }));
+    }
+    
+    configInfo.value = info;
   } catch (error: any) {
     addToast(`Error loading PostgreSQL config: ${error.message}`, 'error');
     configInfo.value = null;
@@ -89,29 +111,7 @@ const killConnection = async (pid: number) => {
   });
 };
 
-const removeDatabaseFromList = async (dbName: string) => {
-  showConfirm({
-    title: t('postgresConfig.removeFromListTitle'),
-    message: t('postgresConfig.removeFromListMessage', { name: dbName }),
-    confirmText: t('postgresConfig.removeFromList'),
-    type: 'warning',
-    onConfirm: async () => {
-      try {
-        // Retirer la base de la configuration de l'application (sans la supprimer de PostgreSQL)
-        await ipcRenderer.invoke('remove-database', dbName);
-        const config = await ipcRenderer.invoke('get-config');
-        store.databases = config.databases;
-        addToast(
-          t('postgresConfig.databaseRemovedFromList', { name: dbName }), 
-          'success'
-        );
-        await loadConfig();
-      } catch (error: any) {
-        addToast(`Error removing database from list: ${error.message}`, 'error');
-      }
-    }
-  });
-};
+
 
 const dropDatabase = async (dbName: string) => {
   showConfirm({
@@ -197,7 +197,7 @@ const addDatabaseToConfig = async (connectionInfo: any) => {
   }
 };
 
-const testConnection = async (dbName: string) => {
+const testDatabase = async (dbName: string) => {
   isConnecting.value = true;
   try {
     // Essayer d'abord sans mot de passe
@@ -240,7 +240,6 @@ const testConnectionWithPassword = async () => {
     if (result.success && result.connectionInfo) {
       // Fermer la modal
       showPasswordModal.value = false;
-      const dbName = passwordModalDbName.value;
       passwordInput.value = '';
       passwordModalDbName.value = '';
       
@@ -262,32 +261,43 @@ const cancelPasswordModal = () => {
   passwordModalDbName.value = '';
 };
 
-const formatDate = (dateStr?: string) => {
-  if (!dateStr) return '-';
-  try {
-    return new Date(dateStr).toLocaleString();
-  } catch {
-    return dateStr;
-  }
-};
-
 const truncateQuery = (query?: string, maxLength: number = 50) => {
   if (!query) return '-';
   return query.length > maxLength ? query.substring(0, maxLength) + '...' : query;
 };
 
-const isDatabaseInConfig = (dbName: string, port: number) => {
-  return store.databases.some(db => 
-    db.name === dbName && 
-    db.host === 'localhost' && 
-    db.port === port
-  );
-};
+
 
 const isSystemDatabase = (dbName: string) => {
   const systemDatabases = ['postgres', 'template0', 'template1'];
   return systemDatabases.includes(dbName);
 };
+
+const disconnectDatabase = async (dbName: string) => {
+  showConfirm({
+    title: t('postgresConfig.removeFromListTitle'),
+    message: t('postgresConfig.removeFromListMessage', { name: dbName }),
+    confirmText: t('postgresConfig.removeFromList'),
+    type: 'warning',
+    onConfirm: async () => {
+      try {
+        await ipcRenderer.invoke('remove-database', dbName);
+        const config = await ipcRenderer.invoke('get-config');
+        store.databases = config.databases;
+        addToast(
+          t('postgresConfig.databaseRemovedFromList', { name: dbName }), 
+          'success'
+        );
+        await loadConfig();
+      } catch (error: any) {
+        addToast(`Error removing database from list: ${error.message}`, 'error');
+      }
+    }
+  });
+};
+
+  
+
 
 onMounted(() => {
   loadConfig();
@@ -297,33 +307,37 @@ onMounted(() => {
 <template>
   <div class="bg-white dark:bg-zinc-900 rounded-2xl p-6 border border-gray-200 dark:border-zinc-800 shadow-sm" data-postgres-config>
     <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
-      <div class="flex items-center gap-3">
-        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500/10 to-blue-600/5 flex items-center justify-center">
-          <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
-        </div>
+      <div class="flex items-center gap-4">
         <div>
-          <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('postgresConfig.title') }}</h3>
-          <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{{ t('postgresConfig.description') }}</p>
+          <div class="flex items-center gap-3">
+            <h3 class="text-xl font-bold text-gray-900 dark:text-white">{{ t('postgresConfig.title') }}</h3>
+            <div v-if="configInfo" :class="[
+              'flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider',
+              configInfo.isRunning 
+                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' 
+                : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'
+            ]">
+              <span :class="['w-1.5 h-1.5 rounded-full animate-pulse', configInfo.isRunning ? 'bg-emerald-500' : 'bg-rose-500']"></span>
+              {{ configInfo.isRunning ? t('postgresConfig.running') : t('postgresConfig.stopped') }}
+            </div>
+          </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-medium">{{ t('postgresConfig.description') }}</p>
         </div>
       </div>
-      <div class="flex items-center gap-2">
-        <div class="flex items-center gap-2 bg-gray-50 dark:bg-zinc-800/50 px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-zinc-700">
-          <label class="text-xs text-gray-600 dark:text-gray-400">{{ t('postgresConfig.port') }}:</label>
+      <div class="flex items-center gap-3 -mt-4">
+        <div class="flex items-center gap-3 bg-gray-50 dark:bg-zinc-800/40 px-3 py-2 rounded-xl border border-gray-200/60 dark:border-zinc-700/60 backdrop-blur-sm">
+          <label class="text-xs font-semibold text-gray-500 dark:text-gray-400">{{ t('postgresConfig.port') }}</label>
           <input
             v-model.number="selectedPort"
             type="number"
-            min="1"
-            max="65535"
-            class="w-14 px-1.5 py-0.5 bg-transparent border-0 text-sm font-medium text-gray-900 dark:text-white focus:outline-none"
+            class="w-16 bg-transparent border-0 text-sm font-bold text-gray-900 dark:text-white focus:outline-none focus:ring-0 p-0"
             @change="loadConfig"
           />
         </div>
         <button
           @click="loadConfig"
           :disabled="isLoading"
-          class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+          class="h-10 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-lg shadow-blue-600/20 hover:scale-[1.02] active:scale-[0.98]"
         >
           <svg v-if="isLoading" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -337,220 +351,186 @@ onMounted(() => {
       </div>
     </div>
 
-    <div v-if="isLoading && !configInfo" class="flex items-center justify-center py-12">
+    <div v-if="isLoading && !configInfo" class="flex items-center justify-center py-16">
       <div class="text-center">
-        <svg class="w-8 h-8 animate-spin mx-auto text-blue-600" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-        </svg>
-        <p class="mt-2 text-sm text-gray-500">{{ t('postgresConfig.loading') }}</p>
+        <div class="relative w-12 h-12 mx-auto mb-4">
+          <div class="absolute inset-0 rounded-full border-4 border-blue-500/10"></div>
+          <div class="absolute inset-0 rounded-full border-4 border-blue-600 border-t-transparent animate-spin"></div>
+        </div>
+        <p class="text-sm font-medium text-gray-500 dark:text-gray-400 animate-pulse">{{ t('postgresConfig.loading') }}</p>
       </div>
     </div>
 
-    <div v-else-if="configInfo" class="space-y-4">
-      <!-- Status Info -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <div class="p-3 bg-gray-50 dark:bg-zinc-800/50 rounded-xl border border-gray-200 dark:border-zinc-700">
-          <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">{{ t('postgresConfig.version') }}</div>
-          <div class="text-base font-semibold text-gray-900 dark:text-white">{{ configInfo.version }}</div>
-        </div>
-        <div class="p-3 bg-gray-50 dark:bg-zinc-800/50 rounded-xl border border-gray-200 dark:border-zinc-700">
-          <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">{{ t('postgresConfig.status') }}</div>
-          <div class="flex items-center gap-2">
-            <div :class="[
-              'w-2 h-2 rounded-full',
-              configInfo.isRunning ? 'bg-green-500' : 'bg-red-500'
-            ]"></div>
-            <span class="text-base font-semibold text-gray-900 dark:text-white">
-              {{ configInfo.isRunning ? t('postgresConfig.running') : t('postgresConfig.stopped') }}
-            </span>
-          </div>
-        </div>
-        <div class="p-3 bg-gray-50 dark:bg-zinc-800/50 rounded-xl border border-gray-200 dark:border-zinc-700">
-          <div class="text-xs text-gray-500 dark:text-gray-400 mb-1">{{ t('postgresConfig.databasesCount') }}</div>
-          <div class="text-base font-semibold text-gray-900 dark:text-white">{{ configInfo.databases.length }}</div>
-        </div>
-      </div>
-
-      <!-- Databases Section -->
-      <div class="border border-gray-200 dark:border-zinc-700 rounded-xl overflow-hidden bg-white dark:bg-zinc-900">
-        <button
-          @click="expandedSections.databases = !expandedSections.databases"
-          class="w-full px-4 py-3 bg-gray-50 dark:bg-zinc-800/50 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors flex items-center justify-between group"
-        >
-          <div class="flex items-center gap-2">
-            <svg class="w-4 h-4 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
-            </svg>
-            <span class="text-sm font-medium text-gray-900 dark:text-white">{{ t('postgresConfig.databases') }}</span>
-            <span class="text-xs text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/30 px-2 py-0.5 rounded-full">
-              {{ configInfo.databases.length }}
-            </span>
-          </div>
-          <svg 
-            class="w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform"
-            :class="{ 'rotate-180': expandedSections.databases }"
-            fill="none" viewBox="0 0 24 24" stroke="currentColor"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-        
-        <div v-if="expandedSections.databases" class="border-t border-border">
-          <div v-if="configInfo.databases.length === 0" class="p-8 text-center text-gray-500">
-            {{ t('postgresConfig.noDatabases') }}
-          </div>
-          <div v-else class="divide-y divide-border">
-            <div
-              v-for="db in configInfo.databases"
-              :key="db.name"
-              class="p-4 hover:bg-gray-50 dark:hover:bg-zinc-800/50 transition-colors"
-            >
-              <div class="flex items-center justify-between gap-4">
-                <div class="flex-1">
-                  <div class="flex items-center gap-2 mb-1">
-                    <span class="font-semibold text-gray-900 dark:text-white">{{ db.name }}</span>
-                    <span v-if="db.isActive" class="px-2 py-0.5 text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-full">
-                      {{ t('postgresConfig.active') }}
-                    </span>
-                  </div>
-                  <div class="text-sm text-gray-500 space-y-1">
-                    <div>{{ t('postgresConfig.owner') }}: {{ db.owner }}</div>
-                    <div>{{ t('postgresConfig.size') }}: {{ db.size }}</div>
-                    <div v-if="db.connections !== undefined && db.connections > 0" class="flex items-center gap-1">
-                      <span class="w-2 h-2 rounded-full bg-green-500"></span>
-                      {{ t('postgresConfig.connections') }}: {{ db.connections }}
-                    </div>
-                  </div>
-                </div>
-                <div class="flex items-center gap-2 flex-shrink-0">
-                  <!-- Bouton Connexion : seulement si la base n'est pas déjà dans la config -->
-                  <button
-                    v-if="!isDatabaseInConfig(db.name, selectedPort)"
-                    @click="testConnection(db.name)"
-                    :disabled="isConnecting"
-                    class="px-3 py-1.5 text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded-lg hover:bg-green-200 dark:hover:bg-green-900/50 transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                    :title="t('postgresConfig.connect')"
-                  >
-                    <svg v-if="isConnecting" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <svg v-else class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                    {{ t('postgresConfig.connect') }}
-                  </button>
-                  <!-- Bouton Retirer de la liste : seulement si la base est dans la config -->
-                  <button
-                    v-if="isDatabaseInConfig(db.name, selectedPort)"
-                    @click="removeDatabaseFromList(db.name)"
-                    class="px-3 py-1.5 text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded-lg hover:bg-yellow-200 dark:hover:bg-yellow-900/50 transition-colors flex items-center gap-1"
-                    :title="t('postgresConfig.removeFromList')"
-                  >
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                    </svg>
-                    {{ t('postgresConfig.removeFromList') }}
-                  </button>
-                  <!-- Bouton Supprimer : désactivé pour les bases système -->
-                  <button
-                    v-if="!isSystemDatabase(db.name)"
-                    @click="dropDatabase(db.name)"
-                    class="px-3 py-1.5 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors flex items-center gap-1"
-                    :title="t('postgresConfig.drop')"
-                  >
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                    {{ t('postgresConfig.drop') }}
-                  </button>
-                  <div v-else class="px-3 py-1.5 text-xs bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 rounded-lg flex items-center gap-1 cursor-not-allowed" :title="t('postgresConfig.systemDatabase')">
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                    </svg>
-                    {{ t('postgresConfig.systemDatabase') }}
-                  </div>
-                </div>
-              </div>
+    <div v-else-if="configInfo" class="space-y-6">
+      <!-- Consolidated Overview Bar -->
+      <div class="bg-gray-50/50 dark:bg-zinc-800/30 rounded-2xl border border-gray-100 dark:border-zinc-800/60 p-1.5 flex flex-wrap md:flex-nowrap items-stretch gap-1.5 overflow-hidden">
+        <!-- Versions Group -->
+        <div class="flex-1 min-w-[200px] bg-white dark:bg-zinc-900/40 rounded-xl p-3 border border-gray-100 dark:border-zinc-800/50 shadow-sm">
+          <div class="flex flex-col gap-2">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] font-bold text-gray-400 dark:text-zinc-500 uppercase tracking-tight">{{ t('postgresConfig.serverVersion') }}</span>
+            </div>
+            <div class="flex items-baseline gap-2">
+              <span class="text-lg font-black text-gray-900 dark:text-white leading-none tracking-tight">{{ configInfo.version }}</span>
+            </div>
+            <div class="pt-2 mt-1 border-t border-gray-50 dark:border-zinc-800/50 flex items-center justify-between">
+              <span class="text-[10px] font-bold text-gray-400 dark:text-zinc-500 uppercase tracking-tight">{{ t('postgresConfig.clientVersion') }}</span>
+              <span class="text-xs font-bold text-gray-700 dark:text-zinc-300">{{ configInfo.binVersion || '-' }}</span>
             </div>
           </div>
         </div>
+
+        <!-- Path Group -->
+        <div class="flex-[2] min-w-[300px] bg-white dark:bg-zinc-900/40 rounded-xl p-3 border border-gray-100 dark:border-zinc-800/50 shadow-sm flex flex-col justify-between">
+          <span class="text-[10px] font-bold text-gray-400 dark:text-zinc-500 uppercase tracking-tight mb-2">{{ t('postgresConfig.dataDirectory') }}</span>
+          <div v-if="configInfo.dataDirectory" class="flex items-center gap-2 group/path">
+            <div class="flex-1 bg-gray-50/80 dark:bg-zinc-950/40 px-3 py-2 rounded-lg border border-gray-200/50 dark:border-zinc-800/50 overflow-hidden">
+              <code class="text-[11px] text-gray-600 dark:text-zinc-400 truncate block font-mono">{{ configInfo.dataDirectory }}</code>
+            </div>
+            <button 
+              @click="copyToClipboard(configInfo.dataDirectory)"
+              class="p-2 bg-white dark:bg-zinc-800 text-gray-400 hover:text-blue-500 dark:text-zinc-500 dark:hover:text-blue-400 rounded-lg border border-gray-200 dark:border-zinc-700 transition-colors shadow-sm active:scale-95"
+              :title="t('postgresConfig.copyPath')"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+              </svg>
+            </button>
+          </div>
+          <div v-else class="text-sm text-gray-400 italic">No data directory found</div>
+        </div>
       </div>
 
-      <!-- Active Connections Section -->
-      <div class="border border-gray-200 dark:border-zinc-700 rounded-xl overflow-hidden bg-white dark:bg-zinc-900">
-        <button
-          @click="expandedSections.connections = !expandedSections.connections"
-          class="w-full px-4 py-3 bg-gray-50 dark:bg-zinc-800/50 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors flex items-center justify-between group"
-        >
-          <div class="flex items-center gap-2">
-            <svg class="w-4 h-4 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
-            </svg>
-            <span class="text-sm font-medium text-gray-900 dark:text-white">{{ t('postgresConfig.activeConnections') }}</span>
-            <span class="text-xs text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 px-2 py-0.5 rounded-full">
-              {{ configInfo.activeConnections.length }}
-            </span>
-          </div>
-          <svg 
-            class="w-4 h-4 text-gray-400 dark:text-gray-500 transition-transform"
-            :class="{ 'rotate-180': expandedSections.connections }"
-            fill="none" viewBox="0 0 24 24" stroke="currentColor"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-        
-        <div v-if="expandedSections.connections" class="border-t border-border">
-          <div v-if="configInfo.activeConnections.length === 0" class="p-8 text-center text-gray-500">
-            {{ t('postgresConfig.noConnections') }}
-          </div>
-          <div v-else class="divide-y divide-border overflow-x-auto">
-            <table class="w-full">
-              <thead class="bg-surface">
-                <tr>
-                  <th class="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">{{ t('postgresConfig.pid') }}</th>
-                  <th class="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">{{ t('postgresConfig.database') }}</th>
-                  <th class="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">{{ t('postgresConfig.user') }}</th>
-                  <th class="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">{{ t('postgresConfig.state') }}</th>
-                  <th class="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">{{ t('postgresConfig.query') }}</th>
-                  <th class="px-4 py-2 text-left text-xs font-semibold text-gray-500 uppercase">{{ t('postgresConfig.actions') }}</th>
+        <div v-show="expandedSections.databases" class="px-5 pb-5 pt-2 max-h-[500px] overflow-y-auto custom-scrollbar">
+          <div class="bg-white dark:bg-zinc-900/60 rounded-xl border border-gray-100 dark:border-zinc-800/40 overflow-hidden shadow-sm">
+            <table class="w-full text-left">
+              <thead>
+                <tr class="bg-gray-50/50 dark:bg-zinc-800/50 border-b border-gray-100 dark:border-zinc-800/50">
+                  <th class="px-4 py-3 text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest">{{ t('postgresConfig.name') || 'Name' }}</th>
+                  <th class="px-4 py-3 text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest">{{ t('postgresConfig.size') }}</th>
+                  <th class="px-4 py-3 text-right text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest">{{ t('postgresConfig.actions') }}</th>
                 </tr>
               </thead>
-              <tbody>
-                <tr
-                  v-for="conn in configInfo.activeConnections"
-                  :key="conn.pid"
-                  class="hover:bg-gray-50 dark:hover:bg-zinc-800/50 transition-colors"
-                >
-                  <td class="px-4 py-2 text-sm font-mono">{{ conn.pid }}</td>
-                  <td class="px-4 py-2 text-sm">{{ conn.database }}</td>
-                  <td class="px-4 py-2 text-sm">{{ conn.username }}</td>
-                  <td class="px-4 py-2 text-sm">
-                    <span :class="[
-                      'px-2 py-1 text-xs rounded-full',
-                      conn.state === 'active' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' :
-                      conn.state === 'idle' ? 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300' :
-                      'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400'
-                    ]">
-                      {{ conn.state }}
-                    </span>
+              <tbody class="divide-y divide-gray-50 dark:divide-zinc-800/50">
+                <tr v-for="db in configInfo.databases" :key="db.name" class="hover:bg-gray-50/50 dark:hover:bg-zinc-800/20 transition-colors">
+                  <td class="px-4 py-3">
+                    <div class="flex items-center gap-2">
+                      <div :class="['w-1.5 h-1.5 rounded-full shrink-0', db.hasConnections ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-gray-300 dark:bg-zinc-700']"></div>
+                      <span class="text-sm font-bold text-gray-900 dark:text-white truncate max-w-[200px]" :title="db.name">{{ db.name }}</span>
+                    </div>
                   </td>
-                  <td class="px-4 py-2 text-sm font-mono text-gray-500 max-w-xs truncate" :title="conn.query">
-                    {{ truncateQuery(conn.query) }}
-                  </td>
-                  <td class="px-4 py-2">
-                    <button
-                      @click="killConnection(conn.pid)"
-                      class="px-3 py-1 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors"
-                    >
-                      {{ t('postgresConfig.kill') }}
-                    </button>
+                  <td class="px-4 py-3 text-[11px] font-black font-mono text-gray-400 dark:text-zinc-500">{{ db.size }}</td>
+                  <td class="px-4 py-3 text-right">
+                    <div class="flex items-center justify-end gap-1.5">
+                      <button 
+                        v-if="db.isActive" 
+                        @click="disconnectDatabase(db.name)" 
+                        class="p-1.5 text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-500/10 hover:bg-blue-500/20 rounded-lg transition-colors"
+                        :title="t('postgresConfig.connections')"
+                      >
+                        {{ t('postgresConfig.disconnect') }}
+                      </button>
+                      <button
+                        v-else
+                        @click="testDatabase(db.name)" 
+                        class="p-1.5 text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-500/10 hover:bg-blue-500/20 rounded-lg transition-colors"
+                        :title="t('postgresConfig.connections')"
+                      >
+                        {{ t('postgresConfig.connections') }}
+                      </button>
+                      <button 
+                        v-if="!isSystemDatabase(db.name)" 
+                        @click="dropDatabase(db.name)" 
+                        class="p-1.5 text-rose-600 dark:text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 rounded-lg transition-colors"
+                        :title="t('postgresConfig.drop')"
+                      >
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               </tbody>
             </table>
+          </div>
+        </div>
+
+      <!-- Active Connections Section -->
+      <div class="bg-gray-50/50 dark:bg-zinc-800/30 rounded-2xl border border-gray-100 dark:border-zinc-800/60 overflow-hidden">
+        <button
+          @click="expandedSections.connections = !expandedSections.connections"
+          class="w-full px-5 py-4 flex items-center justify-between group transition-colors hover:bg-white/40 dark:hover:bg-zinc-800/20"
+        >
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center border border-emerald-500/10">
+              <svg class="w-4 h-4 text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728m-9.9-2.828a5 5 0 117.07 0m-7.07 1.414L10 14m0 0l-2 2m2-2l2 2" />
+              </svg>
+            </div>
+            <span class="text-sm font-bold text-gray-900 dark:text-white">{{ t('postgresConfig.activeConnections') }}</span>
+            <span class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-black border border-emerald-500/10">
+              {{ configInfo.activeConnections.length }}
+            </span>
+          </div>
+          <div class="w-6 h-6 rounded-full bg-gray-200/50 dark:bg-zinc-700/50 flex items-center justify-center transition-transform duration-300" :class="{ 'rotate-180': expandedSections.connections }">
+            <svg class="w-3 h-3 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+          </div>
+        </button>
+        
+        <div v-show="expandedSections.connections" class="px-5 pb-5">
+          <div v-if="configInfo.activeConnections.length === 0" class="py-12 text-center">
+            <p class="text-sm text-gray-400 italic">{{ t('postgresConfig.noConnections') }}</p>
+          </div>
+          <div v-else class="bg-white dark:bg-zinc-900/60 rounded-xl border border-gray-100 dark:border-zinc-800/40 overflow-hidden shadow-sm">
+            <div class="overflow-x-auto custom-scrollbar">
+              <table class="w-full">
+                <thead>
+                  <tr class="bg-gray-50/50 dark:bg-zinc-800/50 border-b border-gray-100 dark:border-zinc-800/50">
+                    <th class="px-4 py-3 text-left text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest">{{ t('postgresConfig.pid') }}</th>
+                    <th class="px-4 py-3 text-left text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest">{{ t('postgresConfig.database') }}</th>
+                    <th class="px-4 py-3 text-left text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest">{{ t('postgresConfig.user') }}</th>
+                    <th class="px-4 py-3 text-left text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest">{{ t('postgresConfig.state') }}</th>
+                    <th class="px-4 py-3 text-left text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest">{{ t('postgresConfig.query') }}</th>
+                    <th class="px-4 py-3 text-right text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest">{{ t('postgresConfig.actions') }}</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-50 dark:divide-zinc-800/50">
+                  <tr
+                    v-for="conn in configInfo.activeConnections"
+                    :key="conn.pid"
+                    class="hover:bg-gray-50/50 dark:hover:bg-zinc-800/20 transition-colors"
+                  >
+                    <td class="px-4 py-3 text-[11px] font-mono font-bold text-gray-500 dark:text-zinc-400">#{{ conn.pid }}</td>
+                    <td class="px-4 py-3 text-xs font-bold text-gray-900 dark:text-white">{{ conn.database }}</td>
+                    <td class="px-4 py-3 text-xs font-medium text-gray-600 dark:text-zinc-300">{{ conn.username }}</td>
+                    <td class="px-4 py-3 text-xs">
+                      <span :class="[
+                        'px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-tight',
+                        conn.state === 'active' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' :
+                        conn.state === 'idle' ? 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400' :
+                        'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                      ]">
+                        {{ conn.state }}
+                      </span>
+                    </td>
+                    <td class="px-4 py-3 text-[11px] font-mono text-gray-500 dark:text-zinc-500 max-w-xs truncate" :title="conn.query">
+                      {{ truncateQuery(conn.query) }}
+                    </td>
+                    <td class="px-4 py-3 text-right">
+                      <button
+                        @click="killConnection(conn.pid)"
+                        class="px-2.5 py-1 text-[10px] font-bold bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 rounded-md transition-all uppercase tracking-tight"
+                      >
+                        {{ t('postgresConfig.kill') }}
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
@@ -563,43 +543,53 @@ onMounted(() => {
     <!-- Password Modal -->
     <div
       v-if="showPasswordModal"
-      class="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm"
+      class="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-zinc-950/40 backdrop-blur-md"
       @click.self="cancelPasswordModal"
     >
-      <div class="bg-white dark:bg-zinc-900 rounded-2xl p-6 border border-border shadow-2xl max-w-md w-full mx-4">
-        <h3 class="text-lg font-semibold mb-4">{{ t('postgresConfig.passwordRequired') }}</h3>
-        <p class="text-sm text-gray-500 mb-4">
+      <div class="bg-white dark:bg-zinc-900 rounded-[2rem] p-8 border border-gray-100 dark:border-zinc-800 shadow-2xl max-w-sm w-full animate-in zoom-in-95 duration-200">
+        <div class="w-16 h-16 rounded-2xl bg-amber-500/10 flex items-center justify-center border border-amber-500/10 mx-auto mb-6">
+          <svg class="w-8 h-8 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+          </svg>
+        </div>
+        
+        <h3 class="text-xl font-black text-center text-gray-900 dark:text-white mb-2">{{ t('postgresConfig.passwordRequired') }}</h3>
+        <p class="text-xs text-gray-500 dark:text-zinc-400 text-center mb-8 leading-relaxed">
           {{ t('postgresConfig.passwordRequiredMessage', { name: passwordModalDbName }) }}
         </p>
-        <div class="mb-4">
-          <label class="block text-sm font-medium mb-2">{{ t('postgresConfig.password') }}</label>
-          <input
-            v-model="passwordInput"
-            type="password"
-            class="w-full px-4 py-2 bg-surface border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-            :placeholder="t('postgresConfig.passwordPlaceholder')"
-            @keyup.enter="testConnectionWithPassword"
-            autofocus
-          />
-        </div>
-        <div class="flex gap-3 justify-end">
-          <button
-            @click="cancelPasswordModal"
-            class="px-4 py-2 bg-gray-100 dark:bg-zinc-800 hover:bg-gray-200 dark:hover:bg-zinc-700 rounded-lg text-sm font-medium transition-colors"
-          >
-            {{ t('common.cancel') }}
-          </button>
-          <button
-            @click="testConnectionWithPassword"
-            :disabled="isConnecting || !passwordInput"
-            class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            <svg v-if="isConnecting" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            {{ t('postgresConfig.connect') }}
-          </button>
+
+        <div class="space-y-4">
+          <div class="space-y-1.5">
+            <label class="text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest px-1">{{ t('postgresConfig.password') }}</label>
+            <input
+              v-model="passwordInput"
+              type="password"
+              class="w-full h-12 px-4 bg-gray-50 dark:bg-zinc-950/40 border-2 border-transparent focus:border-blue-500/20 dark:focus:border-blue-400/20 focus:bg-white dark:focus:bg-zinc-900 rounded-xl transition-all outline-none text-sm font-bold placeholder:text-gray-400/60 dark:placeholder:text-zinc-600"
+              :placeholder="t('postgresConfig.passwordPlaceholder')"
+              @keyup.enter="testConnectionWithPassword"
+              autofocus
+            />
+          </div>
+          
+          <div class="flex gap-3 pt-2">
+            <button
+              @click="cancelPasswordModal"
+              class="flex-1 h-12 bg-gray-50 dark:bg-zinc-800/40 text-gray-500 dark:text-zinc-400 rounded-xl text-xs font-bold hover:bg-gray-100 dark:hover:bg-zinc-800/60 transition-colors"
+            >
+              {{ t('common.cancel') }}
+            </button>
+            <button
+              @click="testConnectionWithPassword"
+              :disabled="isConnecting || !passwordInput"
+              class="flex-[2] h-12 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-blue-600/20"
+            >
+              <svg v-if="isConnecting" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              {{ t('postgresConfig.connect') }}
+            </button>
+          </div>
         </div>
       </div>
     </div>

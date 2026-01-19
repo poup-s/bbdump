@@ -15,7 +15,7 @@ const { t } = useI18n();
 const tables = ref<any[]>([]);
 const selectedTable = ref<string | null>(null);
 const activeTab = ref('data'); // data, relations, schema
-const viewMode = ref('explorer'); // explorer, visualizer
+const viewMode = ref('visualizer'); // explorer, visualizer
 const loading = ref(false);
 const error = ref<string | null>(null);
 
@@ -37,9 +37,6 @@ const loadTables = async () => {
     
     const result = await ipcRenderer.invoke('get-db-tables', { db: dbConfig });
     tables.value = result.tables;
-    if (tables.value.length > 0 && !selectedTable.value) {
-      selectedTable.value = tables.value[0].name;
-    }
   } catch (err: any) {
     console.error('Error loading tables:', err);
     error.value = err.message || 'Failed to connect to database';
