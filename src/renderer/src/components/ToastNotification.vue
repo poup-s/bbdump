@@ -2,6 +2,10 @@
 import { useToast } from '../composables/useToast';
 
 const { toasts, removeToast } = useToast();
+
+const handleAction = (url: string) => {
+  window.open(url, '_blank');
+};
 </script>
 
 <template>
@@ -55,6 +59,18 @@ const { toasts, removeToast } = useToast();
             <!-- Content -->
             <div class="flex-1">
               <p class="font-medium text-gray-900 dark:text-white leading-relaxed">{{ toast.message }}</p>
+              
+              <!-- Action Button for Updates -->
+              <button 
+                v-if="toast.actionUrl" 
+                @click="handleAction(toast.actionUrl)"
+                class="mt-2 text-xs px-3 py-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors flex items-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-blue-400 font-semibold"
+              >
+                <span>{{ toast.type === 'info' && toast.message.includes('update') ? 'Update Now' : 'Open' }}</span>
+                <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </button>
             </div>
 
             <!-- Close Button -->

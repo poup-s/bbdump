@@ -1,6 +1,6 @@
 {
   "name": "bbdump",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Cross-platform PostgreSQL backup manager with automated scheduling, encryption, and modern UI",
   "main": "dist/main/main.js",
   "scripts": {
@@ -8,7 +8,7 @@
     "build:renderer": "vite build",
     "dev": "npm run build && electron .",
     "dist": "npm run build && electron-builder",
-    "dmg": "npm run build && electron-builder --mac dmg",
+    "dmg": "node scripts/build-dmg.js",
     "dmg:universal": "npm run build && electron-builder --mac --universal dmg",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win",
@@ -32,12 +32,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/poup-s/bbdump.git"
+    "url": "https://github.com/poup-s/bbDump-app.git"
   },
   "bugs": {
-    "url": "https://github.com/poup-s/bbdump/issues"
+    "url": "https://github.com/poup-s/bbDump-app/issues"
   },
-  "homepage": "https://github.com/poup-s/bbdump#readme",
+  "homepage": "https://github.com/poup-s/bbDump-app#readme",
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.17",
     "@types/node": "^20.10.0",

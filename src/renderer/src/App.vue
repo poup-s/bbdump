@@ -75,11 +75,24 @@ const loadAppInfo = async () => {
 
 const checkForUpdates = async () => {
   try {
+    store.checkingUpdate = true;
     const result = await ipcRenderer.invoke('check-for-updates');
+    store.checkingUpdate = false;
+    
     if (result.updateAvailable) {
-      addToast(t('settings.updateAvailable', { version: result.version }), 'info');
+      store.updateAvailable = true;
+      store.updateDetails = {
+        version: result.version,
+        url: result.url,
+        releaseNotes: result.releaseNotes
+      };
+      addToast(t('settings.updateAvailable', { version: result.version }), 'info', result.url);
+    } else {
+      store.updateAvailable = false;
+      store.updateDetails = null;
     }
   } catch (error) {
+    store.checkingUpdate = false;
     console.error('Error checking for updates:', error);
   }
 };

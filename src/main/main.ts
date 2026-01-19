@@ -13,6 +13,7 @@ import { registerSystemHandlers } from './ipc/systemIpc';
 import { registerDatabaseCreationHandlers } from './ipc/databaseCreationIpc';
 
 let mainWindow: BrowserWindow | null = null;
+let handlersRegistered = false;
 
 // Créer la fenêtre principale
 function createWindow(): void {
@@ -81,9 +82,12 @@ function createWindow(): void {
     }
   });
 
-  // Register Window-dependent handlers
-  registerSystemHandlers(mainWindow);
-  registerDatabaseCreationHandlers(mainWindow);
+  // Register Window-dependent handlers (only once)
+  if (!handlersRegistered) {
+    registerSystemHandlers(mainWindow);
+    registerDatabaseCreationHandlers(mainWindow);
+    handlersRegistered = true;
+  }
 }
 
 // Initialisation de l'application

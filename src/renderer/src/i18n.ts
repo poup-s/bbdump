@@ -357,6 +357,7 @@ export const translations = {
             checking: 'Checking...',
             updateAvailable: '🎉 New version available: {version}',
             noUpdateAvailable: '✓ You are using the latest version',
+            upToDate: '✓ You are using the latest version',
             updateError: 'Error checking for updates'
         },
         postgresConfig: {
@@ -1059,6 +1060,7 @@ export const translations = {
             checking: 'Vérification...',
             updateAvailable: '🎉 Nouvelle version disponible : {version}',
             noUpdateAvailable: '✓ Vous utilisez la dernière version',
+            upToDate: '✓ Vous utilisez la dernière version',
             updateError: 'Erreur lors de la vérification'
         },
         postgresConfig: {

@@ -8,10 +8,11 @@ export const store = reactive({
     scheduledTasks: [] as ScheduledTask[],
     isBackingUp: false,
     appVersion: '1.0.0', // Will be updated from IPC
-    appAuthor: 'Sebastien Poupineau',
+    appAuthor: 'Poups',
     latestVersion: null as string | null,
     updateAvailable: false,
     checkingUpdate: false,
+    updateDetails: null as { version: string; url: string; releaseNotes: string } | null,
 
     // Modal states
     showAddModal: false,
