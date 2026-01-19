@@ -6,9 +6,10 @@ const props = defineProps<{
   tables: any[];
   selectedTable: string | null;
   loading?: boolean;
+  viewMode: string;
 }>();
 
-const emit = defineEmits(['select']);
+const emit = defineEmits(['select', 'visualize']);
 const { t } = useI18n();
 
 const filter = ref('');
@@ -22,7 +23,29 @@ const filteredTables = computed(() => {
 
 <template>
   <div class="w-72 border-r border-gray-200 dark:border-white/10 bg-white/50 dark:bg-surface/30 backdrop-blur-xl flex flex-col">
-    <div class="p-4 border-b border-gray-200 dark:border-white/10">
+    <div class="p-4 border-b border-gray-200 dark:border-white/10 space-y-4">
+      <!-- Visualizer Link -->
+      <button 
+        @click="emit('visualize')"
+        :class="[
+          'w-full px-3 py-2 text-left text-sm flex items-center gap-2 rounded-lg transition-all duration-200 group',
+          viewMode === 'visualizer' 
+            ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20' 
+            : 'text-gray-600 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-gray-200'
+        ]"
+      >
+        <svg 
+          class="w-4 h-4 transition-transform duration-300 group-hover:scale-110" 
+          :class="viewMode === 'visualizer' ? 'text-white' : 'text-blue-500'"
+          fill="none" 
+          viewBox="0 0 24 24" 
+          stroke="currentColor"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+        </svg>
+        <span class="font-medium">{{ t('viewer.visualizer') }}</span>
+      </button>
+
       <div class="relative">
         <input
           v-model="filter"
@@ -42,7 +65,7 @@ const filteredTables = computed(() => {
           <div class="absolute inset-0 border-4 border-blue-500/30 rounded-full"></div>
           <div class="absolute inset-0 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
         </div>
-        <p class="text-sm text-gray-500">Loading tables...</p>
+        <p class="text-sm text-gray-500">{{ t('viewer.loadingTables') }}</p>
       </div>
       
       <!-- Tables List -->
@@ -74,7 +97,7 @@ const filteredTables = computed(() => {
                   : 'bg-black/5 dark:bg-white/5 text-gray-500 group-hover:bg-black/10 dark:group-hover:bg-white/10 group-hover:text-gray-600 dark:group-hover:text-gray-400'
               ]"
             >
-              {{ table.row_count || 0 }}
+              {{ Math.max(0, table.row_count || 0) }}
             </span>
           </button>
         </li>

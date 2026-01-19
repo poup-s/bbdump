@@ -101,13 +101,13 @@ const handleSort = (columnName: string) => {
 
 const deleteRow = (row: any) => {
   if (!primaryKey.value) {
-    addToast('Cannot delete row: No primary key defined', 'error');
+    addToast(t('viewer.noPrimaryKey'), 'error');
     return;
   }
 
   const pkValue = row[primaryKey.value];
   if (pkValue === null || pkValue === undefined) {
-    addToast('Cannot delete row: Primary key value is missing', 'error');
+    addToast(t('viewer.pkValueMissing'), 'error');
     return;
   }
 
@@ -138,7 +138,7 @@ const deleteRow = (row: any) => {
         addToast(t('viewer.rowDeleted'), 'success');
         loadData();
       } catch (err: any) {
-        addToast('Error deleting row: ' + err.message, 'error');
+        addToast(t('viewer.deleteErrorDetail', { error: err.message }), 'error');
       }
     }
   });
@@ -233,7 +233,7 @@ const saveChanges = async () => {
         loadData();
       } catch (err: any) {
         console.error('Error saving changes:', err);
-        addToast('Error saving changes: ' + err.message, 'error');
+        addToast(t('viewer.saveErrorDetail', { error: err.message }), 'error');
       } finally {
         saving.value = false;
       }
@@ -317,7 +317,7 @@ onMounted(() => {
           @click="toggleEditMode"
           :disabled="!primaryKey"
           class="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white rounded-lg hover:bg-black/5 dark:hover:bg-white/10 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          :title="!primaryKey ? 'No primary key - editing disabled' : ''"
+          :title="!primaryKey ? t('viewer.noPkEditing') : ''"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -355,7 +355,7 @@ onMounted(() => {
           @click="showAddModal = true"
           :disabled="!primaryKey"
           class="px-3 py-1.5 text-sm font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-500/10 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          :title="!primaryKey ? 'No primary key - adding disabled' : ''"
+          :title="!primaryKey ? t('viewer.noPkAdding') : ''"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
@@ -412,7 +412,7 @@ onMounted(() => {
             >
               <div class="flex items-center gap-1.5">
                 {{ col.column_name }}
-                <span v-if="col.is_primary" class="text-yellow-500 text-[10px]" title="Primary Key">🔑</span>
+                <span v-if="col.is_primary" class="text-yellow-500 text-[10px]" :title="t('viewer.primaryKey')">🔑</span>
                 <span v-if="sortBy === col.column_name" class="text-blue-500 dark:text-blue-400">
                   {{ sortOrder === 'asc' ? '↑' : '↓' }}
                 </span>
@@ -447,7 +447,7 @@ onMounted(() => {
                 @click="deleteRow(row)"
                 class="text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 p-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-white dark:bg-transparent border border-gray-200 dark:border-transparent shadow-sm dark:shadow-none"
                 :disabled="!primaryKey"
-                :title="!primaryKey ? 'No Primary Key' : t('viewer.delete')"
+                :title="!primaryKey ? t('viewer.noPrimaryKey') : t('viewer.delete')"
               >
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />

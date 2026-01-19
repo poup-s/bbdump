@@ -154,7 +154,7 @@ export async function getDatabaseTables(params: ConnectionParams) {
       column_count: parseInt(row.column_count),
       // On utilise l'estimation comme row_count pour l'affichage instantané
       // Pour une valeur exacte, il faudrait une requête séparée à la demande
-      row_count: parseInt(row.row_count_estimate)
+      row_count: Math.max(0, parseInt(row.row_count_estimate) || 0)
     }));
 
     return { tables };
@@ -530,6 +530,82 @@ export async function getEnumValues(params: ConnectionParams & {
 
     return {
       values: result.rows.map(row => row.value)
+    };
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Récupère le schéma complet de la base de données (tables, colonnes, relations)
+ */
+export async function getDatabaseFullSchema(params: ConnectionParams) {
+  const client = await getClient(params);
+
+  try {
+    // 1. Récupérer toutes les tables
+    const tablesQuery = `
+      SELECT table_name as name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+      AND table_type = 'BASE TABLE'
+      ORDER BY table_name;
+    `;
+    const tablesResult = await client.query(tablesQuery);
+
+    // 2. Récupérer toutes les colonnes de toutes les tables public
+    const columnsQuery = `
+      SELECT
+        table_name,
+        column_name,
+        data_type,
+        is_nullable,
+        column_default
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+      ORDER BY table_name, ordinal_position;
+    `;
+    const columnsResult = await client.query(columnsQuery);
+
+    // 3. Récupérer toutes les clés primaires
+    const pkQuery = `
+      SELECT 
+        tc.table_name, 
+        kcu.column_name
+      FROM information_schema.table_constraints tc
+      JOIN information_schema.key_column_usage kcu 
+        ON tc.constraint_name = kcu.constraint_name 
+        AND tc.table_schema = kcu.table_schema
+      WHERE tc.constraint_type = 'PRIMARY KEY'
+      AND tc.table_schema = 'public';
+    `;
+    const pkResult = await client.query(pkQuery);
+
+    // 4. Récupérer toutes les clés étrangères
+    const fkQuery = `
+      SELECT
+        tc.table_name as source_table,
+        kcu.column_name as source_column,
+        ccu.table_name as target_table,
+        ccu.column_name as target_column,
+        tc.constraint_name
+      FROM information_schema.table_constraints tc
+      JOIN information_schema.key_column_usage kcu
+        ON tc.constraint_name = kcu.constraint_name
+        AND tc.table_schema = kcu.table_schema
+      JOIN information_schema.constraint_column_usage ccu
+        ON ccu.constraint_name = tc.constraint_name
+        AND ccu.table_schema = tc.table_schema
+      WHERE tc.constraint_type = 'FOREIGN KEY'
+      AND tc.table_schema = 'public';
+    `;
+    const fkResult = await client.query(fkQuery);
+
+    return {
+      tables: tablesResult.rows,
+      columns: columnsResult.rows,
+      primaryKeys: pkResult.rows,
+      foreignKeys: fkResult.rows
     };
   } finally {
     client.release();

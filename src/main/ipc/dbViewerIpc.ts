@@ -62,6 +62,17 @@ export function registerDbViewerHandlers() {
         }
     });
 
+    ipcMain.handle('get-db-full-schema', async (_, params: { db: { name: string } }) => {
+        try {
+            logger.info(`Getting full schema for database: ${params.db.name}`);
+            const dbConfig = getDbConfig(params.db.name);
+            return await dbViewer.getDatabaseFullSchema(dbConfig);
+        } catch (error: any) {
+            logger.error(`Error getting database full schema: ${error.message || error}`);
+            throw error;
+        }
+    });
+
     ipcMain.handle('get-table-schema', async (_, params: { db: { name: string }, table: string }) => {
         try {
             logger.info(`Getting schema for table: ${params.table}`);
