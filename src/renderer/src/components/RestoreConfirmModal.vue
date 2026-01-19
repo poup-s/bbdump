@@ -43,20 +43,47 @@ const restore = async () => {
   error.value = '';
   
   try {
+    const target = {
+      name: store.restoreTargetDb.name,
+      host: store.restoreTargetDb.host,
+      port: store.restoreTargetDb.port,
+      user: store.restoreTargetDb.user,
+      password: store.restoreTargetDb.password,
+      connectionString: store.restoreTargetDb.connectionString
+    };
+
+    // If it's a new database, create it first
+    if ((store.restoreTargetDb as any).isNew) {
+      const createResult = await ipcRenderer.invoke('create-local-database', {
+        name: store.restoreTargetDb.name,
+        port: store.restoreTargetDb.port,
+        password: store.restoreTargetDb.password,
+        enabled: false // Explicitly disable automatic backups for restored databases
+      });
+
+      if (!createResult.success || !createResult.database) {
+        throw new Error(createResult.error || 'Failed to create database');
+      }
+
+      // Update target info with created database details (like the correct user)
+      target.user = createResult.database.user;
+      target.password = createResult.database.password;
+
+      // Ensure the newly created database is added to the active databases list in the UI
+      const config = await ipcRenderer.invoke('get-config');
+      store.databases = config.databases;
+      
+      // Mark as no longer "new" so it's treated as an existing DB from now on
+      (store.restoreTargetDb as any).isNew = false;
+    }
+
     const payload = {
       backupFile: store.restoreBackupFile,
-      target: {
-        name: store.restoreTargetDb.name,
-        host: store.restoreTargetDb.host,
-        port: store.restoreTargetDb.port,
-        user: store.restoreTargetDb.user,
-        password: store.restoreTargetDb.password,
-        connectionString: store.restoreTargetDb.connectionString
-      }
+      target
     };
     
     await ipcRenderer.invoke('restore-backup', payload);
-    addToast(t('toasts.restoreStarted'), 'success');
+    addToast(t('toasts.restoreStarted', { name: target.name }), 'success');
     close();
   } catch (error: any) {
     addToast('Error starting restore: ' + error.message, 'error');
@@ -89,10 +116,10 @@ const handleInput = () => {
   >
     <div v-if="store.showRestoreConfirmModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div 
-        class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-md w-full border border-border overflow-hidden"
+        class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-md w-full border border-border overflow-hidden flex flex-col max-h-[92vh]"
         @click.stop
       >
-        <div class="p-6">
+        <div class="p-6 overflow-y-auto flex-1 custom-scrollbar">
           <div v-if="!isLoading">
             <div class="w-12 h-12 bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-full flex items-center justify-center mb-4">
               <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -100,12 +127,14 @@ const handleInput = () => {
               </svg>
             </div>
             
-            <h3 class="text-xl font-bold mb-2 text-red-600 dark:text-red-400">
-              {{ t('modal.restoreConfirmTitle') }}
+            <h3 :class="['text-xl font-bold mb-2', (store.restoreTargetDb as any)?.isNew ? 'text-blue-600 dark:text-blue-400' : 'text-red-600 dark:text-red-400']">
+              {{ (store.restoreTargetDb as any)?.isNew ? t('modal.restoreConfirmCreateTitle') : t('modal.restoreConfirmTitle') }}
             </h3>
             
             <p class="text-gray-700 dark:text-gray-300 mb-4">
-              {{ t('modal.restoreConfirmMessage') }}
+              {{ (store.restoreTargetDb as any)?.isNew 
+                 ? t('modal.restoreConfirmCreateMessage', { name: store.restoreTargetDb?.name }) 
+                 : t('modal.restoreConfirmMessage') }}
             </p>
 
             <!-- Database Info -->
@@ -122,7 +151,7 @@ const handleInput = () => {
             <!-- Confirmation Input -->
             <div class="mb-4">
               <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                {{ t('modal.restoreConfirmMessage') }}
+                {{ t('modal.restoreConfirmPlaceholder') }}
               </label>
               <input
                 v-model="confirmInput"
@@ -142,15 +171,18 @@ const handleInput = () => {
             </div>
 
             <!-- Warning -->
-            <div class="bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200 p-3 rounded-lg text-sm border border-red-200 dark:border-red-800/50">
+            <div :class="['p-3 rounded-lg text-sm border', (store.restoreTargetDb as any)?.isNew ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-200 border-blue-200 dark:border-blue-800/50' : 'bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200 border-red-200 dark:border-red-800/50']">
               <div class="flex items-start gap-2">
-                <svg class="w-5 h-5 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg v-if="(store.restoreTargetDb as any)?.isNew" class="w-5 h-5 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <svg v-else class="w-5 h-5 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
                 <div>
-                  <div class="font-semibold mb-1">{{ t('modal.restoreWarning') }}</div>
+                  <div class="font-semibold mb-1">{{ (store.restoreTargetDb as any)?.isNew ? t('common.info') : t('modal.restoreWarning') }}</div>
                   <div class="text-xs opacity-90">
-                    {{ t('modal.restoreStep1') }}
+                    {{ (store.restoreTargetDb as any)?.isNew ? t('modal.restoreConfirmCreateWarning') : t('modal.restoreStep1') }}
                   </div>
                 </div>
               </div>
@@ -170,16 +202,16 @@ const handleInput = () => {
           >
             {{ t('common.cancel') }}
           </button>
-          <button
-            @click="restore"
-            :disabled="!isConfirmValid"
-            class="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white transition-colors font-medium flex items-center gap-2"
-          >
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            {{ t('modal.restoreConfirmButton') }}
-          </button>
+            <button
+              @click="restore"
+              :disabled="!isConfirmValid"
+              :class="['px-4 py-2 rounded-xl text-white transition-colors font-medium flex items-center gap-2', (store.restoreTargetDb as any)?.isNew ? 'bg-blue-600 hover:bg-blue-700' : 'bg-red-600 hover:bg-red-700', !isConfirmValid ? 'disabled:bg-gray-400 disabled:cursor-not-allowed' : '']"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              {{ (store.restoreTargetDb as any)?.isNew ? t('modal.restoreConfirmCreateButton') : t('modal.restoreConfirmButton') }}
+            </button>
         </div>
       </div>
     </div>

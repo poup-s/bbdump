@@ -231,6 +231,11 @@ const scrollToExternal = () => {
     externalSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 };
+
+const openExtensions = (db: Database) => {
+  store.extensionsModalDb = db;
+  store.showExtensionsModal = true;
+};
 </script>
 
 <template>
@@ -362,6 +367,7 @@ const scrollToExternal = () => {
             @delete="deleteDatabase"
             @disconnect="disconnectDatabase"
             @copy-url="copyConnectionUrl"
+            @addons="openExtensions"
           />
         </div>
       </div>
@@ -391,6 +397,7 @@ const scrollToExternal = () => {
             @delete="deleteDatabase"
             @disconnect="disconnectDatabase"
             @copy-url="copyConnectionUrl"
+            @addons="openExtensions"
           />
         </div>
       </div>

@@ -235,4 +235,76 @@ export function registerDbViewerHandlers() {
             throw error;
         }
     });
+
+    ipcMain.handle('get-postgres-extensions', async (_, dbName: string, port: number = 5432) => {
+        try {
+            return await postgresConfig.listPostgresExtensions(dbName, port);
+        } catch (error: any) {
+            logger.error(`Error getting PostgreSQL extensions: ${error.message}`);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('install-postgres-extension', async (_, dbName: string, extensionName: string, port: number = 5432) => {
+        try {
+            return await postgresConfig.installExtension(dbName, extensionName, port);
+        } catch (error: any) {
+            logger.error(`Error installing PostgreSQL extension: ${error.message}`);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('uninstall-postgres-extension', async (_, dbName: string, extensionName: string, port: number = 5432) => {
+        try {
+            return await postgresConfig.uninstallExtension(dbName, extensionName, port);
+        } catch (error: any) {
+            logger.error(`Error uninstalling PostgreSQL extension: ${error.message}`);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('get-postgres-performance-stats', async (_, dbName: string, port: number = 5432) => {
+        try {
+            return await postgresConfig.getPostgresPerformanceStats(dbName, port);
+        } catch (error: any) {
+            logger.error(`Error getting PostgreSQL performance stats: ${error.message}`);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('reset-postgres-performance-stats', async (_, dbName: string, port: number = 5432) => {
+        try {
+            return await postgresConfig.resetPostgresPerformanceStats(dbName, port);
+        } catch (error: any) {
+            logger.error(`Error resetting PostgreSQL performance stats: ${error.message}`);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('restart-postgres', async (_) => {
+        try {
+            return await postgresConfig.restartPostgres();
+        } catch (error: any) {
+            logger.error(`Error restarting PostgreSQL: ${error.message}`);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('check-postgres-config', async (_, extensionName: string) => {
+        try {
+            return await postgresConfig.checkPostgresConfig(extensionName);
+        } catch (error: any) {
+            logger.error(`Error checking PostgreSQL config: ${error.message}`);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('fix-postgres-config', async (_, extensionName: string) => {
+        try {
+            return await postgresConfig.fixPostgresConfig(extensionName);
+        } catch (error: any) {
+            logger.error(`Error fixing PostgreSQL config: ${error.message}`);
+            throw error;
+        }
+    });
 }

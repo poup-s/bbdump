@@ -7,9 +7,10 @@ const props = defineProps<{
   selectedTable: string | null;
   loading?: boolean;
   viewMode: string;
+  isLocalBbdump?: boolean;
 }>();
 
-const emit = defineEmits(['select', 'visualize']);
+const emit = defineEmits(['select', 'visualize', 'performance']);
 const { t } = useI18n();
 
 const filter = ref('');
@@ -44,6 +45,29 @@ const filteredTables = computed(() => {
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
         </svg>
         <span class="font-medium">{{ t('viewer.visualizer') }}</span>
+      </button>
+
+      <!-- Performance Link -->
+      <button 
+        v-if="isLocalBbdump"
+        @click="emit('performance')"
+        :class="[
+          'w-full px-3 py-2 text-left text-sm flex items-center gap-2 rounded-lg transition-all duration-200 group',
+          viewMode === 'performance' 
+            ? 'bg-amber-600 text-white shadow-lg shadow-amber-500/20' 
+            : 'text-gray-600 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-gray-200'
+        ]"
+      >
+        <svg 
+          class="w-4 h-4 transition-transform duration-300 group-hover:scale-110" 
+          :class="viewMode === 'performance' ? 'text-white' : 'text-amber-500'"
+          fill="none" 
+          viewBox="0 0 24 24" 
+          stroke="currentColor"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+        <span class="font-medium">{{ t('viewer.performance') }}</span>
       </button>
 
       <div class="relative">

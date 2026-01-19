@@ -55,7 +55,6 @@ const showPasswordModal = ref(false);
 const passwordModalDbName = ref('');
 const passwordInput = ref('');
 const isConnecting = ref(false);
-
 const copyToClipboard = (text: string) => {
   navigator.clipboard.writeText(text);
   addToast(t('postgresConfig.pathCopied'), 'success');
@@ -130,6 +129,36 @@ const dropDatabase = async (dbName: string) => {
         }
       } catch (error: any) {
         addToast(`Error dropping database: ${error.message}`, 'error');
+      }
+    }
+  });
+};
+
+const isRestarting = ref(false);
+const restartPostgres = async () => {
+  showConfirm({
+    title: t('viewer.restartPostgres'),
+    message: 'Are you sure you want to restart the PostgreSQL server? Active connections will be terminated.',
+    confirmText: t('common.confirm') || 'Confirm',
+    type: 'danger',
+    onConfirm: async () => {
+      isRestarting.value = true;
+      try {
+        const result = await ipcRenderer.invoke('restart-postgres');
+        if (result.success) {
+          addToast(t('viewer.restartSuccess'), 'success');
+          // Attendre un peu que le serveur redémarre avant de recharger
+          setTimeout(() => {
+            loadConfig();
+            isRestarting.value = false;
+          }, 2000);
+        } else {
+          addToast(result.error || t('viewer.restartError'), 'error');
+          isRestarting.value = false;
+        }
+      } catch (error: any) {
+        addToast(error.message || t('viewer.restartError'), 'error');
+        isRestarting.value = false;
       }
     }
   });
@@ -296,8 +325,19 @@ const disconnectDatabase = async (dbName: string) => {
   });
 };
 
-  
-
+const openExtensionsModal = async (dbName: string) => {
+  const db = configInfo.value?.databases.find(d => d.name === dbName);
+  if (db) {
+    // Construct a Database-like object for the store
+    store.extensionsModalDb = {
+      name: db.name,
+      port: selectedPort.value,
+      host: 'localhost',
+      user: 'postgres' // Default user for settings view
+    } as any;
+    store.showExtensionsModal = true;
+  }
+};
 
 onMounted(() => {
   loadConfig();
@@ -334,6 +374,20 @@ onMounted(() => {
             @change="loadConfig"
           />
         </div>
+        <button
+          @click="restartPostgres"
+          :disabled="isRestarting || isLoading || !configInfo?.isRunning"
+          class="h-10 px-4 bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 rounded-xl text-xs font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 border border-rose-500/10 hover:scale-[1.02] active:scale-[0.98]"
+        >
+          <svg v-if="isRestarting" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <svg v-else class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          {{ isRestarting ? t('viewer.restarting') : t('viewer.restartPostgres') }}
+        </button>
         <button
           @click="loadConfig"
           :disabled="isLoading"
@@ -437,6 +491,15 @@ onMounted(() => {
                         :title="t('postgresConfig.connections')"
                       >
                         {{ t('postgresConfig.connections') }}
+                      </button>
+                      <button 
+                        @click="openExtensionsModal(db.name)" 
+                        class="p-1.5 text-amber-600 dark:text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 rounded-lg transition-colors"
+                        :title="t('postgresConfig.addons')"
+                      >
+                        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
+                        </svg>
                       </button>
                       <button 
                         v-if="!isSystemDatabase(db.name)" 

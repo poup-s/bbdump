@@ -29,6 +29,8 @@ export const store = reactive({
     editingDatabase: null as Database | null,
     modalTargetSection: null as 'schedule' | null,
     showBackupModal: false,
+    showExtensionsModal: false,
+    extensionsModalDb: null as Database | null,
     backupProgress: null as {
         status: string;
         dbName: string;

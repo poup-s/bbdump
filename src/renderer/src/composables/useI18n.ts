@@ -6,7 +6,7 @@ const currentLanguage = ref('en');
 export function useI18n() {
     const t = (path: string, args?: Record<string, any>): string => {
         const keys = path.split('.');
-        let value: any = translations[currentLanguage.value];
+        let value: any = (translations as any)[currentLanguage.value];
 
         for (const key of keys) {
             if (value && value[key]) {
@@ -25,12 +25,27 @@ export function useI18n() {
         return value;
     };
 
+    const te = (path: string): boolean => {
+        const keys = path.split('.');
+        let value: any = (translations as any)[currentLanguage.value];
+
+        for (const key of keys) {
+            if (value && value[key]) {
+                value = value[key];
+            } else {
+                return false;
+            }
+        }
+        return true;
+    };
+
     const setLanguage = (lang: 'en' | 'fr') => {
         currentLanguage.value = lang;
     };
 
     return {
         t,
+        te,
         currentLanguage: computed(() => currentLanguage.value),
         setLanguage
     };

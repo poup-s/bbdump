@@ -2,6 +2,7 @@
 import { useI18n } from '../composables/useI18n';
 import { Database } from '../types';
 import { store } from '../store';
+import { useConfirm } from '../composables/useConfirm';
 import BackupAnimation from './BackupAnimation.vue';
 import NewDbAnimation from './NewDbAnimation.vue';
 
@@ -17,9 +18,11 @@ const emit = defineEmits<{
   (e: 'edit', db: Database): void;
   (e: 'delete', db: Database): void;
   (e: 'copy-url', db: Database): void;
+  (e: 'addons', db: Database): void;
 }>();
 
 const { t } = useI18n();
+const { showConfirm } = useConfirm();
 
 const getBackupStatusTitle = (enabled: boolean | undefined) => {
   return enabled ? 'Backup Enabled' : 'Backup Paused';
@@ -35,6 +38,18 @@ const handleStatusClick = () => {
   store.modalTargetSection = 'schedule';
   store.showDatabaseModal = true;
 };
+
+const handleBackupClick = () => {
+  showConfirm({
+    title: t('modal.backupConfirmTitle'),
+    message: t('modal.backupConfirmMessage', { name: props.db.displayName || props.db.name }),
+    confirmText: t('db.backupNow'),
+    type: 'info',
+    onConfirm: () => {
+      emit('backup', props.db);
+    }
+  });
+};
 </script>
 
 <template>
@@ -48,11 +63,11 @@ const handleStatusClick = () => {
     style="transform-style: preserve-3d;"
   >
     <!-- Status Indicator -->
-    <div class="absolute top-6 right-6">
+    <div class="absolute top-4.5 right-6">
       <button 
         @click.stop="handleStatusClick"
         :class="[
-          'text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border transition-all duration-300 hover:scale-105 active:scale-95',
+          'text-[8px] cursor-pointer font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border transition-all duration-300 hover:scale-105 active:scale-95',
           db.enabled 
             ? 'text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 hover:bg-emerald-100 dark:hover:bg-emerald-900/50' 
             : 'text-gray-400 dark:text-gray-500 border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-800/50'
@@ -83,32 +98,29 @@ const handleStatusClick = () => {
       <BackupAnimation />
     </div>
 
-    <div v-else class="mb-6" :class="{ 'mt-8': db.isLocalBbdump }">
+    <div v-else class="mb-4" :class="{ 'mt-8': db.isLocalBbdump }">
       <div class="flex items-center gap-2 mb-1">
-        <h3 class="text-xl font-bold truncate pr-8">{{ db.displayName || db.name }}</h3>
-      </div>
-      <div class="flex items-center text-sm text-gray-500 mt-1 font-mono">
-        <span class="truncate max-w-[150px]">{{ db.user }}@{{ db.host }}:{{ db.port }}</span>
         <button
           @click="emit('copy-url', db)"
-          class="ml-2 p-1 hover:bg-surface rounded transition-colors"
+          class="p-1 hover:bg-surface rounded transition-colors"
           :title="t('databases.copyUrl')"
         >
           <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
           </svg>
         </button>
+        <h3 class="text-lg font-bold truncate">{{ db.displayName || db.name }}</h3>
       </div>
-      <div class="mt-4 flex items-center gap-2 text-xs font-medium px-3 py-1 bg-surface rounded-full w-fit">
+      <div class="mt-4 flex items-center gap-2 text-xs font-medium px-1.5 py-0.5 bg-surface rounded-full w-fit">
         <span class="text-gray-400">{{ t('databases.lastBackup') }}:</span>
         <span>{{ getLastBackupDate(db.lastBackup) }}</span>
       </div>
     </div>
 
     <!-- Actions (Reveal on Hover) -->
-    <div class="grid grid-cols-5 gap-2 pt-4 border-t border-border opacity-80 group-hover:opacity-100 transition-opacity">
+    <div class="grid grid-cols-5 gap-2 pt-2 border-t border-border opacity-80 group-hover:opacity-100 transition-opacity">
       <button
-        @click="emit('backup', db)"
+        @click="handleBackupClick"
         class="relative p-2 rounded-lg hover:bg-surface text-gray-500 hover:text-foreground transition-colors flex flex-col items-center gap-1 group/btn"
       >
         <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -119,7 +131,6 @@ const handleStatusClick = () => {
           <span class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-gray-900 dark:border-t-gray-700"></span>
         </span>
       </button>
-      
       <button
         @click="emit('view', db)"
         class="relative p-2 rounded-lg hover:bg-surface text-gray-500 hover:text-foreground transition-colors flex flex-col items-center gap-1 group/btn"
@@ -147,6 +158,20 @@ const handleStatusClick = () => {
           <span class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-gray-900 dark:border-t-gray-700"></span>
         </span>
       </button>
+
+      <!-- <button
+        v-if="db.isLocalBbdump"
+        @click="emit('addons', db)"
+        class="relative p-2 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-900/20 text-gray-500 hover:text-amber-600 dark:hover:text-amber-400 transition-colors flex flex-col items-center gap-1 group/btn"
+      >
+        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
+        </svg>
+        <span class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 text-xs font-medium text-white bg-gray-900 dark:bg-gray-700 rounded-md whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity pointer-events-none z-50 shadow-lg">
+          {{ t('postgresConfig.addons') }}
+          <span class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-gray-900 dark:border-t-gray-700"></span>
+        </span>
+      </button> -->
 
       <button
         v-if="db.isLocalBbdump"
@@ -183,7 +208,7 @@ const handleStatusClick = () => {
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
         </svg>
         <span class="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 text-xs font-medium text-white bg-gray-900 dark:bg-gray-700 rounded-md whitespace-nowrap opacity-0 group-hover/btn:opacity-100 transition-opacity pointer-events-none z-50 shadow-lg">
-          {{ t('db.delete') }}
+          {{ db.isLocalBbdump ? t('db.deleteDb') : t('db.removeConnection') }}
           <span class="absolute top-full left-1/2 -translate-x-1/2 -mt-px border-4 border-transparent border-t-gray-900 dark:border-t-gray-700"></span>
         </span>
       </button>

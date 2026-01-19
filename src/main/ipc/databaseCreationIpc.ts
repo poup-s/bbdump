@@ -24,7 +24,7 @@ interface DatabaseInfo {
 
 export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | null) {
 
-    ipcMain.handle('create-local-database', async (_, params: { name: string; displayName?: string; port: number; password?: string }) => {
+    ipcMain.handle('create-local-database', async (_, params: { name: string; displayName?: string; port: number; password?: string; enabled?: boolean }) => {
         try {
             const config = getConfig();
             const existingPorts = config.databases.map(db => db.port);
@@ -57,6 +57,7 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
 
             const dbToSave = {
                 ...sanitizedDb,
+                enabled: params.enabled !== undefined ? params.enabled : sanitizedDb.enabled,
                 encrypted: shouldEncrypt,
                 password: shouldEncrypt && newDb.password ? encryptionManager.encrypt(newDb.password) : (newDb.password || ''),
                 isLocalBbdump: true

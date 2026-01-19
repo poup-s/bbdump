@@ -8,6 +8,7 @@ import TableData from './TableData.vue';
 import TableRelations from './TableRelations.vue';
 import TableSchema from './TableSchema.vue';
 import TableSchemaVisualizer from './TableSchemaVisualizer.vue';
+import PerformanceTab from './PerformanceTab.vue';
 
 const emit = defineEmits(['close']);
 const { t } = useI18n();
@@ -52,6 +53,11 @@ const handleTableSelect = (tableName: string) => {
 
 const handleVisualizeClick = () => {
   viewMode.value = 'visualizer';
+  selectedTable.value = null;
+};
+
+const handlePerformanceClick = () => {
+  viewMode.value = 'performance';
   selectedTable.value = null;
 };
 
@@ -100,8 +106,10 @@ onMounted(() => {
           :selected-table="selectedTable"
           :loading="loading"
           :view-mode="viewMode"
+          :is-local-bbdump="store.viewerDb?.isLocalBbdump"
           @select="handleTableSelect"
           @visualize="handleVisualizeClick"
+          @performance="handlePerformanceClick"
         />
 
         <!-- Main Content -->
@@ -109,6 +117,12 @@ onMounted(() => {
           <!-- Visualizer View -->
           <TableSchemaVisualizer
             v-if="viewMode === 'visualizer'"
+            :db="store.viewerDb"
+          />
+
+          <!-- Performance View -->
+          <PerformanceTab
+            v-else-if="viewMode === 'performance'"
             :db="store.viewerDb"
           />
 

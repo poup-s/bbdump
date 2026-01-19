@@ -24,6 +24,7 @@ import DbViewer from './components/db-viewer/DbViewer.vue';
 import Onboarding from './components/Onboarding.vue';
 import ThreeBackground from './components/ThreeBackground.vue';
 import VideoLoader from './components/VideoLoader.vue';
+import ExtensionsModal from './components/ExtensionsModal.vue';
 
 const { t, setLanguage } = useI18n();
 const { addToast } = useToast();
@@ -240,6 +241,7 @@ const handleLoaderComplete = () => {
       v-if="store.showDbViewer"
       @close="store.showDbViewer = false; store.viewerDb = null"
     />
+    <ExtensionsModal v-if="store.showExtensionsModal" />
   </div>
 </template>
 

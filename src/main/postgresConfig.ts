@@ -36,9 +36,9 @@ export interface PostgresConfigInfo {
 }
 
 /**
- * Crée une connexion PostgreSQL au serveur (base postgres)
+ * Crée une connexion PostgreSQL au serveur
  */
-async function createPostgresConnection(port: number = 5432): Promise<Client> {
+async function createPostgresConnection(port: number = 5432, database: string = 'postgres'): Promise<Client> {
   // Détecter l'utilisateur PostgreSQL
   const os = await import('os');
   const currentUser = os.userInfo().username;
@@ -55,13 +55,32 @@ async function createPostgresConnection(port: number = 5432): Promise<Client> {
         port: port,
         user: user,
         password: password,
-        database: 'postgres',
+        database: database,
         connectionTimeoutMillis: 5000
       });
 
       try {
         await client.connect();
         logger.info(`Connected to PostgreSQL as ${user} on port ${port}`);
+
+        // Monkey-patch query to add a comment tag if it's a string
+        const originalQuery = client.query;
+        client.query = function (this: Client, queryTextOrConfig: any, values?: any, callback?: any) {
+          const tag = '/* bbdump-internal */ ';
+
+          if (typeof queryTextOrConfig === 'string') {
+            if (!queryTextOrConfig.includes(tag)) {
+              queryTextOrConfig = tag + queryTextOrConfig;
+            }
+          } else if (queryTextOrConfig && typeof queryTextOrConfig.text === 'string') {
+            if (!queryTextOrConfig.text.includes(tag)) {
+              queryTextOrConfig.text = tag + queryTextOrConfig.text;
+            }
+          }
+
+          return (originalQuery as any).apply(this, [queryTextOrConfig, values, callback]);
+        } as any;
+
         return client;
       } catch {
         try {
@@ -491,3 +510,210 @@ export async function getPostgresConfigInfo(port: number = 5432): Promise<Postgr
   }
 }
 
+/**
+ * Liste les extensions disponibles et installées pour une base de données
+ */
+export async function listPostgresExtensions(dbName: string, port: number = 5432): Promise<any[]> {
+  const client = await createPostgresConnection(port, dbName);
+
+  try {
+    const query = `
+      SELECT 
+        name,
+        default_version,
+        installed_version,
+        comment,
+        (installed_version IS NOT NULL) as is_installed
+      FROM pg_available_extensions
+      ORDER BY name;
+    `;
+
+    const result = await client.query(query);
+    return result.rows;
+  } catch (error: any) {
+    logger.error(`Error listing extensions for ${dbName}: ${error.message}`);
+    throw error;
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * Installe une extension sur une base de données
+ */
+export async function installExtension(dbName: string, extensionName: string, port: number = 5432): Promise<{ success: boolean; error?: string }> {
+  const client = await createPostgresConnection(port, dbName);
+
+  try {
+    const format = await import('pg-format');
+    const query = format.default('CREATE EXTENSION IF NOT EXISTS %I', extensionName);
+    await client.query(query);
+    logger.info(`Extension "${extensionName}" installed on database "${dbName}"`);
+
+    // Automatiquement mettre à jour shared_preload_libraries pour pg_stat_statements
+    if (extensionName === 'pg_stat_statements') {
+      const { updateSharedPreloadLibraries } = await import('./postgresManager');
+      await updateSharedPreloadLibraries('pg_stat_statements', 'add');
+    }
+
+    return { success: true };
+  } catch (error: any) {
+    logger.error(`Error installing extension ${extensionName} on ${dbName}: ${error.message}`);
+    return { success: false, error: error.message };
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * Désinstalle une extension d'une base de données
+ */
+export async function uninstallExtension(dbName: string, extensionName: string, port: number = 5432): Promise<{ success: boolean; error?: string }> {
+  const client = await createPostgresConnection(port, dbName);
+
+  try {
+    const format = await import('pg-format');
+    const query = format.default('DROP EXTENSION IF EXISTS %I', extensionName);
+    await client.query(query);
+    logger.info(`Extension "${extensionName}" uninstalled from database "${dbName}"`);
+
+    // Automatiquement retirer pg_stat_statements de shared_preload_libraries
+    if (extensionName === 'pg_stat_statements') {
+      const { updateSharedPreloadLibraries } = await import('./postgresManager');
+      await updateSharedPreloadLibraries('pg_stat_statements', 'remove');
+    }
+
+    return { success: true };
+  } catch (error: any) {
+    logger.error(`Error uninstalling extension ${extensionName} from ${dbName}: ${error.message}`);
+    return { success: false, error: error.message };
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * Récupère les statistiques de performance (pg_stat_statements)
+ */
+export async function getPostgresPerformanceStats(dbName: string, port: number = 5432): Promise<{
+  success: boolean;
+  stats?: any[];
+  summary?: { totalCalls: number; totalTime: number };
+  error?: string;
+  extensionActive?: boolean;
+  isNotPreloaded?: boolean;
+  dataDirectory?: string
+}> {
+  const client = await createPostgresConnection(port, dbName);
+
+  try {
+    // Vérifier si l'extension est installée
+    const extCheck = await client.query("SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements'");
+    if (extCheck.rows.length === 0) {
+      return { success: true, stats: [], extensionActive: false };
+    }
+
+    // Détecter le nom de la colonne de temps (total_time vs total_exec_time)
+    const colCheck = await client.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'pg_stat_statements' AND column_name = 'total_exec_time'
+    `);
+    const timeColumn = colCheck.rows.length > 0 ? 'total_exec_time' : 'total_time';
+
+    const query = `
+      SELECT 
+        query,
+        calls,
+        ${timeColumn} as total_time,
+        (${timeColumn} / calls) as mean_time,
+        rows,
+        100.0 * ${timeColumn} / SUM(${timeColumn}) OVER() as percentage
+      FROM pg_stat_statements
+      WHERE query NOT LIKE 'FETCH%' -- Ignorer les bruits
+        AND query NOT LIKE '%/* bbdump-internal */%' -- Ignorer les requêtes bbdump
+      ORDER BY ${timeColumn} DESC
+      LIMIT 20;
+    `;
+
+    const result = await client.query(query);
+
+    // Récupérer le total global pour le dashboard (en excluant bbdump)
+    const summaryQuery = `
+      SELECT 
+        sum(calls) as total_calls,
+        sum(${timeColumn}) as total_time
+      FROM pg_stat_statements
+      WHERE query NOT LIKE '%/* bbdump-internal */%'
+    `;
+    const summaryResult = await client.query(summaryQuery);
+    const summary = summaryResult.rows[0];
+
+    return {
+      success: true,
+      stats: result.rows,
+      summary: {
+        totalCalls: parseInt(summary.total_calls || '0'),
+        totalTime: parseFloat(summary.total_time || '0')
+      },
+      extensionActive: true
+    };
+  } catch (error: any) {
+    if (error.message.includes('pg_stat_statements must be loaded via shared_preload_libraries')) {
+      // Tenter de récupérer le répertoire de données pour aider l'utilisateur
+      let dataDir = 'unknown';
+      try {
+        const dirResult = await client.query('SHOW data_directory');
+        dataDir = dirResult.rows[0]?.data_directory;
+      } catch { /* ignore */ }
+
+      return { success: true, stats: [], extensionActive: true, isNotPreloaded: true, dataDirectory: dataDir };
+    }
+    logger.error(`Error getting performance stats for ${dbName}: ${error.message}`);
+    return { success: false, error: error.message };
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * Réinitialise les statistiques de performance
+ */
+export async function resetPostgresPerformanceStats(dbName: string, port: number = 5432): Promise<{ success: boolean; error?: string }> {
+  const client = await createPostgresConnection(port, dbName);
+
+  try {
+    await client.query('SELECT pg_stat_statements_reset()');
+    logger.info(`Performance stats reset for database "${dbName}"`);
+    return { success: true };
+  } catch (error: any) {
+    logger.error(`Error resetting performance stats for ${dbName}: ${error.message}`);
+    return { success: false, error: error.message };
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * Redémarre le serveur PostgreSQL
+ */
+export async function restartPostgres(): Promise<{ success: boolean; error?: string }> {
+  const { restartPostgresService } = await import('./postgresManager');
+  return await restartPostgresService();
+}
+
+/**
+ * Vérifie si une extension est configurée dans le serveur
+ */
+export async function checkPostgresConfig(extensionName: string): Promise<{ success: boolean; isPresent: boolean; error?: string }> {
+  const { checkSharedPreloadLibraries } = await import('./postgresManager');
+  return await checkSharedPreloadLibraries(extensionName);
+}
+
+/**
+ * Tente de corriger automatiquement la configuration
+ */
+export async function fixPostgresConfig(extensionName: string): Promise<{ success: boolean; error?: string }> {
+  const { updateSharedPreloadLibraries } = await import('./postgresManager');
+  return await updateSharedPreloadLibraries(extensionName, 'add');
+}
