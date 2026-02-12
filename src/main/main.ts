@@ -8,9 +8,10 @@ import { pathManager } from './paths';
 
 // Import IPC registrars
 import { registerConfigHandlers, loadConfig, saveConfig, getConfig } from './ipc/configIpc';
-import { registerDbViewerHandlers } from './ipc/dbViewerIpc';
+import { registerDbViewerHandlers, closeAllPools } from './ipc/dbViewerIpc';
 import { registerSystemHandlers } from './ipc/systemIpc';
 import { registerDatabaseCreationHandlers } from './ipc/databaseCreationIpc';
+import { encryptionManager } from './encryption';
 
 let mainWindow: BrowserWindow | null = null;
 let handlersRegistered = false;
@@ -77,8 +78,8 @@ function createWindow(): void {
       { type: 'separator' },
       { role: 'selectAll', enabled: props.editFlags.canSelectAll }
     ]);
-    if (props.isEditable) {
-      menu.popup({ window: mainWindow! });
+    if (props.isEditable && mainWindow) {
+      menu.popup({ window: mainWindow });
     }
   });
 
@@ -98,8 +99,19 @@ app.whenReady().then(() => {
   // Charger la configuration
   const config = loadConfig();
 
-  // Initialiser le gestionnaire de tâches planifiées
-  cronManager.rescheduleAll(config.databases || []);
+  // Initialiser le gestionnaire de tâches planifiées avec mots de passe déchiffrés
+  const decryptedDatabases = (config.databases || []).map(db => {
+    try {
+      return {
+        ...db,
+        password: db.encrypted ? encryptionManager.decrypt(db.password) : db.password
+      };
+    } catch (error) {
+      logger.error(`Failed to decrypt password for ${db.name} during startup: ${error}`);
+      return { ...db, enabled: false }; // Désactiver la DB si déchiffrement échoue
+    }
+  });
+  cronManager.rescheduleAll(decryptedDatabases);
 
   // Register IPC handlers
   registerConfigHandlers(); // Config handlers don't need window
@@ -112,6 +124,17 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
+});
+
+app.on('before-quit', async () => {
+  logger.info('Application shutting down, cleaning up...');
+  cronManager.cancelAllBackups();
+  try {
+    await closeAllPools();
+  } catch (error) {
+    logger.error(`Error closing connection pools: ${error}`);
+  }
+  logger.info('Cleanup complete');
 });
 
 app.on('window-all-closed', () => {

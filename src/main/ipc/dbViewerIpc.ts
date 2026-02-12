@@ -5,6 +5,10 @@ import { encryptionManager } from '../encryption';
 import { getConfig } from './configIpc';
 import * as postgresConfig from '../postgresConfig';
 
+export async function closeAllPools() {
+    await dbViewer.closeAllPools();
+}
+
 // Helper to get db config from the shared config state
 const getDbConfig = (dbName: string) => {
     const config = getConfig();

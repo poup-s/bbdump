@@ -50,9 +50,7 @@ class PathManager {
     ];
 
     dirs.forEach(dir => {
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
+      fs.mkdirSync(dir, { recursive: true });
     });
   }
 }

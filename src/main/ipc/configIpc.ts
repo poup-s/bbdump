@@ -86,9 +86,29 @@ export function registerConfigHandlers() {
     });
 
     ipcMain.handle('save-config', async (_, newConfig: AppConfig): Promise<void> => {
-        config = newConfig;
-        saveConfig(config);
-        cronManager.rescheduleAll(config.databases || []);
+        try {
+            if (!newConfig || !Array.isArray(newConfig.databases)) {
+                throw new Error('Invalid configuration format');
+            }
+            const sanitized = sanitizeAppConfig(newConfig);
+            config = sanitized;
+            saveConfig(config);
+            const decryptedDatabases = (config.databases || []).map(db => {
+                try {
+                    return {
+                        ...db,
+                        password: db.encrypted ? encryptionManager.decrypt(db.password) : db.password
+                    };
+                } catch (error) {
+                    logger.error(`Failed to decrypt password for ${db.name}: ${error}`);
+                    return { ...db, enabled: false };
+                }
+            });
+            cronManager.rescheduleAll(decryptedDatabases);
+        } catch (error) {
+            logger.error(`Error in save-config: ${error}`);
+            throw error;
+        }
     });
 
     ipcMain.handle('complete-onboarding', async (_, settings: { language: 'en' | 'fr', defaultBackupPath: string }) => {
@@ -111,10 +131,11 @@ export function registerConfigHandlers() {
         const shouldEncrypt = db.encrypted !== false;
         const sanitizedDb = sanitizeDatabaseConfig(db);
 
+        const passwordValue = db.password || '';
         const dbToSave = {
             ...sanitizedDb,
-            encrypted: shouldEncrypt,
-            password: shouldEncrypt ? encryptionManager.encrypt(db.password) : db.password
+            encrypted: shouldEncrypt && passwordValue.length > 0,
+            password: (shouldEncrypt && passwordValue.length > 0) ? encryptionManager.encrypt(passwordValue) : passwordValue
         };
 
         config.databases.push(dbToSave);
@@ -154,10 +175,17 @@ export function registerConfigHandlers() {
             config.databases[index] = dbToSave;
             saveConfig(config);
 
-            const decryptedDatabases = config.databases.map(db => ({
-                ...db,
-                password: db.encrypted ? encryptionManager.decrypt(db.password) : db.password
-            }));
+            const decryptedDatabases = config.databases.map(d => {
+                try {
+                    return {
+                        ...d,
+                        password: d.encrypted ? encryptionManager.decrypt(d.password) : d.password
+                    };
+                } catch (error) {
+                    logger.error(`Failed to decrypt password for ${d.name}: ${error}`);
+                    return { ...d, enabled: false };
+                }
+            });
             cronManager.rescheduleAll(decryptedDatabases);
         }
         return config;
@@ -188,7 +216,7 @@ export function registerConfigHandlers() {
                     };
                 } catch (error) {
                     logger.error(`Failed to decrypt password for ${d.name}: ${error}`);
-                    return d;
+                    return { ...d, enabled: false }; // Désactiver plutôt que passer un mot de passe chiffré
                 }
             });
             cronManager.rescheduleAll(decryptedDatabases);

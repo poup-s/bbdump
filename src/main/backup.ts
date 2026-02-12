@@ -808,8 +808,9 @@ export class BackupManager {
         env.PGPASSWORD = db.password;
       }
 
+      const psqlPath = await this.findPostgresCommand('psql');
       const { stdout } = await execAsync(
-        `"${this.findPostgresCommand('psql')}" ${args.map(arg => `"${arg}"`).join(' ')}`,
+        `"${psqlPath}" ${args.map(arg => `"${arg}"`).join(' ')}`,
         {
           env,
           timeout: 10000 // 10 secondes de timeout
@@ -1231,6 +1232,33 @@ export class BackupManager {
       let errorOutput = '';
       let isTimedOut = false;
       let isSignalKilled = false;
+      let cleanedUp = false;
+
+      // Fonction de nettoyage (idempotente)
+      const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        clearTimeout(timeoutHandle);
+        clearTimeout(safetyTimeoutHandle);
+        process.removeListener('SIGTERM' as any, signalHandler);
+        process.removeListener('SIGINT' as any, signalHandler);
+      };
+
+      // Gestionnaire de signaux pour le processus parent
+      const signalHandler = (signal: NodeJS.Signals) => {
+        if (!pgDump.killed) {
+          isSignalKilled = true;
+          logger.warn(`Received ${signal}, killing pg_dump gracefully...`, db.name);
+          pgDump.kill('SIGTERM');
+
+          setTimeout(() => {
+            if (!pgDump.killed) {
+              logger.warn(`SIGTERM failed, using SIGKILL...`, db.name);
+              pgDump.kill('SIGKILL');
+            }
+          }, 5000);
+        }
+      };
 
       // Gestionnaire de timeout
       const timeoutHandle = setTimeout(() => {
@@ -1249,32 +1277,26 @@ export class BackupManager {
         }
       }, timeout);
 
-      // Gestionnaire de signaux pour le processus parent
-      const signalHandler = (signal: NodeJS.Signals) => {
-        if (!pgDump.killed) {
-          isSignalKilled = true;
-          logger.warn(`Received ${signal}, killing pg_dump gracefully...`, db.name);
-          pgDump.kill('SIGTERM');
-
-          setTimeout(() => {
-            if (!pgDump.killed) {
-              logger.warn(`SIGTERM failed, using SIGKILL...`, db.name);
-              pgDump.kill('SIGKILL');
-            }
-          }, 5000);
+      // Safety timeout: garantit le cleanup même si close ne se déclenche jamais
+      const safetyTimeoutHandle = setTimeout(() => {
+        if (!cleanedUp) {
+          logger.warn(`Safety timeout: cleaning up signal handlers for backup of ${db.name}`);
+          cleanup();
+          if (!pgDump.killed) {
+            pgDump.kill('SIGKILL');
+          }
+          resolve({
+            success: false,
+            database: db.name,
+            timestamp,
+            error: 'Backup process did not respond (safety timeout)'
+          });
         }
-      };
+      }, timeout + 30000);
 
       // Écouter les signaux
       process.on('SIGTERM', signalHandler);
       process.on('SIGINT', signalHandler);
-
-      // Fonction de nettoyage
-      const cleanup = () => {
-        clearTimeout(timeoutHandle);
-        process.removeListener('SIGTERM' as any, signalHandler);
-        process.removeListener('SIGINT' as any, signalHandler);
-      };
 
       pgDump.stderr.on('data', (data) => {
         const message = data.toString();

@@ -30,7 +30,13 @@ const getBackupStatusTitle = (enabled: boolean | undefined) => {
 
 const getLastBackupDate = (dateParam: string | Date | undefined) => {
     if (!dateParam) return t('databases.never');
-    return new Date(dateParam).toLocaleDateString();
+    try {
+        const date = new Date(dateParam);
+        if (isNaN(date.getTime())) return t('databases.never');
+        return date.toLocaleDateString();
+    } catch {
+        return t('databases.never');
+    }
 };
 
 const handleStatusClick = () => {

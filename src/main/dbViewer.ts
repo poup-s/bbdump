@@ -21,10 +21,28 @@ class ConnectionPoolManager {
   private lastAccess: Map<string, number> = new Map();
   private CLEANUP_INTERVAL = 60 * 1000; // 1 minute
   private POOL_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     // Nettoyer les pools inutilisés périodiquement
-    setInterval(() => this.cleanup(), this.CLEANUP_INTERVAL);
+    this.cleanupTimer = setInterval(() => this.cleanup(), this.CLEANUP_INTERVAL);
+  }
+
+  /**
+   * Retire le paramètre sslmode de la connection string pour éviter les conflits
+   * avec l'option ssl explicite du pool (pg re-parse la string par client)
+   */
+  private stripSslMode(connectionString: string): string {
+    try {
+      const url = new URL(connectionString);
+      url.searchParams.delete('sslmode');
+      return url.toString();
+    } catch {
+      // Fallback: regex removal if URL parsing fails
+      return connectionString.replace(/[?&]sslmode=[^&]*/g, (match) => {
+        return match.startsWith('?') ? '?' : '';
+      }).replace(/\?$/, '').replace(/\?&/, '?');
+    }
   }
 
   private getKey(params: ConnectionParams): string {
@@ -47,17 +65,22 @@ class ConnectionPoolManager {
 
     logger.info(`Creating new connection pool for ${params.database}`);
 
-    const poolConfig = params.connectionString
-      ? {
-        connectionString: params.connectionString,
-        ssl: params.ssl || params.connectionString.includes('sslmode=require')
-          ? { rejectUnauthorized: false }
-          : undefined,
+    let poolConfig;
+
+    if (params.connectionString) {
+      const needsSsl = params.ssl || params.connectionString.includes('sslmode=');
+      // Strip sslmode from connection string to avoid conflict with explicit ssl config
+      // pg re-parses the connection string per client, which can override our ssl option
+      const cleanedConnectionString = this.stripSslMode(params.connectionString);
+      poolConfig = {
+        connectionString: cleanedConnectionString,
+        ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
         max: 10, // Max clients in pool
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 5000,
-      }
-      : {
+      };
+    } else {
+      poolConfig = {
         host: params.host,
         port: params.port,
         user: params.user,
@@ -68,8 +91,15 @@ class ConnectionPoolManager {
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 5000,
       };
+    }
 
     const pool = new Pool(poolConfig);
+
+    // Ensure search_path is set on every new connection (PgBouncer in transaction mode
+    // may reset search_path between transactions on managed databases like DigitalOcean)
+    pool.on('connect', (client) => {
+      client.query('SET search_path TO public');
+    });
 
     pool.on('error', (err) => {
       logger.error(`Unexpected error on idle client for ${key}: ${err.message}`);
@@ -101,8 +131,16 @@ class ConnectionPoolManager {
    * Ferme tous les pools (à l'arrêt de l'application)
    */
   public async closeAll() {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
     for (const pool of this.pools.values()) {
-      await pool.end();
+      try {
+        await pool.end();
+      } catch (error) {
+        logger.error(`Error closing pool: ${error}`);
+      }
     }
     this.pools.clear();
     this.lastAccess.clear();
@@ -110,6 +148,10 @@ class ConnectionPoolManager {
 }
 
 const poolManager = new ConnectionPoolManager();
+
+export async function closeAllPools() {
+  await poolManager.closeAll();
+}
 
 /**
  * Obtient un client du pool
@@ -318,20 +360,20 @@ export async function getTableData(params: ConnectionParams & {
       const whereConditionsMain = columns.map(col => format('%I::text ILIKE $3', col)).join(' OR ');
       const whereConditionsCount = columns.map(col => format('%I::text ILIKE $1', col)).join(' OR ');
 
-      query = format('SELECT * FROM %I WHERE %s %s LIMIT $1 OFFSET $2', params.table, whereConditionsMain, orderByClause);
+      query = format('SELECT * FROM %I.%I WHERE %s %s LIMIT $1 OFFSET $2', 'public', params.table, whereConditionsMain, orderByClause);
       queryParams = [params.limit, offset, `%${params.search}%`];
 
-      countQuery = format('SELECT COUNT(*) FROM %I WHERE %s', params.table, whereConditionsCount);
+      countQuery = format('SELECT COUNT(*) FROM %I.%I WHERE %s', 'public', params.table, whereConditionsCount);
       countParams = [`%${params.search}%`];
     } else {
-      query = format('SELECT * FROM %I %s LIMIT $1 OFFSET $2', params.table, orderByClause);
+      query = format('SELECT * FROM %I.%I %s LIMIT $1 OFFSET $2', 'public', params.table, orderByClause);
       queryParams = [params.limit, offset];
 
       // Optimisation: Utiliser l'estimation pour le total si pas de recherche
       // Mais pour la pagination précise, COUNT(*) est souvent préférable si la table n'est pas énorme.
       // Pour l'instant, on garde COUNT(*) ici car getDatabaseTables a déjà traité le cas global.
       // Sur une vue détaillée, l'utilisateur s'attend à un nombre de pages exact.
-      countQuery = format('SELECT COUNT(*) FROM %I', params.table);
+      countQuery = format('SELECT COUNT(*) FROM %I.%I', 'public', params.table);
       countParams = [];
     }
 
@@ -408,7 +450,8 @@ export async function updateTableData(params: ConnectionParams & {
       }
 
       const updateQuery = format(
-        'UPDATE %I SET %I = $%s WHERE %s',
+        'UPDATE %I.%I SET %I = $%s WHERE %s',
+        'public',
         params.table,
         change.column,
         paramIndex,
@@ -461,7 +504,7 @@ export async function deleteTableRow(params: ConnectionParams & {
   const client = await getClient(params);
 
   try {
-    const query = format('DELETE FROM %I WHERE %I = $1', params.table, params.primaryKeyColumn);
+    const query = format('DELETE FROM %I.%I WHERE %I = $1', 'public', params.table, params.primaryKeyColumn);
     const result = await client.query(query, [params.rowId]);
 
     return {
@@ -490,7 +533,8 @@ export async function insertTableRow(params: ConnectionParams & {
     const placeholders = values.map((_, i) => `$${i + 1}`).join(', ');
 
     const query = format(
-      'INSERT INTO %I (%I) VALUES (%s) RETURNING *',
+      'INSERT INTO %I.%I (%I) VALUES (%s) RETURNING *',
+      'public',
       params.table,
       columns,
       placeholders

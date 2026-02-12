@@ -54,9 +54,14 @@ watch(() => store.showRestoreModal, (show) => {
 });
 
 const startCountdown = () => {
+  // Nettoyer l'intervalle existant avant d'en créer un nouveau
+  if (countdownInterval) {
+    clearInterval(countdownInterval);
+    countdownInterval = null;
+  }
   countdown.value = 5;
   isCountdownActive.value = true;
-  
+
   countdownInterval = setInterval(() => {
     countdown.value--;
     if (countdown.value <= 0) {

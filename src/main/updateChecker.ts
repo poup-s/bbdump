@@ -14,6 +14,28 @@ const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/lat
 
 export async function checkForUpdates(): Promise<UpdateInfo> {
   return new Promise((resolve) => {
+    let resolved = false;
+    const safeResolve = (value: UpdateInfo) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeoutHandle);
+        resolve(value);
+      }
+    };
+
+    // Timeout: abort request after 15 seconds
+    const timeoutHandle = setTimeout(() => {
+      logger.warn('Update check timed out after 15 seconds');
+      request.abort();
+      safeResolve({
+        updateAvailable: false,
+        version: '',
+        url: '',
+        releaseNotes: '',
+        error: 'Update check timed out'
+      });
+    }, 15000);
+
     const request = net.request(GITHUB_API_URL);
 
     request.on('response', (response) => {
@@ -33,7 +55,7 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
             // Simple semantic version comparison
             const updateAvailable = compareVersions(latestVersion, currentVersion) > 0;
 
-            resolve({
+            safeResolve({
               updateAvailable,
               version: latestVersion,
               url: release.html_url,
@@ -41,7 +63,7 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
             });
           } catch (error: any) {
             logger.error(`Error parsing update response: ${error.message}`);
-            resolve({
+            safeResolve({
               updateAvailable: false,
               version: '',
               url: '',
@@ -51,7 +73,7 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
           }
         } else {
           logger.error(`Update check failed with status: ${response.statusCode}`);
-          resolve({
+          safeResolve({
             updateAvailable: false,
             version: '',
             url: '',
@@ -64,7 +86,7 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
 
     request.on('error', (error) => {
       logger.error(`Update check request error: ${error.message}`);
-      resolve({
+      safeResolve({
         updateAvailable: false,
         version: '',
         url: '',

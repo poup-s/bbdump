@@ -109,8 +109,16 @@ class EncryptionManager {
 
   isEncrypted(text: string): boolean {
     // Vérifier si le texte est au format chiffré (iv:authTag:encrypted)
+    // IV = 32 hex chars, authTag = 32 hex chars, encrypted = hex string
     const parts = text.split(':');
-    return parts.length === 3 && parts[0].length === IV_LENGTH * 2;
+    if (parts.length !== 3) return false;
+    const hexPattern = /^[0-9a-f]+$/i;
+    return parts[0].length === IV_LENGTH * 2
+      && parts[1].length === AUTH_TAG_LENGTH * 2
+      && hexPattern.test(parts[0])
+      && hexPattern.test(parts[1])
+      && hexPattern.test(parts[2])
+      && parts[2].length > 0;
   }
 
   // Migrer une configuration non chiffrée vers chiffrée

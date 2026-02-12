@@ -49,30 +49,41 @@ export class CronManager {
 
     try {
       const task = cron.schedule(db.cron, async () => {
-        logger.info(`Executing scheduled backup`, db.name);
+        try {
+          logger.info(`Executing scheduled backup`, db.name);
 
-        // Notifier le début du backup
-        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-          this.mainWindow.webContents.send('scheduled-backup-started', {
-            database: db.name
-          });
-        }
+          // Notifier le début du backup
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.webContents.send('scheduled-backup-started', {
+              database: db.name
+            });
+          }
 
-        // Exécuter le backup
-        const result = await backupManager.backupDatabase(db);
+          // Exécuter le backup
+          const result = await backupManager.backupDatabase(db);
 
-        // Mettre à jour la date du dernier backup si succès
-        if (result.success && this.onBackupComplete) {
-          this.onBackupComplete(db.name, result.timestamp);
-        }
+          // Mettre à jour la date du dernier backup si succès
+          if (result.success && this.onBackupComplete) {
+            this.onBackupComplete(db.name, result.timestamp);
+          }
 
-        // Notifier la fin du backup
-        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-          this.mainWindow.webContents.send('scheduled-backup-completed', {
-            database: db.name,
-            success: result.success,
-            error: result.error
-          });
+          // Notifier la fin du backup
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.webContents.send('scheduled-backup-completed', {
+              database: db.name,
+              success: result.success,
+              error: result.error
+            });
+          }
+        } catch (error) {
+          logger.error(`Scheduled backup failed with unexpected error: ${error}`, db.name);
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.webContents.send('scheduled-backup-completed', {
+              database: db.name,
+              success: false,
+              error: `Unexpected error: ${error}`
+            });
+          }
         }
       });
 

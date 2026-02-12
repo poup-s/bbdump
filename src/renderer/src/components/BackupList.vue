@@ -56,8 +56,8 @@ const restoreBackup = (backup: Backup) => {
 
 const formatSize = (bytes: number) => {
   const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-  if (bytes === 0) return '0 Byte';
-  const i = parseInt(Math.floor(Math.log(bytes) / Math.log(1024)).toString());
+  if (!bytes || bytes <= 0) return '0 Byte';
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), sizes.length - 1);
   return Math.round(bytes / Math.pow(1024, i)) + ' ' + sizes[i];
 };
 

@@ -45,9 +45,9 @@ const loadHiddenDatabasesCount = async () => {
 };
 
 // Recharger le compteur quand les bases changent
-watch(() => store.databases, () => {
+watch(() => store.databases.length, () => {
   loadHiddenDatabasesCount();
-}, { deep: true });
+});
 
 onMounted(() => {
   loadHiddenDatabasesCount();

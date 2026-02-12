@@ -7,7 +7,6 @@ import { sanitizeDatabaseConfig } from '../configHelper';
 import { encryptionManager } from '../encryption';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import { pathManager } from '../paths';
 import { DatabaseConfig } from '../../types/config';
 
@@ -88,8 +87,6 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
         targetPort: number;
         targetPassword?: string;
     }) => {
-        const tempBackupPath = path.join(os.tmpdir(), `bbdump-duplicate-${Date.now()}.backup`);
-
         // Helper to send progress
         const sendProgress = (step: string, message: string, progress: number) => {
             if (mainWindow && !mainWindow.isDestroyed()) {
@@ -97,19 +94,20 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
             }
         };
 
+        // Track created backup file for cleanup on error
+        let createdBackupFile: string | null = null;
+
         try {
             const config = getConfig();
-            // Use provided sourceDb or look it up if only name is provided (flexibility)
-            // But frontend provides the whole object.
 
-            const sourceDbName = params.sourceDb.name;
+            const sourceDbName = params.sourceDb?.name;
+            if (!sourceDbName) {
+                throw new Error('Source database name is required');
+            }
+
             const sourceDb = config.databases.find(d => d.name === sourceDbName);
 
             if (!sourceDb) {
-                // If not found in config, maybe we can use the passed object directly?
-                // But we need the credentials which might be encrypted.
-                // If the frontend passed the full object including decrypted password (if it had it), we could use it.
-                // However, security-wise, we should look up in config.
                 throw new Error(`Source database not found: ${sourceDbName}`);
             }
 
@@ -167,6 +165,7 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
                 };
             }
             const backupFile = backupFiles[0].path;
+            createdBackupFile = backupFile;
 
             // 3. Create Local Database
             sendProgress('creating', `Creating local database "${params.targetName}"...`, 40);
@@ -242,12 +241,26 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
             config.databases.push(targetDbConfig);
             saveConfig(config);
 
+            // Duplication succeeded, backup file is kept as part of normal backups
+            createdBackupFile = null;
+
             sendProgress('complete', 'Database duplicated successfully', 100);
 
             return { success: true };
 
         } catch (error: any) {
             logger.error(`Error duplicating database: ${error.message}`);
+            // Cleanup backup file created during failed duplication
+            if (createdBackupFile) {
+                try {
+                    if (fs.existsSync(createdBackupFile)) {
+                        fs.unlinkSync(createdBackupFile);
+                        logger.info(`Cleaned up backup file after failed duplication: ${createdBackupFile}`);
+                    }
+                } catch (cleanupError) {
+                    logger.warn(`Failed to cleanup backup file: ${cleanupError}`);
+                }
+            }
             return { success: false, error: error.message };
         }
     });

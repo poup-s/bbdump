@@ -10,10 +10,9 @@ import { checkForUpdates } from '../updateChecker';
 import { DatabaseConfig } from '../../types/config';
 import { encryptionManager } from '../encryption';
 import * as databaseCreator from '../databaseCreator';
-import { getConfig } from './configIpc';
-import { sanitizeDatabaseConfig } from '../configHelper';
+import { getConfig, saveConfig } from './configIpc';
+import { sanitizeDatabaseConfig, sanitizeAppConfig } from '../configHelper';
 import { cronManager } from '../cron';
-import { sanitizeAppConfig } from '../configHelper'; // Note: used implicitly for consistency
 
 export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
 
@@ -81,39 +80,45 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
 
     // Backup & Restore Handlers
     ipcMain.handle('backup-now', async (_, name: string) => {
-        const config = getConfig();
-        const db = config.databases.find(d => d.name === name);
-        if (!db) {
-            const error = `Database not found: ${name}`;
-            logger.error(error);
-            return { success: false, database: name, timestamp: new Date().toISOString(), error };
-        }
-
-        let decryptedDb = { ...db };
         try {
-            if (db.encrypted) {
-                decryptedDb.password = encryptionManager.decrypt(db.password);
+            const config = getConfig();
+            const db = config.databases.find(d => d.name === name);
+            if (!db) {
+                const error = `Database not found: ${name}`;
+                logger.error(error);
+                return { success: false, database: name, timestamp: new Date().toISOString(), error };
             }
+
+            let decryptedDb = { ...db };
+            try {
+                if (db.encrypted) {
+                    decryptedDb.password = encryptionManager.decrypt(db.password);
+                }
+            } catch (error) {
+                const msg = `Failed to decrypt password for ${db.name}: ${error}`;
+                logger.error(msg);
+                return { success: false, database: name, timestamp: new Date().toISOString(), error: msg };
+            }
+
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('backup-started', name);
+
+            const result = await backupManager.backupDatabase(decryptedDb);
+
+            if (result.success) {
+                const dbIndex = config.databases.findIndex(d => d.name === name);
+                if (dbIndex !== -1) {
+                    config.databases[dbIndex].lastBackup = result.timestamp;
+                    saveConfig(config);
+                }
+            }
+
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('backup-complete', result);
+            return result;
         } catch (error) {
-            const msg = `Failed to decrypt password for ${db.name}: ${error}`;
+            const msg = `Unexpected error during backup of ${name}: ${error}`;
             logger.error(msg);
             return { success: false, database: name, timestamp: new Date().toISOString(), error: msg };
         }
-
-        if (mainWindow) mainWindow.webContents.send('backup-started', name);
-
-        const result = await backupManager.backupDatabase(decryptedDb);
-
-        if (result.success) {
-            // We need to update lastBackup in config.
-            // Since we can't save from here easily without the exported function, 
-            // we'll rely on the `backup-complete` event or `cronManager` callback in main.
-            // But `backup-now` is manual. 
-            // We should really export `saveConfig` from `configIpc`.
-        }
-
-        if (mainWindow) mainWindow.webContents.send('backup-complete', result);
-        return result;
     });
 
     ipcMain.handle('restore-backup', async (_, payload: { backupFile: string; target: { name: string; host: string; port: number; user: string; password: string } }) => {
@@ -176,9 +181,10 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
     ipcMain.handle('delete-backup', async (_, filename: string) => {
         try {
             const backupDir = pathManager.backupsPath;
-            const filePath = path.join(backupDir, filename);
+            const filePath = path.resolve(backupDir, filename);
+            const normalizedDir = path.resolve(backupDir) + path.sep;
 
-            if (!filePath.startsWith(backupDir)) throw new Error('Invalid path');
+            if (!filePath.startsWith(normalizedDir)) throw new Error('Invalid path');
 
             if (fs.existsSync(filePath)) {
                 fs.unlinkSync(filePath);
@@ -239,8 +245,9 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
             const keyPath = pathManager.encryptionKeyPath;
 
             if (!fs.existsSync(keyPath)) return { success: false, error: 'Encryption key not found' };
+            if (!mainWindow || mainWindow.isDestroyed()) return { success: false, error: 'Window not available' };
 
-            const result = await dialog.showSaveDialog(mainWindow!, {
+            const result = await dialog.showSaveDialog(mainWindow, {
                 title: 'Export encryption key',
                 defaultPath: `encryption-key-backup-${new Date().toISOString().split('T')[0]}.key`,
                 filters: [{ name: 'Key file', extensions: ['key'] }, { name: 'All files', extensions: ['*'] }]
@@ -263,7 +270,9 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
             const { dialog } = require('electron');
             const keyPath = pathManager.encryptionKeyPath;
 
-            const result = await dialog.showOpenDialog(mainWindow!, {
+            if (!mainWindow || mainWindow.isDestroyed()) return { success: false, error: 'Window not available' };
+
+            const result = await dialog.showOpenDialog(mainWindow, {
                 title: 'Import encryption key',
                 filters: [{ name: 'Key file', extensions: ['key'] }, { name: 'All files', extensions: ['*'] }],
                 properties: ['openFile']
