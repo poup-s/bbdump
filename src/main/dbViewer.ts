@@ -1,6 +1,5 @@
 import { Pool, PoolClient } from 'pg';
 import format from 'pg-format';
-import { DatabaseConfig } from '../types/config';
 import { logger } from './logger';
 
 interface ConnectionParams {

@@ -56,7 +56,8 @@ async function createPostgresConnection(port: number = 5432, database: string = 
         user: user,
         password: password,
         database: database,
-        connectionTimeoutMillis: 5000
+        connectionTimeoutMillis: 5000,
+        statement_timeout: 30000 // 30s max per query
       });
 
       try {
