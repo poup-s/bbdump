@@ -5,7 +5,7 @@ import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
 import { ipcRenderer } from '../../electron';
 import { Database, buildDbConfig } from '../../types';
-import AddRowModal from './AddRowModal.vue';
+import { Combobox, ComboboxInput, ComboboxOptions, ComboboxOption, ComboboxButton } from '@headlessui/vue';
 import { useDebounceFn } from '@vueuse/core';
 
 const props = defineProps<{
@@ -17,7 +17,7 @@ const emit = defineEmits(['navigateToTable']);
 
 const { t } = useI18n();
 const { addToast } = useToast();
-const { showConfirm } = useConfirm();
+const { showConfirm, state: confirmState } = useConfirm();
 
 const rows = ref<any[]>([]);
 const columns = ref<any[]>([]);
@@ -31,11 +31,16 @@ const searchQuery = ref('');
 const sortBy = ref<string | null>(null);
 const sortOrder = ref<'asc' | 'desc'>('asc');
 
-// Edit mode state
-const editMode = ref(false);
-const editedCells = ref<Map<string, any>>(new Map());
-const saving = ref(false);
-const showAddModal = ref(false);
+// Slide-over edit state
+const slideoverEdits = ref<Record<string, any>>({});
+const slideoverSaving = ref(false);
+
+// Add row state
+const isAddMode = ref(false);
+const addFormData = ref<Record<string, any>>({});
+const addSaving = ref(false);
+const fkOptions = ref<Record<string, { value: any; label: string; details: { key: string; value: string }[] }[]>>({});
+const fkLoading = ref<Record<string, boolean>>({});
 
 // Column resize state
 const columnWidths = ref<Map<string, number>>(new Map());
@@ -67,19 +72,68 @@ const selectedRowData = computed(() => {
   return rows.value[selectedRowIndex.value];
 });
 
+// Slide-over edit computeds
+const slideoverChangesCount = computed(() => Object.keys(slideoverEdits.value).length);
+const hasUnsavedChanges = computed(() => slideoverChangesCount.value > 0);
+
+// Guard: check for unsaved changes before performing an action
+const guardedAction = (action: () => void) => {
+  if (confirmState.show) return; // A confirm is already showing
+  if (hasUnsavedChanges.value) {
+    showConfirm({
+      title: t('viewer.unsavedChanges'),
+      message: t('viewer.unsavedChangesConfirm'),
+      confirmText: t('viewer.discard'),
+      type: 'warning',
+      onConfirm: () => {
+        slideoverEdits.value = {};
+        action();
+      }
+    });
+  } else {
+    action();
+  }
+};
+
 const selectRow = (index: number) => {
-  if (editMode.value) return;
-  fkPreview.value = null;
-  selectedRowIndex.value = selectedRowIndex.value === index ? null : index;
+  const newIndex = selectedRowIndex.value === index ? null : index;
+  guardedAction(() => {
+    fkPreview.value = null;
+    selectedRowIndex.value = newIndex;
+  });
 };
 
 const closeDetail = () => {
-  selectedRowIndex.value = null;
-  fkPreview.value = null;
+  if (isAddMode.value) {
+    cancelAddRow();
+    return;
+  }
+  guardedAction(() => {
+    selectedRowIndex.value = null;
+    fkPreview.value = null;
+  });
 };
 
 const closeFkPreview = () => {
   fkPreview.value = null;
+};
+
+const prevRow = () => {
+  if (selectedRowIndex.value !== null && selectedRowIndex.value > 0) {
+    guardedAction(() => {
+      fkPreview.value = null;
+      selectedRowIndex.value = selectedRowIndex.value! - 1;
+    });
+  }
+};
+
+const nextRow = () => {
+  if (selectedRowIndex.value !== null && selectedRowIndex.value < rows.value.length - 1) {
+    guardedAction(() => {
+      fkPreview.value = null;
+      selectedRowIndex.value = selectedRowIndex.value! + 1;
+    });
+  }
 };
 
 const copyFieldValue = async (value: any, colName: string) => {
@@ -104,17 +158,22 @@ const handleKeydown = (e: KeyboardEvent) => {
   } else if (e.key === 'ArrowDown') {
     e.preventDefault();
     if (selectedRowIndex.value < rows.value.length - 1) {
-      selectedRowIndex.value++;
+      guardedAction(() => {
+        fkPreview.value = null;
+        selectedRowIndex.value = selectedRowIndex.value! + 1;
+      });
     }
   } else if (e.key === 'ArrowUp') {
     e.preventDefault();
     if (selectedRowIndex.value > 0) {
-      selectedRowIndex.value--;
+      guardedAction(() => {
+        fkPreview.value = null;
+        selectedRowIndex.value = selectedRowIndex.value! - 1;
+      });
     }
   }
 };
 
-const changesCount = computed(() => editedCells.value.size);
 const totalPages = computed(() => Math.max(1, Math.ceil(totalRows.value / pageSize.value)));
 
 const loadData = async () => {
@@ -171,13 +230,14 @@ const handleSort = (columnName: string) => {
   loadData();
 };
 
-const deleteRow = (row: any) => {
-  if (!primaryKey.value) {
+// Delete current row from slide-over
+const deleteCurrentRow = () => {
+  if (!primaryKey.value || selectedRowData.value === null) {
     addToast(t('viewer.noPrimaryKey'), 'error');
     return;
   }
 
-  const pkValue = row[primaryKey.value];
+  const pkValue = selectedRowData.value[primaryKey.value];
   if (pkValue === null || pkValue === undefined) {
     addToast(t('viewer.pkValueMissing'), 'error');
     return;
@@ -199,6 +259,9 @@ const deleteRow = (row: any) => {
           rowId: pkValue
         });
         addToast(t('viewer.rowDeleted'), 'success');
+        slideoverEdits.value = {};
+        selectedRowIndex.value = null;
+        fkPreview.value = null;
         loadData();
       } catch (err: any) {
         addToast(t('viewer.deleteErrorDetail', { error: err.message }), 'error');
@@ -238,104 +301,273 @@ const changePageSize = (newSize: number) => {
   loadData();
 };
 
-// Edit mode functions
-const toggleEditMode = () => {
-  if (editMode.value && editedCells.value.size > 0) {
-    showConfirm({
-      title: t('viewer.exitEditMode'),
-      message: t('viewer.exitEditConfirm'),
-      type: 'warning',
-      onConfirm: () => {
-        editMode.value = false;
-        editedCells.value.clear();
-      }
-    });
+// Slide-over edit functions
+const getFieldEditValue = (col: any) => {
+  const colName = col.column_name;
+  if (colName in slideoverEdits.value) {
+    return slideoverEdits.value[colName];
+  }
+  return selectedRowData.value ? selectedRowData.value[colName] : null;
+};
+
+const handleFieldChange = (col: any, newValue: any) => {
+  const colName = col.column_name;
+  const original = selectedRowData.value ? selectedRowData.value[colName] : null;
+
+  const isSame = (() => {
+    if (newValue === null && original === null) return true;
+    if (newValue === null || original === null) return false;
+    if (typeof newValue === 'boolean') return newValue === original;
+    // For objects (JSON), compare with stringified version
+    if (typeof original === 'object') {
+      try { return newValue === JSON.stringify(original, null, 2); } catch { return false; }
+    }
+    return String(newValue) === String(original);
+  })();
+
+  if (isSame) {
+    const edits = { ...slideoverEdits.value };
+    delete edits[colName];
+    slideoverEdits.value = edits;
   } else {
-    editMode.value = !editMode.value;
-    if (!editMode.value) {
-      editedCells.value.clear();
+    slideoverEdits.value = { ...slideoverEdits.value, [colName]: newValue };
+  }
+};
+
+const getFieldInputType = (col: any): string => {
+  const dtype = col.data_type?.toLowerCase() || '';
+  const udtName = col.udt_name?.toLowerCase() || '';
+  if (dtype === 'boolean' || udtName === 'bool') return 'checkbox';
+  if (dtype === 'json' || dtype === 'jsonb' || dtype === 'text') return 'textarea';
+  if (dtype.includes('timestamp')) return 'datetime-local';
+  if (dtype === 'date') return 'date';
+  if (dtype === 'time' || dtype === 'time without time zone' || dtype === 'time with time zone') return 'time';
+  if (dtype === 'integer' || dtype === 'bigint' || dtype === 'smallint' || dtype === 'numeric' || dtype === 'real' || dtype === 'double precision' || dtype === 'serial' || dtype === 'bigserial') return 'number';
+  return 'text';
+};
+
+const formatForInput = (value: any, col: any): string => {
+  if (value === null || value === undefined) return '';
+  const dtype = col.data_type?.toLowerCase() || '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  if (dtype.includes('timestamp')) {
+    try {
+      const d = new Date(value);
+      if (!isNaN(d.getTime())) {
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      }
+    } catch { /* fallback */ }
+  }
+  if (dtype === 'date') {
+    try {
+      const d = new Date(value);
+      if (!isNaN(d.getTime())) {
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      }
+    } catch { /* fallback */ }
+  }
+  if (dtype === 'json' || dtype === 'jsonb') {
+    if (typeof value === 'object') {
+      try { return JSON.stringify(value, null, 2); } catch { /* fallback */ }
     }
   }
+  return String(value);
 };
 
-const handleCellEdit = (rowIndex: number, columnName: string, event: Event) => {
-  const target = event.target as HTMLElement;
-  const newValue = target.textContent || '';
-  const oldValue = rows.value[rowIndex][columnName];
+const saveSlideoverChanges = async () => {
+  if (!hasUnsavedChanges.value || !primaryKey.value || !selectedRowData.value || !props.db) return;
 
-  if (newValue !== String(oldValue)) {
-    const key = `${rowIndex}:${columnName}`;
-    editedCells.value.set(key, newValue);
+  slideoverSaving.value = true;
+  try {
+    const changes = Object.entries(slideoverEdits.value).map(([columnName, newValue]) => ({
+      rowId: selectedRowData.value![primaryKey.value!],
+      primaryKeyColumn: primaryKey.value!,
+      column: columnName,
+      oldValue: selectedRowData.value![columnName],
+      newValue: newValue
+    }));
+
+    await ipcRenderer.invoke('update-table-data', {
+      db: buildDbConfig(props.db),
+      table: props.table,
+      changes
+    });
+
+    addToast(t('viewer.saveSuccess', { count: changes.length }), 'success');
+    slideoverEdits.value = {};
+    loadData();
+  } catch (err: any) {
+    console.error('Error saving changes:', err);
+    addToast(t('viewer.saveErrorDetail', { error: err.message }), 'error');
+  } finally {
+    slideoverSaving.value = false;
   }
 };
 
-const saveChanges = async () => {
-  if (editedCells.value.size === 0) return;
+const discardSlideoverChanges = () => {
+  slideoverEdits.value = {};
+};
 
-  showConfirm({
-    title: t('viewer.saveChanges'),
-    message: t('viewer.confirmSave', { count: editedCells.value.size }),
-    confirmText: t('viewer.saveChanges'),
-    type: 'warning',
-    onConfirm: async () => {
-      saving.value = true;
-      try {
-        const changes = Array.from(editedCells.value.entries()).map(([key, newValue]) => {
-          const [rowIndex, columnName] = key.split(':');
-          const row = rows.value[parseInt(rowIndex)];
-          return {
-            rowId: row[primaryKey.value!],
-            primaryKeyColumn: primaryKey.value!,
-            column: columnName,
-            oldValue: row[columnName],
-            newValue: newValue
-          };
-        });
+// Add row mode
+const editableColumnsForAdd = computed(() => columns.value.filter(col => !col.is_primary));
+const isFieldRequired = (col: any) => col.is_nullable === 'NO' && !col.column_default;
 
-        await ipcRenderer.invoke('update-table-data', {
-          db: buildDbConfig(props.db!),
-          table: props.table,
-          changes
-        });
+const startAddRow = () => {
+  // Close row detail if open
+  selectedRowIndex.value = null;
+  fkPreview.value = null;
+  slideoverEdits.value = {};
 
-        addToast(t('viewer.saveSuccess', { count: changes.length }), 'success');
-        editMode.value = false;
-        editedCells.value.clear();
-        loadData();
-      } catch (err: any) {
-        console.error('Error saving changes:', err);
-        addToast(t('viewer.saveErrorDetail', { error: err.message }), 'error');
-      } finally {
-        saving.value = false;
-      }
+  isAddMode.value = true;
+  addFormData.value = {};
+  fkOptions.value = {};
+  fkLoading.value = {};
+
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const nowStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+
+  columns.value.forEach(col => {
+    if (col.is_primary) return;
+
+    // Auto-fill timestamps
+    if (['created_at', 'updated_at', 'timestamp'].includes(col.column_name) &&
+        (col.data_type.includes('timestamp') || col.data_type.includes('date'))) {
+      addFormData.value[col.column_name] = nowStr;
+    } else if (col.column_default) {
+      addFormData.value[col.column_name] = null; // Let DB handle defaults
+    } else if (col.is_nullable === 'NO') {
+      // Required field — initialize with appropriate empty value
+      const inputType = getFieldInputType(col);
+      addFormData.value[col.column_name] = inputType === 'checkbox' ? false : '';
+    } else {
+      addFormData.value[col.column_name] = null;
+    }
+
+    // Load FK options
+    if (col.is_foreign && col.foreign_key) {
+      loadFkOptions(col.column_name, col.foreign_key.table, col.foreign_key.column);
     }
   });
 };
 
-const cancelEdit = () => {
-  if (editedCells.value.size > 0) {
-    showConfirm({
-      title: t('viewer.exitEditMode'),
-      message: t('viewer.exitEditConfirm'),
-      type: 'warning',
-      onConfirm: () => {
-        editMode.value = false;
-        editedCells.value.clear();
-        loadData();
-      }
+const cancelAddRow = () => {
+  isAddMode.value = false;
+  addFormData.value = {};
+  fkOptions.value = {};
+  fkLoading.value = {};
+};
+
+const saveNewRow = async () => {
+  if (!props.db || !props.table) return;
+
+  // Validate required fields
+  const missingFields = editableColumnsForAdd.value
+    .filter(col => isFieldRequired(col))
+    .filter(col => {
+      const val = addFormData.value[col.column_name];
+      return val === null || val === undefined || val === '';
     });
-  } else {
-    editMode.value = false;
+
+  if (missingFields.length > 0) {
+    addToast(t('viewer.addRowRequiredMissing', { fields: missingFields.map(f => f.column_name).join(', ') }), 'error');
+    return;
+  }
+
+  addSaving.value = true;
+  try {
+    await ipcRenderer.invoke('insert-table-row', {
+      db: buildDbConfig(props.db),
+      table: props.table,
+      rowData: addFormData.value
+    });
+
+    addToast(t('viewer.addRowSuccess'), 'success');
+    cancelAddRow();
+    loadData();
+  } catch (err: any) {
+    console.error('Error adding row:', err);
+    addToast(err.message || 'Error adding row', 'error');
+  } finally {
+    addSaving.value = false;
   }
 };
 
-const handleRowAdded = () => {
-  loadData();
+const loadFkOptions = async (columnName: string, foreignTable: string, foreignColumn: string, search = '') => {
+  if (!props.db) return;
+
+  fkLoading.value = { ...fkLoading.value, [columnName]: true };
+  try {
+    const result = await ipcRenderer.invoke('get-table-data', {
+      db: buildDbConfig(props.db),
+      table: foreignTable,
+      page: 1,
+      pageSize: 50,
+      search: search,
+      sortBy: foreignColumn,
+      sortOrder: 'asc'
+    });
+
+    fkOptions.value = {
+      ...fkOptions.value,
+      [columnName]: result.rows.map((row: any) => ({
+        value: row[foreignColumn],
+        label: formatFkLabel(row, foreignColumn),
+        details: buildFkDetails(row, foreignColumn)
+      }))
+    };
+  } catch (err) {
+    console.error(`Error loading FK options for ${columnName}:`, err);
+  } finally {
+    fkLoading.value = { ...fkLoading.value, [columnName]: false };
+  }
 };
 
-// D: Copy cell value to clipboard
+const formatFkLabel = (row: any, idColumn: string): string => {
+  const descriptiveKeys = ['name', 'title', 'email', 'username', 'label', 'description', 'slug'];
+  const foundKey = descriptiveKeys.find(key => Object.prototype.hasOwnProperty.call(row, key));
+  return foundKey ? `${row[foundKey]} (${row[idColumn]})` : String(row[idColumn]);
+};
+
+// Build secondary details for FK option (up to 4 non-ID columns)
+const buildFkDetails = (row: any, idColumn: string): { key: string; value: string }[] => {
+  const skipKeys = new Set([idColumn, 'id', 'created_at', 'updated_at', 'deleted_at']);
+  const descriptiveKeys = ['name', 'title', 'email', 'username', 'label', 'description', 'slug'];
+  const details: { key: string; value: string }[] = [];
+  const allKeys = Object.keys(row).filter(k => !skipKeys.has(k));
+
+  // Prioritize descriptive keys first, then other columns
+  const sortedKeys = allKeys.sort((a, b) => {
+    const aIdx = descriptiveKeys.indexOf(a);
+    const bIdx = descriptiveKeys.indexOf(b);
+    if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+    if (aIdx !== -1) return -1;
+    if (bIdx !== -1) return 1;
+    return 0;
+  });
+
+  for (const key of sortedKeys) {
+    if (details.length >= 4) break;
+    const val = row[key];
+    if (val === null || val === undefined) continue;
+    const str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+    // Skip very long values (likely text/json blobs)
+    if (str.length > 80) continue;
+    details.push({ key, value: str.length > 60 ? str.slice(0, 57) + '...' : str });
+  }
+
+  return details;
+};
+
+const handleFkSearch = (columnName: string, query: string) => {
+  const col = columns.value.find(c => c.column_name === columnName);
+  if (col && col.foreign_key) {
+    loadFkOptions(columnName, col.foreign_key.table, col.foreign_key.column, query);
+  }
+};
+
+// Copy cell value to clipboard
 const copyCell = async (value: any, rowIndex: number, colName: string) => {
-  if (editMode.value) return;
   const text = value === null ? '' : String(value);
   try {
     await navigator.clipboard.writeText(text);
@@ -346,7 +578,7 @@ const copyCell = async (value: any, rowIndex: number, colName: string) => {
   }
 };
 
-// F: Export CSV
+// Export CSV
 const exportCSV = () => {
   if (rows.value.length === 0 || columns.value.length === 0) {
     addToast(t('viewer.exportError'), 'error');
@@ -380,7 +612,7 @@ const escapeCsvField = (value: any): string => {
   return str;
 };
 
-// G: Open FK relation preview in slide-over
+// Open FK relation preview in slide-over
 const navigateToFk = async (col: any, value: any) => {
   if (!col.foreign_key || value === null || !props.db) return;
 
@@ -423,7 +655,7 @@ const navigateToFk = async (col: any, value: any) => {
   }
 };
 
-// H: Cell display formatting
+// Cell display formatting
 const formatCellValue = (value: any, col: any): string => {
   if (value === null) return '';
   const dtype = col.data_type?.toLowerCase() || '';
@@ -464,7 +696,7 @@ const getCellClass = (value: any, col: any): string => {
   return '';
 };
 
-// I: Column resize
+// Column resize
 const startResize = (col: string, event: MouseEvent) => {
   event.preventDefault();
   event.stopPropagation();
@@ -503,17 +735,25 @@ watch(() => props.table, () => {
   searchQuery.value = '';
   sortBy.value = null;
   sortOrder.value = 'asc';
-  editMode.value = false;
-  editedCells.value.clear();
+  slideoverEdits.value = {};
   columnWidths.value.clear();
   selectedRowIndex.value = null;
   fkPreview.value = null;
+  isAddMode.value = false;
+  addFormData.value = {};
+  fkOptions.value = {};
+  fkLoading.value = {};
   loadData();
 });
 
 onMounted(() => {
   loadData();
   document.addEventListener('keydown', handleKeydown);
+});
+
+defineExpose({
+  hasUnsavedChanges,
+  discardChanges: discardSlideoverChanges
 });
 </script>
 
@@ -524,7 +764,7 @@ onMounted(() => {
       <div class="flex items-center gap-1">
         <button
           @click="loadData"
-          :disabled="loading || saving"
+          :disabled="loading || slideoverSaving"
           class="p-1.5 text-gray-400 hover:text-white rounded-md hover:bg-white/10 transition-colors disabled:opacity-50"
           :title="t('viewer.refresh')"
         >
@@ -551,54 +791,10 @@ onMounted(() => {
 
         <div class="h-4 w-px bg-white/10"></div>
 
-        <!-- Edit Mode Toggle -->
-        <button
-          v-if="!editMode"
-          @click="toggleEditMode"
-          :disabled="!primaryKey"
-          class="p-1.5 text-gray-400 hover:text-white rounded-md hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          :title="!primaryKey ? t('viewer.noPkEditing') : t('viewer.editMode')"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-          </svg>
-        </button>
-
-        <!-- Edit Mode Active Controls -->
-        <template v-else>
-          <button
-            @click="saveChanges"
-            :disabled="changesCount === 0 || saving"
-            class="px-2 py-1 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-md transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-            :title="t('viewer.saveChanges')"
-          >
-            <svg v-if="saving" class="animate-spin h-3.5 w-3.5" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-            </svg>
-            <span v-if="changesCount > 0" class="px-1 py-px bg-green-500 text-white text-[10px] rounded-full leading-none">{{ changesCount }}</span>
-          </button>
-
-          <button
-            @click="cancelEdit"
-            :disabled="saving"
-            class="p-1.5 text-gray-400 hover:text-white rounded-md hover:bg-white/10 transition-colors disabled:opacity-50"
-            :title="t('viewer.cancel')"
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </template>
-
         <!-- Add Row Button -->
         <button
-          v-if="!editMode"
-          @click="showAddModal = true"
-          :disabled="!primaryKey"
+          @click="guardedAction(() => startAddRow())"
+          :disabled="!primaryKey || isAddMode"
           class="p-1.5 text-blue-500 hover:text-blue-400 rounded-md hover:bg-blue-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           :title="!primaryKey ? t('viewer.noPkAdding') : t('viewer.addRow')"
         >
@@ -609,7 +805,6 @@ onMounted(() => {
 
         <!-- Export CSV Button -->
         <button
-          v-if="!editMode"
           @click="exportCSV"
           :disabled="rows.length === 0"
           class="p-1.5 text-gray-400 hover:text-white rounded-md hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -668,6 +863,12 @@ onMounted(() => {
 
     <!-- Table -->
     <div class="flex-1 overflow-hidden relative">
+      <!-- Unsaved changes backdrop - blocks table interaction -->
+      <div
+        v-if="hasUnsavedChanges && selectedRowData"
+        class="absolute inset-0 bg-black/5 dark:bg-black/15 z-15 backdrop-blur-[0.5px] cursor-pointer"
+        @click="closeDetail"
+      ></div>
     <div class="h-full overflow-auto border border-gray-200 dark:border-white/10 rounded-lg relative bg-white/50 dark:bg-surface/30">
       <div v-if="loading" class="absolute inset-0 bg-white/80 dark:bg-surface/80 backdrop-blur-sm flex items-center justify-center z-10">
         <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
@@ -702,34 +903,26 @@ onMounted(() => {
                 @mousedown="startResize(col.column_name, $event)"
               ></div>
             </th>
-            <th class="px-3 py-2 text-right text-[11px] font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider sticky right-0 bg-gray-50/80 dark:bg-surface/50 shadow-l backdrop-blur-md">
-              {{ t('viewer.actions') }}
-            </th>
           </tr>
         </thead>
         <tbody class="bg-transparent divide-y divide-gray-200 dark:divide-white/5">
           <tr
             v-for="(row, i) in rows"
             :key="i"
-            @click="!editMode ? selectRow(i) : null"
+            @click="selectRow(i)"
             :class="[
-              'transition-colors',
+              'transition-colors cursor-pointer',
               selectedRowIndex === i
                 ? 'bg-blue-500/10 dark:bg-blue-500/15'
-                : 'hover:bg-black/5 dark:hover:bg-white/5',
-              !editMode ? 'cursor-pointer' : ''
+                : 'hover:bg-black/5 dark:hover:bg-white/5'
             ]"
           >
             <td
               v-for="col in columns"
               :key="col.column_name"
               :style="getColStyle(col.column_name)"
-              :contenteditable="editMode && !col.is_primary"
-              @blur="editMode ? handleCellEdit(i, col.column_name, $event) : null"
               :class="[
-                'px-3 py-2 text-xs text-gray-900 dark:text-gray-300 overflow-hidden text-ellipsis font-mono',
-                editMode && !col.is_primary ? 'cursor-text hover:ring-2 hover:ring-blue-500 hover:ring-inset rounded bg-white dark:bg-white/5 whitespace-pre-wrap' : 'whitespace-nowrap',
-                editedCells.has(`${i}:${col.column_name}`) ? 'ring-2 ring-blue-500 ring-inset bg-blue-50 dark:bg-blue-500/10' : '',
+                'px-3 py-2 text-xs text-gray-900 dark:text-gray-300 overflow-hidden text-ellipsis font-mono whitespace-nowrap',
                 getCellClass(row[col.column_name], col),
                 col.is_foreign && row[col.column_name] !== null ? 'underline decoration-blue-400/50 decoration-dotted underline-offset-4 hover:decoration-blue-500' : ''
               ]"
@@ -738,28 +931,15 @@ onMounted(() => {
               <!-- NULL -->
               <span v-if="row[col.column_name] === null" class="text-gray-400 dark:text-gray-600 italic text-xs px-1.5 py-0.5 bg-gray-100 dark:bg-white/5 rounded">NULL</span>
               <!-- Boolean -->
-              <template v-else-if="(col.data_type === 'boolean' || col.udt_name === 'bool') && !editMode">
+              <template v-else-if="(col.data_type === 'boolean' || col.udt_name === 'bool')">
                 <span :class="row[col.column_name] ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'" class="text-xs font-semibold px-1.5 py-0.5 rounded" :style="row[col.column_name] ? 'background: rgb(34 197 94 / 0.1)' : 'background: rgb(239 68 68 / 0.1)'">{{ row[col.column_name] ? 'true' : 'false' }}</span>
               </template>
               <!-- FK link -->
-              <template v-else-if="col.is_foreign && !editMode">
+              <template v-else-if="col.is_foreign">
                 <span class="cursor-pointer hover:text-blue-500 dark:hover:text-blue-400 transition-colors" @click.stop="navigateToFk(col, row[col.column_name])">{{ formatCellValue(row[col.column_name], col) }}</span>
               </template>
               <!-- Default -->
               <template v-else>{{ formatCellValue(row[col.column_name], col) }}</template>
-            </td>
-            <td class="px-3 py-2 whitespace-nowrap text-right text-xs font-medium sticky right-0 bg-white/50 dark:bg-surface/30 shadow-l transition-colors">
-              <button
-                v-if="!editMode"
-                @click.stop="deleteRow(row)"
-                class="text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 p-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-white dark:bg-transparent border border-gray-200 dark:border-transparent shadow-sm dark:shadow-none"
-                :disabled="!primaryKey"
-                :title="!primaryKey ? t('viewer.noPrimaryKey') : t('viewer.delete')"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
             </td>
           </tr>
         </tbody>
@@ -786,8 +966,11 @@ onMounted(() => {
         leave-to-class="translate-x-full"
       >
         <div
-          v-if="selectedRowData || fkPreview"
-          class="absolute inset-y-0 right-0 w-80 bg-white dark:bg-zinc-900 border-l border-gray-200 dark:border-white/10 shadow-xl z-20 flex flex-col"
+          v-if="selectedRowData || fkPreview || isAddMode"
+          :class="[
+            'absolute inset-y-0 right-0 bg-white dark:bg-zinc-900 border-l border-gray-200 dark:border-white/10 shadow-xl z-20 flex flex-col transition-[width] duration-200',
+            isAddMode ? 'w-[480px]' : 'w-80'
+          ]"
         >
           <!-- FK Preview Mode -->
           <template v-if="fkPreview">
@@ -901,47 +1084,35 @@ onMounted(() => {
             </div>
           </template>
 
-          <!-- Row Detail Mode -->
-          <template v-else-if="selectedRowData">
+          <!-- New Row Mode -->
+          <template v-else-if="isAddMode">
+            <!-- Green left accent strip -->
+            <div class="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500"></div>
+
             <!-- Header -->
-            <div class="px-4 py-3 border-b border-gray-200 dark:border-white/10 flex justify-between items-center bg-gray-50/50 dark:bg-surface/30 shrink-0">
+            <div class="px-4 py-3 border-b border-emerald-200 dark:border-emerald-500/20 flex items-center justify-between bg-emerald-50/50 dark:bg-emerald-500/10 shrink-0">
               <div class="flex items-center gap-2 min-w-0">
-                <svg class="w-4 h-4 text-blue-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                </svg>
-                <span class="text-xs font-bold text-gray-900 dark:text-white truncate">
-                  {{ t('viewer.rowDetail') }}
-                </span>
-                <span class="text-[10px] text-gray-400 tabular-nums shrink-0">#{{ (selectedRowIndex ?? 0) + 1 }}</span>
+                <div class="w-6 h-6 rounded-md bg-emerald-500/15 text-emerald-500 flex items-center justify-center shrink-0">
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                  </svg>
+                </div>
+                <span class="text-xs font-bold text-gray-900 dark:text-white truncate">{{ t('viewer.newRow') }}</span>
               </div>
-              <div class="flex items-center gap-1">
-                <button
-                  @click.stop="selectedRowIndex !== null && selectedRowIndex > 0 ? selectedRowIndex-- : null"
-                  :disabled="selectedRowIndex === 0"
-                  class="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded disabled:opacity-30 transition-colors"
-                  title="Previous row"
-                >
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
-                  </svg>
+              <div class="flex items-center gap-1.5">
+                <button @click="cancelAddRow" class="text-[10px] font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 px-2 py-1 rounded transition-colors">
+                  {{ t('viewer.cancel') }}
                 </button>
                 <button
-                  @click.stop="selectedRowIndex !== null && selectedRowIndex < rows.length - 1 ? selectedRowIndex++ : null"
-                  :disabled="selectedRowIndex === rows.length - 1"
-                  class="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded disabled:opacity-30 transition-colors"
-                  title="Next row"
+                  @click="saveNewRow"
+                  :disabled="addSaving"
+                  class="text-[10px] font-medium text-white bg-emerald-600 hover:bg-emerald-700 px-3 py-1 rounded transition-colors disabled:opacity-50 flex items-center gap-1"
                 >
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                  <svg v-if="addSaving" class="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                </button>
-                <button
-                  @click.stop="closeDetail"
-                  class="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded transition-colors ml-1"
-                >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
+                  {{ t('viewer.addRow') }}
                 </button>
               </div>
             </div>
@@ -949,20 +1120,246 @@ onMounted(() => {
             <!-- Fields -->
             <div class="flex-1 overflow-y-auto p-3 space-y-2">
               <div
+                v-for="col in editableColumnsForAdd"
+                :key="col.column_name"
+                class="rounded-lg border p-2.5 border-gray-100 dark:border-white/5 bg-gray-50/50 dark:bg-surface/20"
+              >
+                <!-- Field header -->
+                <div class="flex items-center justify-between mb-1.5">
+                  <div class="flex items-center gap-1.5 min-w-0">
+                    <span class="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide truncate">{{ col.column_name }}</span>
+                    <span v-if="col.is_foreign" class="text-[9px]" title="FK">🔗</span>
+                    <span v-if="isFieldRequired(col)" class="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" title="Required"></span>
+                  </div>
+                  <span class="text-[9px] text-gray-400 dark:text-gray-500 font-mono">{{ col.data_type }}</span>
+                </div>
+
+                <!-- Field input -->
+                <div class="text-xs font-mono">
+                  <!-- FK: Combobox -->
+                  <template v-if="col.is_foreign && col.foreign_key">
+                    <Combobox v-model="addFormData[col.column_name]">
+                      <div class="relative">
+                        <div class="relative w-full">
+                          <ComboboxInput
+                            class="w-full text-[11px] font-mono bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-md px-2 py-1.5 pr-8 text-gray-900 dark:text-gray-200 focus:ring-1 focus:ring-emerald-500 focus:border-transparent outline-none"
+                            :displayValue="(val: any) => {
+                              const option = fkOptions[col.column_name]?.find(o => o.value === val);
+                              return option ? option.label : (val != null ? String(val) : '');
+                            }"
+                            @change="handleFkSearch(col.column_name, ($event.target as HTMLInputElement).value)"
+                            :placeholder="`Select ${col.foreign_key.table}...`"
+                          />
+                          <ComboboxButton class="absolute inset-y-0 right-0 flex items-center pr-1.5">
+                            <svg class="h-3.5 w-3.5 text-gray-400" viewBox="0 0 20 20" fill="none" stroke="currentColor">
+                              <path d="M7 7l3-3 3 3m0 6l-3 3-3-3" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                          </ComboboxButton>
+                        </div>
+                        <ComboboxOptions class="absolute mt-1 max-h-60 w-full overflow-auto rounded-md bg-white dark:bg-zinc-800 py-1 text-xs shadow-lg ring-1 ring-black/5 dark:ring-white/10 focus:outline-none z-50">
+                          <div v-if="fkLoading[col.column_name]" class="py-2 px-3 text-gray-500 text-[10px]">Loading...</div>
+                          <div v-else-if="!fkOptions[col.column_name]?.length" class="py-2 px-3 text-gray-500 text-[10px]">{{ t('viewer.noData') }}</div>
+                          <ComboboxOption
+                            v-for="option in fkOptions[col.column_name]"
+                            :key="option.value"
+                            :value="option.value"
+                            v-slot="{ selected, active }"
+                          >
+                            <li
+                              class="relative cursor-pointer select-none py-2 pl-7 pr-3"
+                              :class="active ? 'bg-emerald-500 text-white' : 'text-gray-900 dark:text-gray-200'"
+                            >
+                              <span class="block truncate text-[11px]" :class="selected ? 'font-semibold' : ''">{{ option.label }}</span>
+                              <div v-if="option.details.length" class="flex flex-wrap gap-x-2 gap-y-0.5 mt-0.5">
+                                <span
+                                  v-for="detail in option.details"
+                                  :key="detail.key"
+                                  class="text-[9px] truncate max-w-[200px]"
+                                  :class="active ? 'text-emerald-100' : 'text-gray-400 dark:text-gray-500'"
+                                >
+                                  <span class="font-medium" :class="active ? 'text-emerald-200' : 'text-gray-500 dark:text-gray-400'">{{ detail.key }}:</span> {{ detail.value }}
+                                </span>
+                              </div>
+                              <span v-if="selected" class="absolute inset-y-0 left-0 flex items-center pl-1.5" :class="active ? 'text-white' : 'text-emerald-500'">
+                                <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                                  <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                                </svg>
+                              </span>
+                            </li>
+                          </ComboboxOption>
+                        </ComboboxOptions>
+                      </div>
+                    </Combobox>
+                    <button v-if="col.is_nullable === 'YES' && addFormData[col.column_name] != null" @click="addFormData[col.column_name] = null" class="mt-1 text-[9px] text-gray-400 hover:text-red-500 font-semibold transition-colors">NULL</button>
+                  </template>
+
+                  <!-- NULL value: show badge + "Set value" -->
+                  <template v-else-if="addFormData[col.column_name] === null">
+                    <div class="flex items-center gap-2">
+                      <span class="text-gray-400 dark:text-gray-600 italic text-[10px] px-1.5 py-0.5 bg-gray-100 dark:bg-white/5 rounded">NULL</span>
+                      <button
+                        @click="addFormData[col.column_name] = getFieldInputType(col) === 'checkbox' ? false : ''"
+                        class="text-[10px] text-emerald-500 hover:text-emerald-400 transition-colors font-medium"
+                      >
+                        {{ t('viewer.setValue') }}
+                      </button>
+                    </div>
+                  </template>
+
+                  <!-- Boolean: toggle -->
+                  <template v-else-if="getFieldInputType(col) === 'checkbox'">
+                    <div class="flex items-center gap-2">
+                      <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" :checked="!!addFormData[col.column_name]" @change="addFormData[col.column_name] = ($event.target as HTMLInputElement).checked" class="sr-only peer" />
+                        <div class="w-8 h-[18px] bg-gray-200 dark:bg-white/10 rounded-full peer-checked:bg-green-500 transition-colors"></div>
+                        <div class="absolute left-0.5 top-0.5 bg-white w-[14px] h-[14px] rounded-full transition-transform peer-checked:translate-x-3.5 shadow-sm"></div>
+                      </label>
+                      <span :class="addFormData[col.column_name] ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'" class="text-[10px] font-semibold">
+                        {{ addFormData[col.column_name] ? 'true' : 'false' }}
+                      </span>
+                      <button v-if="col.is_nullable === 'YES'" @click="addFormData[col.column_name] = null" class="text-[9px] text-gray-400 hover:text-red-500 font-semibold ml-auto transition-colors">NULL</button>
+                    </div>
+                  </template>
+
+                  <!-- Textarea: JSON, text -->
+                  <template v-else-if="getFieldInputType(col) === 'textarea'">
+                    <div class="relative">
+                      <textarea
+                        :value="addFormData[col.column_name] ?? ''"
+                        @input="addFormData[col.column_name] = ($event.target as HTMLTextAreaElement).value"
+                        class="w-full text-[11px] font-mono bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-md px-2 py-1.5 text-gray-900 dark:text-gray-200 focus:ring-1 focus:ring-emerald-500 focus:border-transparent outline-none resize-y min-h-[60px] max-h-[200px]"
+                        rows="3"
+                        :placeholder="`Enter ${col.column_name}`"
+                      ></textarea>
+                      <button v-if="col.is_nullable === 'YES'" @click="addFormData[col.column_name] = null" class="absolute top-1 right-1 text-[9px] text-gray-400 hover:text-red-500 px-1 py-0.5 rounded bg-gray-50 dark:bg-white/5 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors font-semibold" title="Set NULL">NULL</button>
+                    </div>
+                  </template>
+
+                  <!-- Standard inputs: text, number, date, datetime-local, time -->
+                  <template v-else>
+                    <div class="flex items-center gap-1.5">
+                      <input
+                        :type="getFieldInputType(col)"
+                        :value="addFormData[col.column_name] ?? ''"
+                        @input="addFormData[col.column_name] = ($event.target as HTMLInputElement).value"
+                        class="flex-1 text-[11px] font-mono bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-md px-2 py-1.5 text-gray-900 dark:text-gray-200 focus:ring-1 focus:ring-emerald-500 focus:border-transparent outline-none"
+                        :placeholder="col.column_default ? '' : `Enter ${col.column_name}`"
+                      />
+                      <button v-if="col.is_nullable === 'YES'" @click="addFormData[col.column_name] = null" class="p-1 text-gray-400 hover:text-red-500 rounded transition-colors shrink-0" title="Set NULL">
+                        <span class="text-[9px] font-semibold">NULL</span>
+                      </button>
+                    </div>
+                  </template>
+
+                  <!-- Default hint -->
+                  <p v-if="col.column_default" class="text-[9px] text-gray-400 dark:text-gray-500 mt-1">
+                    Default: {{ col.column_default }}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- Row Detail Mode (editable) -->
+          <template v-else-if="selectedRowData">
+            <!-- Header -->
+            <div class="px-4 py-3 border-b border-gray-200 dark:border-white/10 flex flex-col gap-2 bg-gray-50/50 dark:bg-surface/30 shrink-0">
+              <div class="flex justify-between items-center">
+                <div class="flex items-center gap-2 min-w-0">
+                  <svg class="w-4 h-4 text-blue-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                  </svg>
+                  <span class="text-xs font-bold text-gray-900 dark:text-white truncate">
+                    {{ t('viewer.rowDetail') }}
+                  </span>
+                  <span class="text-[10px] text-gray-400 tabular-nums shrink-0">#{{ (selectedRowIndex ?? 0) + 1 }}</span>
+                </div>
+                <div class="flex items-center gap-1">
+                  <button
+                    @click.stop="prevRow"
+                    :disabled="selectedRowIndex === 0"
+                    class="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded disabled:opacity-30 transition-colors"
+                    title="Previous row"
+                  >
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                    </svg>
+                  </button>
+                  <button
+                    @click.stop="nextRow"
+                    :disabled="selectedRowIndex === rows.length - 1"
+                    class="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded disabled:opacity-30 transition-colors"
+                    title="Next row"
+                  >
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  <!-- Delete button -->
+                  <button
+                    @click.stop="deleteCurrentRow"
+                    :disabled="!primaryKey"
+                    class="p-1 text-gray-400 hover:text-red-500 rounded transition-colors disabled:opacity-30"
+                    :title="t('viewer.deleteRow')"
+                  >
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                  <button
+                    @click.stop="closeDetail"
+                    class="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded transition-colors ml-1"
+                  >
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <!-- Unsaved changes banner -->
+              <div v-if="hasUnsavedChanges" class="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-lg">
+                <span class="text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                  {{ t('viewer.cellsModified', { count: slideoverChangesCount }) }}
+                </span>
+                <div class="flex items-center gap-1.5">
+                  <button @click="discardSlideoverChanges" class="text-[10px] font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 px-2 py-0.5 rounded transition-colors">
+                    {{ t('viewer.discard') }}
+                  </button>
+                  <button @click="saveSlideoverChanges" :disabled="slideoverSaving" class="text-[10px] font-medium text-white bg-blue-600 hover:bg-blue-700 px-2.5 py-0.5 rounded transition-colors disabled:opacity-50 flex items-center gap-1">
+                    <svg v-if="slideoverSaving" class="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    {{ t('viewer.saveChanges') }}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Editable Fields -->
+            <div class="flex-1 overflow-y-auto p-3 space-y-2">
+              <div
                 v-for="col in columns"
                 :key="col.column_name"
-                class="rounded-lg border border-gray-100 dark:border-white/5 bg-gray-50/50 dark:bg-surface/20 p-2.5"
+                :class="[
+                  'rounded-lg border p-2.5',
+                  (col.column_name in slideoverEdits)
+                    ? 'border-amber-300 dark:border-amber-500/30 bg-amber-50/50 dark:bg-amber-500/5'
+                    : 'border-gray-100 dark:border-white/5 bg-gray-50/50 dark:bg-surface/20'
+                ]"
               >
-                <div class="flex items-center justify-between mb-1">
+                <!-- Field header -->
+                <div class="flex items-center justify-between mb-1.5">
                   <div class="flex items-center gap-1.5 min-w-0">
                     <span class="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide truncate">{{ col.column_name }}</span>
                     <span v-if="col.is_primary" class="text-[9px]" title="PK">🔑</span>
                     <span v-if="col.is_foreign" class="text-[9px]" title="FK">🔗</span>
+                    <span v-if="col.column_name in slideoverEdits" class="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"></span>
                   </div>
                   <div class="flex items-center gap-1.5 shrink-0">
                     <span class="text-[9px] text-gray-400 dark:text-gray-500 font-mono">{{ col.data_type }}</span>
                     <button
-                      @click.stop="copyFieldValue(selectedRowData[col.column_name], col.column_name)"
+                      @click.stop="copyFieldValue(getFieldEditValue(col), col.column_name)"
                       class="p-0.5 text-gray-300 hover:text-gray-500 dark:text-gray-600 dark:hover:text-gray-400 rounded transition-colors"
                       :title="t('viewer.copied')"
                     >
@@ -973,20 +1370,83 @@ onMounted(() => {
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                       </svg>
                     </button>
+                    <!-- FK link button -->
+                    <button
+                      v-if="col.is_foreign && getFieldEditValue(col) !== null"
+                      @click.stop="navigateToFk(col, getFieldEditValue(col))"
+                      class="p-0.5 text-blue-400 hover:text-blue-500 rounded transition-colors"
+                      title="FK"
+                    >
+                      <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                      </svg>
+                    </button>
                   </div>
                 </div>
-                <div class="text-xs font-mono break-all">
-                  <span v-if="selectedRowData[col.column_name] === null" class="text-gray-400 dark:text-gray-600 italic text-[10px] px-1.5 py-0.5 bg-gray-100 dark:bg-white/5 rounded">NULL</span>
-                  <template v-else-if="(col.data_type === 'boolean' || col.udt_name === 'bool')">
-                    <span :class="selectedRowData[col.column_name] ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'" class="text-[10px] font-semibold px-1.5 py-0.5 rounded" :style="selectedRowData[col.column_name] ? 'background: rgb(34 197 94 / 0.1)' : 'background: rgb(239 68 68 / 0.1)'">{{ selectedRowData[col.column_name] ? 'true' : 'false' }}</span>
+
+                <!-- Field value / input -->
+                <div class="text-xs font-mono">
+                  <!-- PK: read only -->
+                  <template v-if="col.is_primary">
+                    <span v-if="getFieldEditValue(col) === null" class="text-gray-400 dark:text-gray-600 italic text-[10px] px-1.5 py-0.5 bg-gray-100 dark:bg-white/5 rounded">NULL</span>
+                    <span v-else class="text-gray-900 dark:text-gray-200">{{ formatCellValue(getFieldEditValue(col), col) }}</span>
                   </template>
-                  <template v-else-if="col.is_foreign && selectedRowData[col.column_name] !== null">
-                    <span class="cursor-pointer text-blue-600 dark:text-blue-400 hover:text-blue-500 underline decoration-dotted underline-offset-2 transition-colors" @click.stop="navigateToFk(col, selectedRowData[col.column_name])">{{ formatCellValue(selectedRowData[col.column_name], col) }}</span>
+
+                  <!-- NULL value -->
+                  <template v-else-if="getFieldEditValue(col) === null">
+                    <div class="flex items-center gap-2">
+                      <span class="text-gray-400 dark:text-gray-600 italic text-[10px] px-1.5 py-0.5 bg-gray-100 dark:bg-white/5 rounded">NULL</span>
+                      <button
+                        @click="handleFieldChange(col, getFieldInputType(col) === 'checkbox' ? false : '')"
+                        class="text-[10px] text-blue-500 hover:text-blue-400 transition-colors font-medium"
+                      >
+                        {{ t('viewer.setValue') }}
+                      </button>
+                    </div>
                   </template>
-                  <template v-else-if="(col.data_type === 'json' || col.data_type === 'jsonb') && selectedRowData[col.column_name] !== null">
-                    <pre class="text-[10px] text-purple-600 dark:text-purple-400 whitespace-pre-wrap max-h-40 overflow-y-auto bg-purple-50/50 dark:bg-purple-500/5 rounded p-1.5 mt-0.5">{{ formatCellValue(selectedRowData[col.column_name], col) }}</pre>
+
+                  <!-- Boolean: toggle -->
+                  <template v-else-if="getFieldInputType(col) === 'checkbox'">
+                    <div class="flex items-center gap-2">
+                      <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" :checked="!!getFieldEditValue(col)" @change="handleFieldChange(col, ($event.target as HTMLInputElement).checked)" class="sr-only peer" />
+                        <div class="w-8 h-[18px] bg-gray-200 dark:bg-white/10 rounded-full peer-checked:bg-green-500 transition-colors"></div>
+                        <div class="absolute left-0.5 top-0.5 bg-white w-[14px] h-[14px] rounded-full transition-transform peer-checked:translate-x-3.5 shadow-sm"></div>
+                      </label>
+                      <span :class="getFieldEditValue(col) ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400'" class="text-[10px] font-semibold">
+                        {{ getFieldEditValue(col) ? 'true' : 'false' }}
+                      </span>
+                      <button v-if="col.is_nullable === 'YES'" @click="handleFieldChange(col, null)" class="text-[9px] text-gray-400 hover:text-red-500 font-semibold ml-auto transition-colors">NULL</button>
+                    </div>
                   </template>
-                  <span v-else :class="getCellClass(selectedRowData[col.column_name], col)" class="text-gray-900 dark:text-gray-200">{{ formatCellValue(selectedRowData[col.column_name], col) }}</span>
+
+                  <!-- Textarea: JSON, text -->
+                  <template v-else-if="getFieldInputType(col) === 'textarea'">
+                    <div class="relative">
+                      <textarea
+                        :value="formatForInput(getFieldEditValue(col), col)"
+                        @input="handleFieldChange(col, ($event.target as HTMLTextAreaElement).value)"
+                        class="w-full text-[11px] font-mono bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-md px-2 py-1.5 text-gray-900 dark:text-gray-200 focus:ring-1 focus:ring-blue-500 focus:border-transparent outline-none resize-y min-h-[60px] max-h-[200px]"
+                        rows="3"
+                      ></textarea>
+                      <button v-if="col.is_nullable === 'YES'" @click="handleFieldChange(col, null)" class="absolute top-1 right-1 text-[9px] text-gray-400 hover:text-red-500 px-1 py-0.5 rounded bg-gray-50 dark:bg-white/5 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors font-semibold" title="Set NULL">NULL</button>
+                    </div>
+                  </template>
+
+                  <!-- Standard inputs: text, number, date, datetime-local, time -->
+                  <template v-else>
+                    <div class="flex items-center gap-1.5">
+                      <input
+                        :type="getFieldInputType(col)"
+                        :value="formatForInput(getFieldEditValue(col), col)"
+                        @input="handleFieldChange(col, ($event.target as HTMLInputElement).value)"
+                        class="flex-1 text-[11px] font-mono bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-md px-2 py-1.5 text-gray-900 dark:text-gray-200 focus:ring-1 focus:ring-blue-500 focus:border-transparent outline-none"
+                      />
+                      <button v-if="col.is_nullable === 'YES'" @click="handleFieldChange(col, null)" class="p-1 text-gray-400 hover:text-red-500 rounded transition-colors shrink-0" title="Set NULL">
+                        <span class="text-[9px] font-semibold">NULL</span>
+                      </button>
+                    </div>
+                  </template>
                 </div>
               </div>
             </div>
@@ -995,13 +1455,5 @@ onMounted(() => {
       </Transition>
     </div>
 
-    <!-- Add Row Modal -->
-    <AddRowModal
-      :show="showAddModal"
-      :db="db"
-      :table="table"
-      @close="showAddModal = false"
-      @added="handleRowAdded"
-    />
   </div>
 </template>

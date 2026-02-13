@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { store } from '../../store';
 import { useI18n } from '../../composables/useI18n';
+import { useConfirm } from '../../composables/useConfirm';
 import { ipcRenderer } from '../../electron';
 import { buildDbConfig } from '../../types';
 import TableSidebar from './TableSidebar.vue';
@@ -13,6 +14,7 @@ import PerformanceTab from './PerformanceTab.vue';
 
 const emit = defineEmits(['close']);
 const { t } = useI18n();
+const { showConfirm, state: confirmState } = useConfirm();
 
 const tables = ref<any[]>([]);
 const selectedTable = ref<string | null>(null);
@@ -20,6 +22,25 @@ const activeTab = ref('data'); // data, relations, schema
 const viewMode = ref('visualizer'); // explorer, visualizer
 const loading = ref(false);
 const error = ref<string | null>(null);
+const tableDataRef = ref<InstanceType<typeof TableData> | null>(null);
+
+const guardedNavigation = (action: () => void) => {
+  if (confirmState.show) return; // A confirm is already showing
+  if (tableDataRef.value?.hasUnsavedChanges) {
+    showConfirm({
+      title: t('viewer.unsavedChanges'),
+      message: t('viewer.unsavedChangesConfirm'),
+      confirmText: t('viewer.discard'),
+      type: 'warning',
+      onConfirm: () => {
+        tableDataRef.value?.discardChanges();
+        action();
+      }
+    });
+  } else {
+    action();
+  }
+};
 
 const loadTables = async () => {
   if (!store.viewerDb) return;
@@ -38,24 +59,45 @@ const loadTables = async () => {
 };
 
 const handleTableSelect = (tableName: string) => {
-  viewMode.value = 'explorer';
-  selectedTable.value = tableName;
+  guardedNavigation(() => {
+    viewMode.value = 'explorer';
+    selectedTable.value = tableName;
+  });
 };
 
 const handleNavigateToTable = (tableName: string) => {
-  viewMode.value = 'explorer';
-  activeTab.value = 'data';
-  selectedTable.value = tableName;
+  guardedNavigation(() => {
+    viewMode.value = 'explorer';
+    activeTab.value = 'data';
+    selectedTable.value = tableName;
+  });
 };
 
 const handleVisualizeClick = () => {
-  viewMode.value = 'visualizer';
-  selectedTable.value = null;
+  guardedNavigation(() => {
+    viewMode.value = 'visualizer';
+    selectedTable.value = null;
+  });
 };
 
 const handlePerformanceClick = () => {
-  viewMode.value = 'performance';
-  selectedTable.value = null;
+  guardedNavigation(() => {
+    viewMode.value = 'performance';
+    selectedTable.value = null;
+  });
+};
+
+const handleTabSwitch = (tab: string) => {
+  if (tab === activeTab.value) return;
+  guardedNavigation(() => {
+    activeTab.value = tab;
+  });
+};
+
+const handleClose = () => {
+  guardedNavigation(() => {
+    emit('close');
+  });
 };
 
 onMounted(() => {
@@ -64,7 +106,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-[200] flex animate-in fade-in duration-200">
+  <div class="fixed inset-0 z-200 flex animate-in fade-in duration-200">
     <div class="bg-white dark:bg-zinc-900 w-full h-full flex flex-col overflow-hidden">
       <!-- Header (drag region with traffic light clearance) -->
       <div class="px-4 pt-7 pb-1.5 border-b border-gray-200 dark:border-zinc-800 flex items-center bg-gray-50/50 dark:bg-zinc-900/50 backdrop-blur-xl drag-region">
@@ -90,7 +132,7 @@ onMounted(() => {
         </div>
         <!-- Close button -->
         <button
-          @click="emit('close')"
+          @click="handleClose"
           class="p-1.5 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-all duration-200 no-drag shrink-0"
         >
           <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -168,7 +210,7 @@ onMounted(() => {
                   <button
                     v-for="tab in ['data', 'relations', 'schema']"
                     :key="tab"
-                    @click="activeTab = tab"
+                    @click="handleTabSwitch(tab)"
                     :class="[
                       activeTab === tab
                         ? 'border-blue-500 text-blue-600 dark:text-blue-400'
@@ -186,6 +228,7 @@ onMounted(() => {
                 <div class="h-full overflow-hidden flex flex-col">
                   <TableData
                     v-if="activeTab === 'data'"
+                    ref="tableDataRef"
                     :db="store.viewerDb"
                     :table="selectedTable"
                     class="flex-1 overflow-hidden"

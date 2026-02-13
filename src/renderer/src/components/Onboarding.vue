@@ -7,11 +7,18 @@ import PrerequisitesLoader from './PrerequisitesLoader.vue';
 
 const { t, setLanguage } = useI18n();
 
-const step = ref(1); // 1: Language, 2: Prerequisites, 3: Path
+const step = ref(1); // 1: Language, 2: Prerequisites, 3: Databases, 4: Path
 const selectedLang = ref<'en' | 'fr'>('en');
 const selectedPath = ref('');
 const isLoading = ref(false);
 const checkingPrerequisites = ref(false);
+
+// Step 3: Database discovery
+const discoveredDatabases = ref<any[]>([]);
+const selectedDatabases = ref<Set<string>>(new Set());
+const loadingDatabases = ref(false);
+const databasesError = ref<string | null>(null);
+const hasPostgresServer = ref(false);
 const prerequisites = ref<{
   pgDump: { installed: boolean; path?: string; error?: string };
   psql: { installed: boolean; path?: string; error?: string };
@@ -84,6 +91,54 @@ const nextStep = async () => {
     await checkPrerequisites();
   } else if (step.value === 2) {
     step.value = 3;
+    await discoverDatabases();
+  } else if (step.value === 3) {
+    step.value = 4;
+  }
+};
+
+const SYSTEM_DATABASES = ['template0', 'template1'];
+
+const discoverDatabases = async () => {
+  loadingDatabases.value = true;
+  databasesError.value = null;
+  discoveredDatabases.value = [];
+  selectedDatabases.value = new Set();
+
+  try {
+    const info = await ipcRenderer.invoke('get-postgres-config');
+    if (info && info.databases) {
+      hasPostgresServer.value = true;
+      const userDbs = info.databases.filter((db: any) => !SYSTEM_DATABASES.includes(db.name));
+      discoveredDatabases.value = userDbs;
+      // Pre-select all user databases
+      userDbs.forEach((db: any) => selectedDatabases.value.add(db.name));
+    } else {
+      hasPostgresServer.value = false;
+    }
+  } catch {
+    hasPostgresServer.value = false;
+    databasesError.value = null; // Not an error, just no PostgreSQL available
+  } finally {
+    loadingDatabases.value = false;
+  }
+};
+
+const toggleDatabase = (dbName: string) => {
+  if (selectedDatabases.value.has(dbName)) {
+    selectedDatabases.value.delete(dbName);
+  } else {
+    selectedDatabases.value.add(dbName);
+  }
+  // Force reactivity
+  selectedDatabases.value = new Set(selectedDatabases.value);
+};
+
+const toggleAllDatabases = () => {
+  if (selectedDatabases.value.size === discoveredDatabases.value.length) {
+    selectedDatabases.value = new Set();
+  } else {
+    selectedDatabases.value = new Set(discoveredDatabases.value.map((db: any) => db.name));
   }
 };
 
@@ -150,6 +205,34 @@ const finishOnboarding = async () => {
       language: selectedLang.value,
       defaultBackupPath: selectedPath.value
     });
+
+    // Import selected databases
+    if (selectedDatabases.value.size > 0) {
+      for (const dbName of selectedDatabases.value) {
+        const existingDb = store.databases.find(db => db.name === dbName && db.host === 'localhost');
+        if (!existingDb) {
+          await ipcRenderer.invoke('add-database', {
+            name: dbName,
+            displayName: dbName,
+            host: 'localhost',
+            port: 5432,
+            user: process.env.USER || 'postgres',
+            password: '',
+            output: selectedPath.value,
+            cron: '0 0 * * *',
+            enabled: false,
+            encryptBackups: false,
+            ssl: false,
+            encrypted: false,
+            isLocalBbdump: true
+          });
+        }
+      }
+      // Refresh store with updated config
+      const config = await ipcRenderer.invoke('get-config');
+      store.databases = config.databases;
+    }
+
     store.onboardingCompleted = true;
     store.language = selectedLang.value;
   } catch (error) {
@@ -594,7 +677,7 @@ const installPostgreSQL = async () => {
               @click="step = 1"
               class="flex-1 py-2.5 sm:py-3 bg-zinc-800/50 hover:bg-zinc-800 rounded-lg sm:rounded-xl font-medium transition-all text-sm sm:text-base"
             >
-              {{ t('common.back') || 'Back' }}
+              {{ t('onboarding.back') || 'Back' }}
             </button>
             <button 
               @click="nextStep"
@@ -606,15 +689,120 @@ const installPostgreSQL = async () => {
           </div>
         </div>
 
-        <!-- Step 3: Path -->
-        <div v-if="step === 3" class="text-center space-y-8">
+        <!-- Step 3: Database Discovery -->
+        <div v-if="step === 3" class="space-y-4">
+          <div class="text-center space-y-2">
+            <h1 class="text-xl sm:text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
+              {{ t('onboarding.databasesTitle') || 'Your Databases' }}
+            </h1>
+            <p class="text-gray-400 text-xs sm:text-sm">
+              {{ t('onboarding.databasesDesc') || 'We found databases on your PostgreSQL server. Select which ones to manage with bbdump.' }}
+            </p>
+          </div>
+
+          <!-- Loading -->
+          <div v-if="loadingDatabases" class="flex flex-col items-center justify-center py-8">
+            <div class="w-10 h-10 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+            <p class="text-xs text-gray-400">{{ t('onboarding.scanningDatabases') || 'Scanning for databases...' }}</p>
+          </div>
+
+          <!-- Databases found -->
+          <div v-else-if="discoveredDatabases.length > 0" class="space-y-2">
+            <div class="bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/30 rounded-lg p-3">
+              <div class="flex items-center gap-2">
+                <div class="w-8 h-8 rounded-lg bg-indigo-500/20 flex items-center justify-center shrink-0">
+                  <svg class="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
+                  </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="font-semibold text-indigo-300 text-sm">
+                    {{ t('onboarding.databasesFound', { count: discoveredDatabases.length }) || `${discoveredDatabases.length} database(s) found` }}
+                  </div>
+                  <div class="text-xs text-indigo-400/80">{{ t('onboarding.databasesFoundDesc') || 'Select which databases you want to manage with bbdump.' }}</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Select all toggle -->
+            <div class="flex items-center justify-between px-1">
+              <button
+                @click="toggleAllDatabases"
+                class="text-xs text-gray-400 hover:text-white transition-colors"
+              >
+                {{ selectedDatabases.size === discoveredDatabases.length ? (t('onboarding.deselectAll') || 'Deselect all') : (t('onboarding.selectAll') || 'Select all') }}
+              </button>
+              <span class="text-xs text-gray-500">{{ selectedDatabases.size }}/{{ discoveredDatabases.length }}</span>
+            </div>
+
+            <!-- Database list -->
+            <div class="bg-zinc-800/30 rounded-lg border border-zinc-700/30 overflow-hidden divide-y divide-zinc-700/30 max-h-[240px] overflow-y-auto">
+              <button
+                v-for="db in discoveredDatabases"
+                :key="db.name"
+                @click="toggleDatabase(db.name)"
+                class="w-full flex items-center gap-3 p-3 hover:bg-zinc-800/50 transition-colors text-left"
+              >
+                <div
+                  :class="[
+                    'w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-all',
+                    selectedDatabases.has(db.name)
+                      ? 'bg-indigo-500 border-indigo-500'
+                      : 'border-zinc-600 bg-transparent'
+                  ]"
+                >
+                  <svg v-if="selectedDatabases.has(db.name)" class="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-medium text-white truncate">{{ db.name }}</div>
+                  <div class="text-xs text-gray-500 flex items-center gap-2">
+                    <span>{{ db.owner }}</span>
+                    <span v-if="db.size">&middot; {{ db.size }}</span>
+                  </div>
+                </div>
+                <div class="text-[10px] text-gray-500 font-mono shrink-0">localhost:5432</div>
+              </button>
+            </div>
+          </div>
+
+          <!-- No databases / No PostgreSQL -->
+          <div v-else class="flex flex-col items-center justify-center py-8 text-center">
+            <div class="w-14 h-14 bg-zinc-800 rounded-full flex items-center justify-center mb-3 text-gray-500">
+              <svg class="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
+              </svg>
+            </div>
+            <h3 class="text-sm font-semibold text-white mb-1">{{ t('onboarding.noDatabasesFound') || 'No databases found' }}</h3>
+            <p class="text-xs text-gray-500 max-w-xs">{{ t('onboarding.noDatabasesFoundDesc') || 'No user databases were found on your local PostgreSQL server. You can add databases later from the app.' }}</p>
+          </div>
+
+          <div class="flex flex-col sm:flex-row gap-2 sm:gap-3 pt-2">
+            <button
+              @click="step = 2"
+              class="flex-1 py-2.5 sm:py-3 bg-zinc-800/50 hover:bg-zinc-800 rounded-lg sm:rounded-xl font-medium transition-all text-sm sm:text-base"
+            >
+              {{ t('onboarding.back') || 'Back' }}
+            </button>
+            <button
+              @click="nextStep"
+              class="flex-1 py-2.5 sm:py-3 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-lg sm:rounded-xl font-bold hover:shadow-lg hover:shadow-indigo-500/30 transition-all text-sm sm:text-base"
+            >
+              {{ t('onboarding.continue') || 'Continue' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 4: Path -->
+        <div v-if="step === 4" class="text-center space-y-8">
           <h1 class="text-3xl font-bold">
             {{ t('onboarding.backupLocation') || 'Backup Location' }}
           </h1>
           <p class="text-gray-400">
             {{ t('onboarding.backupLocationDesc') || 'Where should we store your database backups?' }}
           </p>
-          
+
           <div class="bg-zinc-800/50 p-4 rounded-xl border border-white/10 flex items-center gap-3 text-left hover:border-white/20 transition-colors">
             <div class="p-2 bg-indigo-500/20 rounded-lg text-indigo-400">
               <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -625,7 +813,7 @@ const installPostgreSQL = async () => {
               <div class="text-xs text-gray-500 uppercase tracking-wider font-bold">Selected Path</div>
               <div class="text-sm font-mono truncate text-gray-300" :title="selectedPath">{{ selectedPath }}</div>
             </div>
-            <button 
+            <button
               @click="selectPath"
               class="p-2 hover:bg-white/10 rounded-lg transition-colors text-gray-400 hover:text-white"
             >
@@ -636,13 +824,13 @@ const installPostgreSQL = async () => {
           </div>
 
           <div class="flex gap-3">
-            <button 
-              @click="step = 2"
+            <button
+              @click="step = 3"
               class="flex-1 py-3 bg-zinc-800/50 hover:bg-zinc-800 rounded-xl font-medium transition-all"
             >
-              {{ t('common.back') || 'Back' }}
+              {{ t('onboarding.back') || 'Back' }}
             </button>
-            <button 
+            <button
               @click="finishOnboarding"
               :disabled="isLoading"
               class="flex-1 py-3 bg-white text-black rounded-xl font-bold hover:shadow-xl hover:shadow-white/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"

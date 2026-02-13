@@ -228,6 +228,8 @@ export const translations = {
             addRow: 'Add Row',
             addRowTitle: 'Add New Row',
             addRowSuccess: 'Row added successfully',
+            newRow: 'New Row',
+            addRowRequiredMissing: 'Required fields missing: {fields}',
             rowDeleted: 'Row deleted successfully',
             noPrimaryKey: 'No primary key defined',
             pkValueMissing: 'Primary key value is missing',
@@ -317,7 +319,11 @@ export const translations = {
             copied: 'Copied!',
             pageLabel: 'page',
             goToPage: 'Go to page (Enter to confirm)',
-            referencedBy: 'Referenced by'
+            referencedBy: 'Referenced by',
+            unsavedChanges: 'Unsaved Changes',
+            unsavedChangesConfirm: 'You have unsaved changes. Do you want to discard them?',
+            discard: 'Discard',
+            setValue: 'Set value'
         },
         backups: {
             title: 'Performed backups',
@@ -784,7 +790,16 @@ export const translations = {
             needToInstallDesc: 'Click "Install" to automatically install missing tools. It\'s quick and easy!',
             install: 'Install',
             installing: 'Installing...',
-            installed: 'Installed'
+            installed: 'Installed',
+            databasesTitle: 'Your Databases',
+            databasesDesc: 'We found databases on your PostgreSQL server. Select which ones to manage with bbdump.',
+            scanningDatabases: 'Scanning for databases...',
+            databasesFound: '{count} database(s) found',
+            databasesFoundDesc: 'Select which databases you want to manage with bbdump.',
+            selectAll: 'Select all',
+            deselectAll: 'Deselect all',
+            noDatabasesFound: 'No databases found',
+            noDatabasesFoundDesc: 'No user databases were found on your local PostgreSQL server. You can add databases later from the app.'
         }
     },
     fr: {
@@ -1016,6 +1031,8 @@ export const translations = {
             addRow: 'Ajouter une ligne',
             addRowTitle: 'Ajouter une nouvelle ligne',
             addRowSuccess: 'Ligne ajoutée avec succès',
+            newRow: 'Nouvelle ligne',
+            addRowRequiredMissing: 'Champs requis manquants : {fields}',
             rowDeleted: 'Ligne supprimée avec succès',
             noPrimaryKey: 'Aucune clé primaire définie',
             pkValueMissing: 'Valeur de clé primaire manquante',
@@ -1105,7 +1122,11 @@ export const translations = {
             copied: 'Copié !',
             pageLabel: 'page',
             goToPage: 'Aller à la page (Entrée pour valider)',
-            referencedBy: 'Référencé par'
+            referencedBy: 'Référencé par',
+            unsavedChanges: 'Modifications non sauvegardées',
+            unsavedChangesConfirm: 'Vous avez des modifications non sauvegardées. Voulez-vous les abandonner ?',
+            discard: 'Abandonner',
+            setValue: 'Définir une valeur'
         },
         cronEditor: {
             preset: 'Présélection',
@@ -1571,7 +1592,16 @@ export const translations = {
             needToInstallDesc: 'Cliquez sur "Installer" pour installer automatiquement les outils manquants. C\'est rapide et simple !',
             install: 'Installer',
             installing: 'Installation...',
-            installed: 'Installé'
+            installed: 'Installé',
+            databasesTitle: 'Vos bases de données',
+            databasesDesc: 'Nous avons trouvé des bases de données sur votre serveur PostgreSQL. Sélectionnez celles que vous souhaitez gérer avec bbdump.',
+            scanningDatabases: 'Recherche des bases de données...',
+            databasesFound: '{count} base(s) de données trouvée(s)',
+            databasesFoundDesc: 'Sélectionnez les bases de données que vous souhaitez gérer avec bbdump.',
+            selectAll: 'Tout sélectionner',
+            deselectAll: 'Tout désélectionner',
+            noDatabasesFound: 'Aucune base de données trouvée',
+            noDatabasesFoundDesc: 'Aucune base de données utilisateur n\'a été trouvée sur votre serveur PostgreSQL local. Vous pourrez en ajouter plus tard depuis l\'application.'
         }
     }
 };

@@ -13,7 +13,7 @@ const { state, confirm, cancel } = useConfirm();
     leave-from-class="opacity-100"
     leave-to-class="opacity-0"
   >
-    <div v-if="state.show" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+    <div v-if="state.show" class="fixed inset-0 z-500 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div 
         class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-md w-full border border-border overflow-hidden transform transition-all scale-100"
         @click.stop
