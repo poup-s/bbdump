@@ -217,6 +217,27 @@ export function registerDbViewerHandlers() {
         }
     });
 
+    ipcMain.handle('execute-sql', async (_, params: {
+        db: { name: string };
+        sql: string;
+        maxRows?: number;
+        timeoutMs?: number;
+    }) => {
+        try {
+            logger.info(`Executing SQL query on ${params.db.name} (maxRows: ${params.maxRows || 500})`);
+            const dbConfig = getDbConfig(params.db.name);
+            return await dbViewer.executeQuery({
+                ...dbConfig,
+                sql: params.sql,
+                maxRows: params.maxRows,
+                timeoutMs: params.timeoutMs
+            });
+        } catch (error: any) {
+            logger.error(`Error executing SQL query: ${error.message || error}`);
+            throw error;
+        }
+    });
+
     // PostgreSQL Configuration Handlers (kept here as they are related to DB management/viewing tools)
     ipcMain.handle('get-postgres-config', async (_, port: number = 5432) => {
         try {

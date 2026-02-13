@@ -10,7 +10,7 @@ const props = defineProps<{
   isLocalBbdump?: boolean;
 }>();
 
-const emit = defineEmits(['select', 'visualize', 'performance']);
+const emit = defineEmits(['select', 'visualize', 'performance', 'query']);
 const { t } = useI18n();
 
 const filter = ref('');
@@ -68,6 +68,28 @@ const filteredTables = computed(() => {
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
         </svg>
         <span class="font-medium">{{ t('viewer.performance') }}</span>
+      </button>
+
+      <!-- SQL Query Builder Link -->
+      <button
+        @click="emit('query')"
+        :class="[
+          'w-full px-2 py-1 text-left text-xs flex items-center gap-1.5 rounded-md transition-all duration-200 group',
+          viewMode === 'query'
+            ? 'bg-violet-600 text-white shadow-sm shadow-violet-500/20'
+            : 'text-gray-600 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-gray-200'
+        ]"
+      >
+        <svg
+          class="w-3.5 h-3.5 shrink-0"
+          :class="viewMode === 'query' ? 'text-white' : 'text-violet-500'"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+        <span class="font-medium">{{ t('viewer.sqlBuilder') }}</span>
       </button>
 
       <div class="relative">

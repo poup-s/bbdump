@@ -11,6 +11,7 @@ import TableRelations from './TableRelations.vue';
 import TableSchema from './TableSchema.vue';
 import TableSchemaVisualizer from './TableSchemaVisualizer.vue';
 import PerformanceTab from './PerformanceTab.vue';
+import SqlQueryBuilder from './SqlQueryBuilder.vue';
 
 const emit = defineEmits(['close']);
 const { t } = useI18n();
@@ -19,7 +20,7 @@ const { showConfirm, state: confirmState } = useConfirm();
 const tables = ref<any[]>([]);
 const selectedTable = ref<string | null>(null);
 const activeTab = ref('data'); // data, relations, schema
-const viewMode = ref('visualizer'); // explorer, visualizer
+const viewMode = ref('visualizer'); // explorer, visualizer, performance, query
 const loading = ref(false);
 const error = ref<string | null>(null);
 const tableDataRef = ref<InstanceType<typeof TableData> | null>(null);
@@ -83,6 +84,13 @@ const handleVisualizeClick = () => {
 const handlePerformanceClick = () => {
   guardedNavigation(() => {
     viewMode.value = 'performance';
+    selectedTable.value = null;
+  });
+};
+
+const handleQueryClick = () => {
+  guardedNavigation(() => {
+    viewMode.value = 'query';
     selectedTable.value = null;
   });
 };
@@ -153,6 +161,7 @@ onMounted(() => {
           @select="handleTableSelect"
           @visualize="handleVisualizeClick"
           @performance="handlePerformanceClick"
+          @query="handleQueryClick"
         />
 
         <!-- Main Content -->
@@ -166,6 +175,12 @@ onMounted(() => {
           <!-- Performance View -->
           <PerformanceTab
             v-else-if="viewMode === 'performance'"
+            :db="store.viewerDb"
+          />
+
+          <!-- Query Builder View -->
+          <SqlQueryBuilder
+            v-else-if="viewMode === 'query'"
             :db="store.viewerDb"
           />
 
