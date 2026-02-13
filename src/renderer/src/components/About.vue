@@ -62,7 +62,7 @@ const openRelease = () => {
         bbdump
       </h1>
       <p class="text-xl text-gray-500 dark:text-gray-400 font-medium">
-        Modern PostgreSQL Backup Manager
+        Modern PostgreSQL Manager
       </p>
     </div>
     

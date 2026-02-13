@@ -1,4 +1,4 @@
-# bbdump - PostgreSQL Backup Manager
+# bbdump - PostgreSQL Manager
 
 <img src="logo.png" alt="bbdump logo" width="100">
 

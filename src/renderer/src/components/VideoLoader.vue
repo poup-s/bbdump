@@ -66,7 +66,7 @@ onMounted(() => {
         <!-- Branding text -->
         <div class="branding-text">
           <h1 class="brand-name">BBDUMP</h1>
-          <p class="brand-tagline">PostgreSQL Backup Manager</p>
+          <p class="brand-tagline">PostgreSQL Manager</p>
         </div>
       </div>
       

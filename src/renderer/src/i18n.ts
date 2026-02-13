@@ -2,7 +2,7 @@ export const translations = {
     en: {
         app: {
             title: 'BBDUMP',
-            subtitle: 'Backup Manager'
+            subtitle: 'PostgreSQL Manager'
         },
         nav: {
             databases: 'Databases',
@@ -551,7 +551,7 @@ export const translations = {
             checkButton: 'Check for updates',
             checking: 'Checking...',
             checkNote: 'Check is done on GitHub Releases. Make sure you have an internet connection.',
-            description: 'bbdump is a cross-platform PostgreSQL backup manager that allows you to schedule and manage your database backups.',
+            description: 'bbdump is a cross-platform PostgreSQL manager that allows you to schedule and manage your database backups.',
             features: '...',
             copyright: '© 2025 {author}. All rights reserved.',
             license: 'License'
@@ -805,7 +805,7 @@ export const translations = {
     fr: {
         app: {
             title: 'BBDUMP',
-            subtitle: 'Backup Manager'
+            subtitle: 'PostgreSQL Manager'
         },
         nav: {
             databases: 'Bases de données',
