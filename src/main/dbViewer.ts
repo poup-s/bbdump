@@ -109,6 +109,15 @@ class ConnectionPoolManager {
   }
 
   /**
+   * Supprime un pool du cache (après une erreur, avant re-création avec d'autres params)
+   */
+  public removePool(params: ConnectionParams) {
+    const key = this.getKey(params);
+    this.pools.delete(key);
+    this.lastAccess.delete(key);
+  }
+
+  /**
    * Ferme les pools inactifs
    */
   private async cleanup() {
@@ -153,11 +162,25 @@ export async function closeAllPools() {
 }
 
 /**
- * Obtient un client du pool
+ * Obtient un client du pool, avec auto-retry SSL si le serveur exige le chiffrement
  */
 async function getClient(params: ConnectionParams): Promise<PoolClient> {
   const pool = poolManager.getPool(params);
-  return await pool.connect();
+  try {
+    return await pool.connect();
+  } catch (err: any) {
+    // If the server requires SSL and we connected without it, retry with SSL
+    if (!params.ssl && err.message?.includes('no encryption')) {
+      logger.info(`Connection to ${params.database} failed without SSL, retrying with SSL...`);
+      // Remove the non-SSL pool from cache (no need to end() — it has zero open connections)
+      poolManager.removePool(params);
+      // Create a new pool with SSL enabled under the same cache key
+      const sslParams = { ...params, ssl: true };
+      const sslPool = poolManager.getPool(sslParams);
+      return await sslPool.connect();
+    }
+    throw err;
+  }
 }
 
 /**
@@ -167,17 +190,10 @@ export async function getDatabaseTables(params: ConnectionParams) {
   const client = await getClient(params);
 
   try {
-    // Requête optimisée : on récupère les tables et une estimation du nombre de lignes
-    // via pg_class au lieu de faire un COUNT(*) sur chaque table (ce qui est très lent)
+    // Step 1: Get table names with fast reltuples estimate
     const query = `
       SELECT
         t.table_name as name,
-        (
-          SELECT COUNT(*) 
-          FROM information_schema.columns 
-          WHERE table_name = t.table_name 
-          AND table_schema = t.table_schema
-        ) as column_count,
         COALESCE(pc.reltuples::bigint, 0) as row_count_estimate
       FROM information_schema.tables t
       LEFT JOIN pg_class pc ON pc.relname = t.table_name AND pc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = t.table_schema)
@@ -189,13 +205,30 @@ export async function getDatabaseTables(params: ConnectionParams) {
     const result = await client.query(query);
     logger.info(`getDatabaseTables found ${result.rows.length} tables`);
 
-    // On map pour garder la compatibilité avec l'interface attendue
-    const tables = result.rows.map(row => ({
-      name: row.name,
-      column_count: parseInt(row.column_count),
-      // On utilise l'estimation comme row_count pour l'affichage instantané
-      // Pour une valeur exacte, il faudrait une requête séparée à la demande
-      row_count: Math.max(0, parseInt(row.row_count_estimate) || 0)
+    const tableNames = result.rows.map(r => r.name);
+    const estimates = new Map(result.rows.map(r => [r.name, Math.max(0, parseInt(r.row_count_estimate) || 0)]));
+
+    // Step 2: Identify tables where reltuples is missing (0 = never analyzed or truly empty)
+    const needsCount = tableNames.filter(name => (estimates.get(name) || 0) <= 0);
+
+    // Step 3: For tables without estimates, do actual COUNT(*) via UNION ALL
+    const counts = new Map<string, number>();
+    if (needsCount.length > 0) {
+      logger.info(`reltuples unavailable for ${needsCount.length}/${tableNames.length} tables, using COUNT(*)`);
+      const countParts = needsCount.map(name =>
+        format('SELECT %L as name, COUNT(*) as row_count FROM %I.%I', name, 'public', name)
+      );
+      const countQuery = countParts.join(' UNION ALL ');
+      const countResult = await client.query(countQuery);
+      countResult.rows.forEach(r => counts.set(r.name, parseInt(r.row_count)));
+    }
+
+    // Merge: use reltuples when available, COUNT(*) otherwise
+    const tables = tableNames.map(name => ({
+      name,
+      row_count: (estimates.get(name) || 0) > 0
+        ? estimates.get(name)!
+        : (counts.get(name) || 0)
     }));
 
     return { tables };
