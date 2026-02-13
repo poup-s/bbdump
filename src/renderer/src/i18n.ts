@@ -311,7 +311,13 @@ export const translations = {
             fetchingInfo: 'Fetching tables and schema information',
             connectionFailed: 'Connection Failed',
             retry: 'Retry Connection',
-            delete: 'Delete'
+            delete: 'Delete',
+            deleteRowTitle: 'Delete Row',
+            rowDetail: 'Row Detail',
+            copied: 'Copied!',
+            pageLabel: 'page',
+            goToPage: 'Go to page (Enter to confirm)',
+            referencedBy: 'Referenced by'
         },
         backups: {
             title: 'Performed backups',
@@ -1093,7 +1099,13 @@ export const translations = {
             fetchingInfo: 'Récupération des tables et du schéma',
             connectionFailed: 'Échec de la connexion',
             retry: 'Réessayer la connexion',
-            delete: 'Supprimer'
+            delete: 'Supprimer',
+            deleteRowTitle: 'Supprimer la ligne',
+            rowDetail: 'Détail de la ligne',
+            copied: 'Copié !',
+            pageLabel: 'page',
+            goToPage: 'Aller à la page (Entrée pour valider)',
+            referencedBy: 'Référencé par'
         },
         cronEditor: {
             preset: 'Présélection',

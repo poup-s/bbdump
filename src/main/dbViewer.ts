@@ -368,11 +368,11 @@ export async function getTableData(params: ConnectionParams & {
       query = format('SELECT * FROM %I.%I %s LIMIT $1 OFFSET $2', 'public', params.table, orderByClause);
       queryParams = [params.limit, offset];
 
-      // Optimisation: Utiliser l'estimation pour le total si pas de recherche
-      // Mais pour la pagination précise, COUNT(*) est souvent préférable si la table n'est pas énorme.
-      // Pour l'instant, on garde COUNT(*) ici car getDatabaseTables a déjà traité le cas global.
-      // Sur une vue détaillée, l'utilisateur s'attend à un nombre de pages exact.
-      countQuery = format('SELECT COUNT(*) FROM %I.%I', 'public', params.table);
+      // Use pg_class estimate for fast total count (avoids slow COUNT(*) on large tables)
+      countQuery = format(
+        'SELECT COALESCE(c.reltuples::bigint, 0) as count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname = %L AND n.nspname = %L',
+        params.table, 'public'
+      );
       countParams = [];
     }
 
@@ -381,7 +381,11 @@ export async function getTableData(params: ConnectionParams & {
       client.query(countQuery, countParams)
     ]);
 
-    const totalCount = parseInt(countResult.rows[0].count);
+    let totalCount = parseInt(countResult.rows[0]?.count || '0');
+    // reltuples can return -1 for never-analyzed tables; fall back to fetched row count
+    if (totalCount < 0) {
+      totalCount = result.rows.length;
+    }
 
     return {
       rows: result.rows,
@@ -389,6 +393,25 @@ export async function getTableData(params: ConnectionParams & {
       offset: offset,
       hasMore: offset + result.rows.length < totalCount
     };
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Récupère une ligne liée par clé étrangère (exact match sur une colonne)
+ */
+export async function getFkRow(params: ConnectionParams & {
+  table: string;
+  column: string;
+  value: any;
+}) {
+  const client = await getClient(params);
+
+  try {
+    const query = format('SELECT * FROM %I.%I WHERE %I = $1 LIMIT 1', 'public', params.table, params.column);
+    const result = await client.query(query, [params.value]);
+    return { row: result.rows[0] || null };
   } finally {
     client.release();
   }
@@ -586,7 +609,6 @@ export async function getDatabaseFullSchema(params: ConnectionParams) {
   const client = await getClient(params);
 
   try {
-    // 1. Récupérer toutes les tables
     const tablesQuery = `
       SELECT table_name as name
       FROM information_schema.tables
@@ -594,9 +616,7 @@ export async function getDatabaseFullSchema(params: ConnectionParams) {
       AND table_type = 'BASE TABLE'
       ORDER BY table_name;
     `;
-    const tablesResult = await client.query(tablesQuery);
 
-    // 2. Récupérer toutes les colonnes de toutes les tables public
     const columnsQuery = `
       SELECT
         table_name,
@@ -608,23 +628,19 @@ export async function getDatabaseFullSchema(params: ConnectionParams) {
       WHERE table_schema = 'public'
       ORDER BY table_name, ordinal_position;
     `;
-    const columnsResult = await client.query(columnsQuery);
 
-    // 3. Récupérer toutes les clés primaires
     const pkQuery = `
-      SELECT 
-        tc.table_name, 
+      SELECT
+        tc.table_name,
         kcu.column_name
       FROM information_schema.table_constraints tc
-      JOIN information_schema.key_column_usage kcu 
-        ON tc.constraint_name = kcu.constraint_name 
+      JOIN information_schema.key_column_usage kcu
+        ON tc.constraint_name = kcu.constraint_name
         AND tc.table_schema = kcu.table_schema
       WHERE tc.constraint_type = 'PRIMARY KEY'
       AND tc.table_schema = 'public';
     `;
-    const pkResult = await client.query(pkQuery);
 
-    // 4. Récupérer toutes les clés étrangères
     const fkQuery = `
       SELECT
         tc.table_name as source_table,
@@ -642,7 +658,13 @@ export async function getDatabaseFullSchema(params: ConnectionParams) {
       WHERE tc.constraint_type = 'FOREIGN KEY'
       AND tc.table_schema = 'public';
     `;
-    const fkResult = await client.query(fkQuery);
+
+    const [tablesResult, columnsResult, pkResult, fkResult] = await Promise.all([
+      client.query(tablesQuery),
+      client.query(columnsQuery),
+      client.query(pkQuery),
+      client.query(fkQuery)
+    ]);
 
     return {
       tables: tablesResult.rows,

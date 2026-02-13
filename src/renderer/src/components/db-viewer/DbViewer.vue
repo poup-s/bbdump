@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue';
 import { store } from '../../store';
 import { useI18n } from '../../composables/useI18n';
 import { ipcRenderer } from '../../electron';
+import { buildDbConfig } from '../../types';
 import TableSidebar from './TableSidebar.vue';
 import TableData from './TableData.vue';
 import TableRelations from './TableRelations.vue';
@@ -22,21 +23,11 @@ const error = ref<string | null>(null);
 
 const loadTables = async () => {
   if (!store.viewerDb) return;
-  
+
   loading.value = true;
   error.value = null;
   try {
-    // Create a plain object to avoid cloning errors with Vue reactive objects
-    const dbConfig = {
-      name: store.viewerDb.name,
-      host: store.viewerDb.host,
-      port: store.viewerDb.port,
-      user: store.viewerDb.user,
-      password: store.viewerDb.password,
-      connectionString: store.viewerDb.connectionString
-    };
-    
-    const result = await ipcRenderer.invoke('get-db-tables', { db: dbConfig });
+    const result = await ipcRenderer.invoke('get-db-tables', { db: buildDbConfig(store.viewerDb) });
     tables.value = result.tables;
   } catch (err: any) {
     console.error('Error loading tables:', err);
@@ -48,6 +39,12 @@ const loadTables = async () => {
 
 const handleTableSelect = (tableName: string) => {
   viewMode.value = 'explorer';
+  selectedTable.value = tableName;
+};
+
+const handleNavigateToTable = (tableName: string) => {
+  viewMode.value = 'explorer';
+  activeTab.value = 'data';
   selectedTable.value = tableName;
 };
 
@@ -67,32 +64,36 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 sm:p-6 animate-in fade-in duration-200">
-    <div class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full h-full max-w-[90vw] max-h-[90vh] flex flex-col overflow-hidden border border-white/10 ring-1 ring-black/5">
-      <!-- Header -->
-      <div class="px-6 py-4 border-b border-gray-200 dark:border-zinc-800 flex justify-between items-center bg-gray-50/50 dark:bg-zinc-900/50 backdrop-blur-xl">
-        <div class="flex items-center gap-4">
-          <div class="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-500 flex items-center justify-center">
-            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
-            </svg>
-          </div>
-          <div>
-            <h3 class="text-lg font-bold text-gray-900 dark:text-white">
+  <div class="fixed inset-0 z-[200] flex animate-in fade-in duration-200">
+    <div class="bg-white dark:bg-zinc-900 w-full h-full flex flex-col overflow-hidden">
+      <!-- Header (drag region with traffic light clearance) -->
+      <div class="px-4 pt-7 pb-1.5 border-b border-gray-200 dark:border-zinc-800 flex items-center bg-gray-50/50 dark:bg-zinc-900/50 backdrop-blur-xl drag-region">
+        <!-- Left spacer (matches close button size for centering) -->
+        <div class="w-8 shrink-0"></div>
+        <!-- Centered db info -->
+        <div class="flex-1 flex flex-col items-center justify-center no-drag min-w-0">
+          <div class="flex items-center gap-2">
+            <div class="w-5 h-5 rounded bg-blue-500/10 text-blue-500 flex items-center justify-center shrink-0">
+              <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+              </svg>
+            </div>
+            <h3 class="text-xs font-bold text-gray-900 dark:text-white leading-tight">
               {{ store.viewerDb?.displayName || store.viewerDb?.name }}
             </h3>
-            <div class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-              <span class="font-mono">{{ store.viewerDb?.host }}:{{ store.viewerDb?.port }}</span>
-              <span>•</span>
-              <span>{{ t('viewer.tablesCount', { count: tables.length }) }}</span>
-            </div>
+          </div>
+          <div class="flex items-center gap-1.5 text-[10px] text-gray-500 dark:text-gray-400">
+            <span class="font-mono">{{ store.viewerDb?.host }}:{{ store.viewerDb?.port }}</span>
+            <span>•</span>
+            <span>{{ t('viewer.tablesCount', { count: tables.length }) }}</span>
           </div>
         </div>
-        <button 
-          @click="emit('close')" 
-          class="p-2 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-all duration-200"
+        <!-- Close button -->
+        <button
+          @click="emit('close')"
+          class="p-1.5 rounded-md text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-all duration-200 no-drag shrink-0"
         >
-          <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
@@ -162,8 +163,8 @@ onMounted(() => {
             <!-- Success State -->
             <div v-else-if="!loading && selectedTable" class="flex flex-col h-full">
               <!-- Tabs -->
-              <div class="border-b border-gray-200 dark:border-white/10 px-6 bg-gray-50/50 dark:bg-surface/30 backdrop-blur-sm">
-                <nav class="-mb-px flex space-x-6">
+              <div class="border-b border-gray-200 dark:border-white/10 px-4 bg-gray-50/50 dark:bg-surface/30 backdrop-blur-sm">
+                <nav class="-mb-px flex space-x-4">
                   <button
                     v-for="tab in ['data', 'relations', 'schema']"
                     :key="tab"
@@ -172,7 +173,7 @@ onMounted(() => {
                       activeTab === tab
                         ? 'border-blue-500 text-blue-600 dark:text-blue-400'
                         : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600',
-                      'whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors duration-200 capitalize'
+                      'whitespace-nowrap py-2 px-1 border-b-2 font-medium text-xs transition-colors duration-200 capitalize'
                     ]"
                   >
                     {{ t(`viewer.${tab}`) }}
@@ -181,13 +182,14 @@ onMounted(() => {
               </div>
 
               <!-- Content -->
-              <div class="flex-1 overflow-hidden p-6">
-                <div class="h-full bg-white dark:bg-surface/30 rounded-xl border border-gray-200 dark:border-white/10 shadow-inner overflow-hidden flex flex-col">
+              <div class="flex-1 overflow-hidden p-2">
+                <div class="h-full overflow-hidden flex flex-col">
                   <TableData
                     v-if="activeTab === 'data'"
                     :db="store.viewerDb"
                     :table="selectedTable"
                     class="flex-1 overflow-hidden"
+                    @navigate-to-table="handleNavigateToTable"
                   />
                   <TableRelations
                     v-if="activeTab === 'relations'"

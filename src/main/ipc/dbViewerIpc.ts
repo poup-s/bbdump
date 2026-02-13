@@ -118,6 +118,26 @@ export function registerDbViewerHandlers() {
         }
     });
 
+    ipcMain.handle('get-fk-row', async (_, params: {
+        db: { name: string };
+        table: string;
+        column: string;
+        value: any;
+    }) => {
+        try {
+            const dbConfig = getDbConfig(params.db.name);
+            return await dbViewer.getFkRow({
+                ...dbConfig,
+                table: params.table,
+                column: params.column,
+                value: params.value
+            });
+        } catch (error) {
+            logger.error(`Error getting FK row: ${error}`);
+            throw error;
+        }
+    });
+
     ipcMain.handle('update-table-data', async (_, params: {
         db: { name: string };
         table: string;

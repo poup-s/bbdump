@@ -70,3 +70,17 @@ export interface TableRelation {
     constraint_name: string;
     constraint_type?: string;
 }
+
+/**
+ * Build a plain DB config object safe for IPC (avoids Vue reactive proxy cloning errors)
+ */
+export function buildDbConfig(db: Database) {
+    return {
+        name: db.name,
+        host: db.host,
+        port: db.port,
+        user: db.user,
+        password: db.password,
+        connectionString: db.connectionString
+    };
+}
