@@ -145,7 +145,7 @@ const openRelease = () => {
         </a>
       </div>
       <p class="text-xs text-gray-500">
-        &copy; {{ new Date().getFullYear() }} bbdump. Proudly built with Vue & Electron.
+        &copy; {{ new Date().getFullYear() }} bbdump. Built with ❤️ by <a href="https://github.com/poup-s" target="_blank" class="text-blue-500 hover:text-blue-600 transition-colors">Poups</a>.
       </p>
     </div>
   </div>
