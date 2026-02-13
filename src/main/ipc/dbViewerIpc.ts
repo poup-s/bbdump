@@ -99,18 +99,21 @@ export function registerDbViewerHandlers() {
         }
     });
 
-    ipcMain.handle('get-table-data', async (_, params: { db: { name: string }, table: string, limit?: number, page?: number, pageSize?: number }) => {
+    ipcMain.handle('get-table-data', async (_, params: { db: { name: string }, table: string, limit?: number, page?: number, pageSize?: number, search?: string, sortBy?: string, sortOrder?: 'asc' | 'desc' }) => {
         try {
             const limit = params.limit || params.pageSize || 50;
             const offset = params.page ? (params.page - 1) * limit : 0;
 
-            logger.info(`Getting data for table: ${params.table} (limit: ${limit}, offset: ${offset})`);
+            logger.info(`Getting data for table: ${params.table} (limit: ${limit}, offset: ${offset}, search: ${params.search || ''}, sort: ${params.sortBy || ''} ${params.sortOrder || ''})`);
             const dbConfig = getDbConfig(params.db.name);
             return await dbViewer.getTableData({
                 ...dbConfig,
                 table: params.table,
                 limit,
-                offset
+                offset,
+                search: params.search,
+                sortBy: params.sortBy,
+                sortOrder: params.sortOrder
             });
         } catch (error) {
             logger.error(`Error getting table data: ${error}`);

@@ -765,7 +765,7 @@ defineExpose({
         <button
           @click="loadData"
           :disabled="loading || slideoverSaving"
-          class="p-1.5 text-gray-400 hover:text-white rounded-md hover:bg-white/10 transition-colors disabled:opacity-50"
+          class="p-1.5 text-gray-400 hover:text-gray-700 dark:hover:text-white rounded-md hover:bg-gray-100 dark:hover:bg-white/10 transition-colors disabled:opacity-50"
           :title="t('viewer.refresh')"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -776,7 +776,7 @@ defineExpose({
         <div class="h-4 w-px bg-white/10"></div>
 
         <!-- Search Input -->
-        <div class="relative w-44">
+        <div class="relative w-64">
           <input
             v-model="searchQuery"
             @input="debouncedSearch"
@@ -807,7 +807,7 @@ defineExpose({
         <button
           @click="exportCSV"
           :disabled="rows.length === 0"
-          class="p-1.5 text-gray-400 hover:text-white rounded-md hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          class="p-1.5 text-gray-400 hover:text-gray-700 dark:hover:text-white rounded-md hover:bg-gray-100 dark:hover:bg-white/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           :title="t('viewer.exportCSV')"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
