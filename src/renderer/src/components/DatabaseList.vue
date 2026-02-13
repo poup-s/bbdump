@@ -329,28 +329,17 @@ const openExtensions = (db: Database) => {
                 v-if="hiddenDatabasesCount > 0"
                 @click="importAllHidden"
                 :disabled="isImportingHidden"
-                class="group flex items-center bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-full overflow-hidden hover:border-amber-300 dark:hover:border-amber-700 transition-all shadow-sm hover:shadow-md disabled:opacity-70 disabled:cursor-not-allowed ml-2"
+                class="group inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-500/15 hover:bg-amber-200 dark:hover:bg-amber-500/25 border border-amber-200 dark:border-amber-500/30 rounded-full transition-all disabled:opacity-50 disabled:cursor-not-allowed ml-1"
+                :title="t('databases.importHidden')"
               >
-                <div class="flex items-center gap-1.5 px-2.5 py-1 border-r border-amber-200 dark:border-amber-800 bg-white/50 dark:bg-zinc-800/50">
-                  <svg class="w-3.5 h-3.5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span class="text-[11px] font-bold text-amber-600 dark:text-amber-400 whitespace-nowrap">
-                    {{ hiddenDatabasesCount }} {{ t('databases.hiddenDatabases') }}
-                  </span>
-                </div>
-                <div class="flex items-center gap-1.5 px-3 py-1 bg-amber-500 group-hover:bg-amber-600 active:bg-amber-700 text-white transition-colors">
-                  <svg v-if="isImportingHidden" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  <svg v-else class="w-3.5 h-3.5 transform group-hover:translate-x-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span class="text-[11px] font-bold uppercase tracking-wider whitespace-nowrap">
-                    {{ isImportingHidden ? t('databases.importingHidden') : t('databases.importHidden') }}
-                  </span>
-                </div>
+                <svg v-if="isImportingHidden" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <svg v-else class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L6.59 6.59m7.532 7.532l3.29 3.29M3 3l18 18" />
+                </svg>
+                {{ hiddenDatabasesCount }} {{ t('databases.hiddenDatabases') }}
               </button>
             </div>
           </div>

@@ -80,7 +80,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col max-w-3xl mx-auto">
+  <div class="h-full flex flex-col">
     <div class="mb-4 shrink-0">
       <h2 class="text-lg font-bold tracking-tight">{{ t('nav.settings') }}</h2>
       <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{{ t('settings.description') }}</p>

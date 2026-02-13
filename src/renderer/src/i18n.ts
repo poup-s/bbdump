@@ -13,6 +13,15 @@ export const translations = {
             about: 'About',
             dashboard: 'Dashboard'
         },
+        navShort: {
+            dashboard: 'Home',
+            databases: 'DB',
+            backups: 'Backups',
+            logs: 'Logs',
+            tasks: 'Tasks',
+            settings: 'Settings',
+            about: 'About'
+        },
         dashboard: {
             title: 'Dashboard',
             subtitle: 'Overview of your database backups',
@@ -90,6 +99,14 @@ export const translations = {
                 modeManualDesc: 'Enter connection details manually',
                 stepIndicator: 'Step {current} of {total}'
             }
+        },
+        cardAction: {
+            backup: 'Backup',
+            view: 'View',
+            duplicate: 'Duplicate',
+            hide: 'Hide',
+            edit: 'Edit',
+            delete: 'Delete'
         },
         db: {
             noDatabases: 'No databases configured',
@@ -382,8 +399,15 @@ export const translations = {
         },
         scheduled: {
             title: 'Scheduled tasks',
+            description: 'Manage automatic backup schedules for your databases',
             refresh: 'Refresh',
             noData: 'No scheduled tasks',
+            noDataDesc: 'Configure a backup schedule on a database to see it here',
+            addSchedule: 'Add schedule',
+            selectDatabase: 'Select a database',
+            editSchedule: 'Edit schedule',
+            active: 'Active',
+            paused: 'Paused',
             database: 'Database',
             status: 'Status',
             statusActive: '● Active',
@@ -730,7 +754,18 @@ export const translations = {
             tableSize: 'Size',
             tableActions: 'Actions',
             restore: 'Restore',
-            started: 'Backup started: {db}'
+            delete: 'Delete',
+            noBackups: 'No backups yet',
+            noBackupsDesc: 'Backups will appear here once a backup has been completed',
+            backupsCount: 'backups',
+            today: 'Today',
+            yesterday: 'Yesterday',
+            started: 'Backup started: {db}',
+            selectedCount: '{count} selected',
+            deleteSelected: 'Delete',
+            deleteSelectedConfirm: 'Delete {count} selected backup(s)?',
+            deleteSelectedSuccess: '{count} backup(s) deleted',
+            clearSelection: 'Clear'
         },
         cron: {
             everyDay2am: 'Every day at 2:00 AM',
@@ -816,6 +851,15 @@ export const translations = {
             about: 'À propos',
             dashboard: 'Tableau de bord'
         },
+        navShort: {
+            dashboard: 'Accueil',
+            databases: 'BDD',
+            backups: 'Backups',
+            logs: 'Logs',
+            tasks: 'Tâches',
+            settings: 'Réglages',
+            about: 'Infos'
+        },
         dashboard: {
             title: 'Tableau de bord',
             subtitle: 'Vue d\'ensemble de vos sauvegardes',
@@ -893,6 +937,14 @@ export const translations = {
                 modeManualDesc: 'Entrez les détails de connexion manuellement',
                 stepIndicator: 'Étape {current} sur {total}'
             }
+        },
+        cardAction: {
+            backup: 'Backup',
+            view: 'Voir',
+            duplicate: 'Dupliquer',
+            hide: 'Masquer',
+            edit: 'Éditer',
+            delete: 'Suppr.'
         },
         db: {
             noDatabases: 'Aucune base configurée',
@@ -1244,8 +1296,15 @@ export const translations = {
         },
         scheduled: {
             title: 'Tâches planifiées',
-            refresh: 'Refresh',
+            description: 'Gérez les sauvegardes automatiques de vos bases de données',
+            refresh: 'Actualiser',
             noData: 'Aucune tâche planifiée',
+            noDataDesc: 'Configurez une planification sur une base pour la voir ici',
+            addSchedule: 'Ajouter une planification',
+            selectDatabase: 'Sélectionner une base',
+            editSchedule: 'Modifier la planification',
+            active: 'Actif',
+            paused: 'En pause',
             database: 'Base de données',
             status: 'Statut',
             statusActive: '● Actif',
@@ -1532,7 +1591,18 @@ export const translations = {
             tableSize: 'Taille',
             tableActions: 'Actions',
             restore: 'Restaurer',
-            started: 'Sauvegarde démarrée : {db}'
+            delete: 'Supprimer',
+            noBackups: 'Aucune sauvegarde',
+            noBackupsDesc: 'Les sauvegardes apparaîtront ici une fois terminées',
+            backupsCount: 'sauvegardes',
+            today: "Aujourd'hui",
+            yesterday: 'Hier',
+            started: 'Sauvegarde démarrée : {db}',
+            selectedCount: '{count} sélectionnée(s)',
+            deleteSelected: 'Supprimer',
+            deleteSelectedConfirm: 'Supprimer {count} sauvegarde(s) sélectionnée(s) ?',
+            deleteSelectedSuccess: '{count} sauvegarde(s) supprimée(s)',
+            clearSelection: 'Effacer'
         },
         cron: {
             everyDay2am: 'Tous les jours à 2h00',
