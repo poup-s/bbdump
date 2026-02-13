@@ -48,7 +48,7 @@ const loadSettings = async () => {
 const saveLanguage = async () => {
   setLanguage(currentLang.value as 'en' | 'fr');
   try {
-    await ipcRenderer.invoke('save-config', { language: currentLang.value });
+    await ipcRenderer.invoke('save-settings', { language: currentLang.value });
     addToast(t('toasts.settingsSaved'), 'success');
   } catch (error: any) {
     addToast('Error saving settings: ' + error.message, 'error');
