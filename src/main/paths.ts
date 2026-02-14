@@ -43,6 +43,25 @@ class PathManager {
     return path.join(this._appDataPath, '.encryption.key');
   }
 
+  get claudeDesktopConfigPath(): string {
+    const home = app.getPath('home');
+    switch (process.platform) {
+      case 'darwin':
+        return path.join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
+      case 'win32':
+        return path.join(process.env.APPDATA || '', 'Claude', 'claude_desktop_config.json');
+      default:
+        return path.join(home, '.config', 'Claude', 'claude_desktop_config.json');
+    }
+  }
+
+  get mcpServerPath(): string {
+    if (app.isPackaged) {
+      return path.join(process.resourcesPath, 'mcp-postgres', 'index.js');
+    }
+    return path.resolve(__dirname, '..', '..', 'mcp-postgres', 'build', 'index.js');
+  }
+
   private ensureDirectories(): void {
     const dirs = [
       this.logsPath,

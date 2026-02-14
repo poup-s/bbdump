@@ -7,7 +7,7 @@ import PrerequisitesLoader from './PrerequisitesLoader.vue';
 
 const { t, setLanguage } = useI18n();
 
-const step = ref(1); // 1: Language, 2: Prerequisites, 3: Databases, 4: Path
+const step = ref(1); // 1: Language, 2: Prerequisites, 3: Databases, 4: Path, 5: MCP
 const selectedLang = ref<'en' | 'fr'>('en');
 const selectedPath = ref('');
 const isLoading = ref(false);
@@ -35,6 +35,11 @@ const installing = ref<{
 });
 
 const installProgress = ref<{ step: string; message: string; progress: number } | null>(null);
+
+// MCP Server
+const mcpInstalled = ref(false);
+const mcpLoading = ref(false);
+const claudeDesktopDetected = ref(false);
 
 // État des accordéons
 const expandedSections = ref<{
@@ -94,6 +99,9 @@ const nextStep = async () => {
     await discoverDatabases();
   } else if (step.value === 3) {
     step.value = 4;
+  } else if (step.value === 4) {
+    step.value = 5;
+    await loadMcpStatus();
   }
 };
 
@@ -239,6 +247,44 @@ const finishOnboarding = async () => {
     console.error('Failed to complete onboarding:', error);
   } finally {
     isLoading.value = false;
+  }
+};
+
+const loadMcpStatus = async () => {
+  try {
+    const status = await ipcRenderer.invoke('get-mcp-status');
+    mcpInstalled.value = status.installed;
+    claudeDesktopDetected.value = status.claudeDesktopDetected;
+  } catch (error) {
+    console.error('Error loading MCP status:', error);
+  }
+};
+
+const installMcp = async () => {
+  mcpLoading.value = true;
+  try {
+    const result = await ipcRenderer.invoke('install-mcp-claude-desktop');
+    if (result.success) {
+      mcpInstalled.value = true;
+    }
+  } catch (error) {
+    console.error('Error installing MCP:', error);
+  } finally {
+    mcpLoading.value = false;
+  }
+};
+
+const uninstallMcp = async () => {
+  mcpLoading.value = true;
+  try {
+    const result = await ipcRenderer.invoke('uninstall-mcp-claude-desktop');
+    if (result.success) {
+      mcpInstalled.value = false;
+    }
+  } catch (error) {
+    console.error('Error uninstalling MCP:', error);
+  } finally {
+    mcpLoading.value = false;
   }
 };
 
@@ -826,6 +872,112 @@ const installPostgreSQL = async () => {
           <div class="flex gap-3">
             <button
               @click="step = 3"
+              class="flex-1 py-3 bg-zinc-800/50 hover:bg-zinc-800 rounded-xl font-medium transition-all"
+            >
+              {{ t('onboarding.back') || 'Back' }}
+            </button>
+            <button
+              @click="nextStep"
+              class="flex-1 py-3 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-xl font-bold hover:shadow-lg hover:shadow-indigo-500/30 transition-all text-sm sm:text-base"
+            >
+              {{ t('onboarding.continue') || 'Continue' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 5: MCP Server -->
+        <div v-if="step === 5" class="space-y-6">
+          <div class="text-center space-y-2">
+            <h1 class="text-xl sm:text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
+              {{ t('onboarding.mcpTitle') || 'MCP Server' }}
+            </h1>
+            <p class="text-gray-400 text-xs sm:text-sm">
+              {{ t('onboarding.mcpDesc') || 'Connect your databases to AI assistants via the MCP protocol.' }}
+            </p>
+          </div>
+
+          <!-- MCP Explanation -->
+          <div class="bg-zinc-800/30 rounded-xl border border-zinc-700/30 p-4 space-y-3">
+            <div class="flex items-start gap-3">
+              <div class="w-10 h-10 rounded-xl bg-violet-500/20 flex items-center justify-center shrink-0">
+                <svg class="w-5 h-5 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium text-white">{{ t('onboarding.mcpWhat') || 'What is MCP?' }}</div>
+                <p class="text-xs text-gray-400 mt-1 leading-relaxed">{{ t('onboarding.mcpWhatDesc') || 'The Model Context Protocol allows AI assistants like Claude Desktop, Cursor or Windsurf to explore your databases in read-only mode. 22 tools available.' }}</p>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2 text-xs text-gray-400 bg-zinc-900/50 rounded-lg px-3 py-2">
+              <svg class="w-3.5 h-3.5 text-green-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+              <span>{{ t('onboarding.mcpReadOnly') || 'Read-only access only — your data is safe.' }}</span>
+            </div>
+          </div>
+
+          <!-- Claude Desktop Install -->
+          <div class="bg-zinc-800/30 rounded-xl border border-zinc-700/30 p-4 space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-zinc-700/50 flex items-center justify-center shrink-0">
+                  <svg class="w-5 h-5 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                  </svg>
+                </div>
+                <div>
+                  <div class="text-sm font-medium text-white">Claude Desktop</div>
+                  <p class="text-xs text-gray-500 mt-0.5">{{ t('onboarding.mcpClaudeDesc') || 'Install automatically in Claude Desktop' }}</p>
+                </div>
+              </div>
+              <button
+                v-if="!mcpInstalled"
+                @click="installMcp"
+                :disabled="mcpLoading || !claudeDesktopDetected"
+                class="px-4 py-2 text-xs font-bold bg-violet-600 hover:bg-violet-700 disabled:bg-violet-400 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center gap-1.5 shrink-0 ml-3"
+              >
+                <svg v-if="mcpLoading" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                {{ t('onboarding.mcpInstallBtn') || 'Install' }}
+              </button>
+              <div v-else class="flex items-center gap-2 shrink-0 ml-3">
+                <div class="px-2.5 py-1 bg-green-500/20 text-green-400 rounded-lg text-xs font-medium">
+                  {{ t('onboarding.installed') || 'Installed' }}
+                </div>
+                <button
+                  @click="uninstallMcp"
+                  :disabled="mcpLoading"
+                  class="px-3 py-1.5 text-xs text-gray-500 hover:text-red-400 border border-zinc-700 rounded-lg hover:border-red-800 transition-colors"
+                >
+                  {{ t('onboarding.mcpUninstallBtn') || 'Remove' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Warning: Claude Desktop not detected -->
+            <div v-if="!claudeDesktopDetected" class="flex items-center gap-2 text-xs text-amber-400/80 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+              <svg class="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span>{{ t('onboarding.mcpClaudeNotDetected') || 'Claude Desktop does not seem to be installed on this computer.' }}</span>
+            </div>
+          </div>
+
+          <!-- Hint for other tools -->
+          <div class="flex items-center gap-1.5 text-[11px] text-gray-500 px-1">
+            <svg class="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {{ t('onboarding.mcpOtherTools') || 'For Cursor, Windsurf or other tools, you can configure MCP later in Settings.' }}
+          </div>
+
+          <div class="flex gap-3">
+            <button
+              @click="step = 4"
               class="flex-1 py-3 bg-zinc-800/50 hover:bg-zinc-800 rounded-xl font-medium transition-all"
             >
               {{ t('onboarding.back') || 'Back' }}

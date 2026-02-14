@@ -506,7 +506,28 @@ export const translations = {
             updateAvailable: '🎉 New version available: {version}',
             noUpdateAvailable: '✓ You are using the latest version',
             upToDate: '✓ You are using the latest version',
-            updateError: 'Error checking for updates'
+            updateError: 'Error checking for updates',
+            mcp: 'MCP Server',
+            mcpTitle: 'MCP Server',
+            mcpDesc: 'Expose your PostgreSQL databases to AI assistants via the MCP protocol. 22 read-only tools including connection switching.',
+            mcpConnectionAutoInfo: 'Automatic access to all databases configured in bbdump',
+            mcpConnectionAutoDesc: 'AI assistants can list and switch between all your configured connections via list_connections and use_connection.',
+            mcpClaudeDesktopDesc: 'Automatic installation in Claude Desktop configuration',
+            mcpClaudeNotDetected: 'Claude Desktop does not seem to be installed on this computer.',
+            mcpInstall: 'Install',
+            mcpUninstall: 'Uninstall',
+            mcpInstalled: 'Installed',
+            mcpNotInstalled: 'Not installed',
+            mcpInstallSuccess: 'MCP server configured for Claude Desktop. Restart Claude Desktop to activate.',
+            mcpUninstallSuccess: 'MCP server removed from Claude Desktop configuration.',
+            mcpInstallError: 'Failed to install MCP server',
+            mcpRestartHint: 'Restart the client application after changes',
+            mcpConfigPath: 'Config file',
+            mcpCustomTitle: 'Custom installation (other tools)',
+            mcpCustomDesc: 'Copy this JSON configuration to use with Cursor, Windsurf, or any MCP-compatible tool.',
+            mcpCopy: 'Copy',
+            mcpCopied: 'Copied!',
+            mcpCustomHint: 'Replace the paths with the absolute paths on your machine.'
         },
         postgresConfig: {
             title: 'PostgreSQL Configuration',
@@ -860,7 +881,17 @@ export const translations = {
             selectAll: 'Select all',
             deselectAll: 'Deselect all',
             noDatabasesFound: 'No databases found',
-            noDatabasesFoundDesc: 'No user databases were found on your local PostgreSQL server. You can add databases later from the app.'
+            noDatabasesFoundDesc: 'No user databases were found on your local PostgreSQL server. You can add databases later from the app.',
+            mcpTitle: 'MCP Server',
+            mcpDesc: 'Connect your databases to AI assistants via the MCP protocol.',
+            mcpWhat: 'What is MCP?',
+            mcpWhatDesc: 'The Model Context Protocol allows AI assistants like Claude Desktop, Cursor or Windsurf to explore your databases in read-only mode. 22 tools available.',
+            mcpReadOnly: 'Read-only access only — your data is safe.',
+            mcpClaudeDesc: 'Install automatically in Claude Desktop',
+            mcpClaudeNotDetected: 'Claude Desktop does not seem to be installed on this computer.',
+            mcpInstallBtn: 'Install',
+            mcpUninstallBtn: 'Remove',
+            mcpOtherTools: 'For Cursor, Windsurf or other tools, you can configure MCP later in Settings.'
         }
     },
     fr: {
@@ -1429,7 +1460,28 @@ export const translations = {
             updateAvailable: '🎉 Nouvelle version disponible : {version}',
             noUpdateAvailable: '✓ Vous utilisez la dernière version',
             upToDate: '✓ Vous utilisez la dernière version',
-            updateError: 'Erreur lors de la vérification'
+            updateError: 'Erreur lors de la vérification',
+            mcp: 'Serveur MCP',
+            mcpTitle: 'Serveur MCP',
+            mcpDesc: 'Exposez vos bases de données PostgreSQL aux assistants IA via le protocole MCP. 22 outils en lecture seule incluant le changement de connexion.',
+            mcpConnectionAutoInfo: 'Accès automatique à toutes les bases configurées dans bbdump',
+            mcpConnectionAutoDesc: 'Les assistants IA peuvent lister et basculer entre toutes vos connexions configurées via list_connections et use_connection.',
+            mcpClaudeDesktopDesc: 'Installation automatique dans la configuration Claude Desktop',
+            mcpClaudeNotDetected: 'Claude Desktop ne semble pas être installé sur cet ordinateur.',
+            mcpInstall: 'Installer',
+            mcpUninstall: 'Désinstaller',
+            mcpInstalled: 'Installé',
+            mcpNotInstalled: 'Non installé',
+            mcpInstallSuccess: 'Serveur MCP configuré pour Claude Desktop. Redémarrez Claude Desktop pour activer.',
+            mcpUninstallSuccess: 'Serveur MCP retiré de la configuration Claude Desktop.',
+            mcpInstallError: 'Erreur lors de l\'installation du serveur MCP',
+            mcpRestartHint: 'Redémarrez l\'application cliente après modification',
+            mcpConfigPath: 'Fichier de config',
+            mcpCustomTitle: 'Installation personnalisée (autres outils)',
+            mcpCustomDesc: 'Copiez cette configuration JSON pour l\'utiliser avec Cursor, Windsurf ou tout outil compatible MCP.',
+            mcpCopy: 'Copier',
+            mcpCopied: 'Copié !',
+            mcpCustomHint: 'Remplacez les chemins par les chemins absolus sur votre machine.'
         },
         postgresConfig: {
             title: 'Configuration PostgreSQL',
@@ -1723,7 +1775,17 @@ export const translations = {
             selectAll: 'Tout sélectionner',
             deselectAll: 'Tout désélectionner',
             noDatabasesFound: 'Aucune base de données trouvée',
-            noDatabasesFoundDesc: 'Aucune base de données utilisateur n\'a été trouvée sur votre serveur PostgreSQL local. Vous pourrez en ajouter plus tard depuis l\'application.'
+            noDatabasesFoundDesc: 'Aucune base de données utilisateur n\'a été trouvée sur votre serveur PostgreSQL local. Vous pourrez en ajouter plus tard depuis l\'application.',
+            mcpTitle: 'Serveur MCP',
+            mcpDesc: 'Connectez vos bases de données aux assistants IA via le protocole MCP.',
+            mcpWhat: 'Qu\'est-ce que MCP ?',
+            mcpWhatDesc: 'Le Model Context Protocol permet aux assistants IA comme Claude Desktop, Cursor ou Windsurf d\'explorer vos bases de données en lecture seule. 22 outils disponibles.',
+            mcpReadOnly: 'Accès en lecture seule uniquement — vos données sont en sécurité.',
+            mcpClaudeDesc: 'Installer automatiquement dans Claude Desktop',
+            mcpClaudeNotDetected: 'Claude Desktop ne semble pas être installé sur cet ordinateur.',
+            mcpInstallBtn: 'Installer',
+            mcpUninstallBtn: 'Retirer',
+            mcpOtherTools: 'Pour Cursor, Windsurf ou d\'autres outils, vous pourrez configurer MCP plus tard dans les Réglages.'
         }
     }
 };

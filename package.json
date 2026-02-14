@@ -84,6 +84,18 @@
       "logs/**/*",
       "logo.png"
     ],
+    "extraResources": [
+      {
+        "from": "mcp-postgres/build",
+        "to": "mcp-postgres",
+        "filter": ["**/*.js"]
+      },
+      {
+        "from": "mcp-postgres/node_modules",
+        "to": "mcp-postgres/node_modules",
+        "filter": ["**/*"]
+      }
+    ],
     "mac": {
       "category": "public.app-category.utilities",
       "target": [

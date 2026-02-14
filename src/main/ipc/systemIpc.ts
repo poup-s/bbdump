@@ -314,4 +314,107 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
     ipcMain.handle('import-key', async () => {
         return { success: false, error: "Use import-encryption-key" };
     });
+
+    // MCP Server Handlers
+    ipcMain.handle('get-mcp-status', async () => {
+        try {
+            const configPath = pathManager.claudeDesktopConfigPath;
+            const serverPath = pathManager.mcpServerPath;
+            const configExists = fs.existsSync(configPath);
+            let installed = false;
+
+            if (configExists) {
+                const raw = fs.readFileSync(configPath, 'utf-8');
+                const config = JSON.parse(raw);
+                installed = !!(config.mcpServers && config.mcpServers['bbdump-postgres']);
+            }
+
+            // Detect if Claude Desktop is installed
+            let claudeDesktopDetected = false;
+            if (process.platform === 'darwin') {
+                claudeDesktopDetected = fs.existsSync('/Applications/Claude.app');
+            } else if (process.platform === 'win32') {
+                const localAppData = process.env.LOCALAPPDATA || '';
+                claudeDesktopDetected = fs.existsSync(path.join(localAppData, 'Programs', 'claude-desktop'))
+                    || fs.existsSync(path.join(localAppData, 'AnthropicClaude'));
+            } else {
+                // Linux: check if config dir exists (created on first run)
+                claudeDesktopDetected = fs.existsSync(path.dirname(configPath));
+            }
+
+            return { installed, configExists, configPath, serverPath, claudeDesktopDetected, bbdumpConfigPath: pathManager.configPath, bbdumpKeyPath: pathManager.encryptionKeyPath };
+        } catch (error: any) {
+            logger.error(`Error checking MCP status: ${error.message}`);
+            return { installed: false, configExists: false, configPath: pathManager.claudeDesktopConfigPath, serverPath: pathManager.mcpServerPath, claudeDesktopDetected: false, bbdumpConfigPath: pathManager.configPath, bbdumpKeyPath: pathManager.encryptionKeyPath };
+        }
+    });
+
+    ipcMain.handle('install-mcp-claude-desktop', async () => {
+        try {
+            const configPath = pathManager.claudeDesktopConfigPath;
+            const serverPath = pathManager.mcpServerPath;
+
+            // Ensure directory exists
+            const configDir = path.dirname(configPath);
+            if (!fs.existsSync(configDir)) {
+                fs.mkdirSync(configDir, { recursive: true });
+            }
+
+            // Read existing config or create empty
+            let config: any = {};
+            if (fs.existsSync(configPath)) {
+                const raw = fs.readFileSync(configPath, 'utf-8');
+                config = JSON.parse(raw);
+            }
+
+            if (!config.mcpServers) {
+                config.mcpServers = {};
+            }
+
+            // Pass bbdump config and encryption key paths
+            // The MCP server reads database connections from bbdump's config
+            const env: Record<string, string> = {
+                BBDUMP_CONFIG_PATH: pathManager.configPath,
+                BBDUMP_KEY_PATH: pathManager.encryptionKeyPath,
+            };
+
+            config.mcpServers['bbdump-postgres'] = {
+                command: 'node',
+                args: [serverPath],
+                env
+            };
+
+            fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+            logger.info(`MCP server installed in Claude Desktop config: ${configPath}`);
+
+            return { success: true, configPath };
+        } catch (error: any) {
+            logger.error(`Error installing MCP for Claude Desktop: ${error.message}`);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('uninstall-mcp-claude-desktop', async () => {
+        try {
+            const configPath = pathManager.claudeDesktopConfigPath;
+
+            if (!fs.existsSync(configPath)) {
+                return { success: true };
+            }
+
+            const raw = fs.readFileSync(configPath, 'utf-8');
+            const config = JSON.parse(raw);
+
+            if (config.mcpServers && config.mcpServers['bbdump-postgres']) {
+                delete config.mcpServers['bbdump-postgres'];
+                fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+                logger.info('MCP server removed from Claude Desktop config');
+            }
+
+            return { success: true };
+        } catch (error: any) {
+            logger.error(`Error uninstalling MCP from Claude Desktop: ${error.message}`);
+            return { success: false, error: error.message };
+        }
+    });
 }
