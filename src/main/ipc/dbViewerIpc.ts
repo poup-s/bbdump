@@ -238,6 +238,27 @@ export function registerDbViewerHandlers() {
         }
     });
 
+    ipcMain.handle('execute-sql-mutation', async (_, params: {
+        db: { name: string };
+        sql: string;
+        maxRows?: number;
+        timeoutMs?: number;
+    }) => {
+        try {
+            logger.info(`Executing SQL mutation on ${params.db.name}`);
+            const dbConfig = getDbConfig(params.db.name);
+            return await dbViewer.executeMutationQuery({
+                ...dbConfig,
+                sql: params.sql,
+                maxRows: params.maxRows,
+                timeoutMs: params.timeoutMs
+            });
+        } catch (error: any) {
+            logger.error(`Error executing SQL mutation: ${error.message || error}`);
+            throw error;
+        }
+    });
+
     // PostgreSQL Configuration Handlers (kept here as they are related to DB management/viewing tools)
     ipcMain.handle('get-postgres-config', async (_, port: number = 5432) => {
         try {

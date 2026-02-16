@@ -677,6 +677,48 @@ export async function executeQuery(params: ConnectionParams & {
 }
 
 /**
+ * Exécute une requête SQL en mode read-write (mutations autorisées) avec timeout
+ */
+export async function executeMutationQuery(params: ConnectionParams & {
+  sql: string;
+  maxRows?: number;
+  timeoutMs?: number;
+}) {
+  const client = await getClient(params);
+  const maxRows = params.maxRows || 5000;
+  const timeoutMs = params.timeoutMs || 60000;
+
+  try {
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL statement_timeout = ${timeoutMs}`);
+
+    const startTime = Date.now();
+    const result = await client.query(params.sql);
+    const duration = Date.now() - startTime;
+
+    await client.query('COMMIT');
+
+    const truncated = result.rows.length > maxRows;
+    const rows = truncated ? result.rows.slice(0, maxRows) : result.rows;
+    const fields = result.fields?.map(f => f.name) || [];
+
+    return {
+      rows,
+      fields,
+      rowCount: result.rowCount,
+      truncated,
+      duration,
+      command: result.command
+    };
+  } catch (error: any) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw new Error(error.message);
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Récupère le schéma complet de la base de données (tables, colonnes, relations)
  */
 export async function getDatabaseFullSchema(params: ConnectionParams) {

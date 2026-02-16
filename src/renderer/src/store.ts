@@ -41,5 +41,6 @@ export const store = reactive({
     onboardingCompleted: false,
     language: 'en' as 'en' | 'fr',
     activeTab: 'dashboard' as string,
-    isLoading: true
+    isLoading: true,
+    allowSqlMutations: false
 });

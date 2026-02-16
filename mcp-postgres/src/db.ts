@@ -6,7 +6,8 @@ type PoolClient = pg.PoolClient;
 
 const pools = new Map<string, pg.Pool>();
 
-// Active connection — mutable, switchable at runtime
+// Active connection — mutable, switchable at runtime.
+// Safe for MCP stdio transport which processes requests sequentially (single JSON-RPC stream).
 interface ActiveConnection {
   host: string;
   port: number;
@@ -90,7 +91,7 @@ export async function getClient(database?: string): Promise<PoolClient> {
       // Remove old pool
       const oldPool = pools.get(key);
       if (oldPool) {
-        await oldPool.end().catch(() => {});
+        await oldPool.end().catch((e) => console.error('Failed to close old pool:', e.message));
         pools.delete(key);
       }
 
@@ -132,7 +133,26 @@ export async function executeReadOnly(
     await client.query('COMMIT');
     return result;
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
+    await client.query('ROLLBACK').catch((e) => console.error('ROLLBACK failed:', (e as Error).message));
+    throw err;
+  }
+}
+
+export async function executeWrite(
+  client: PoolClient,
+  sql: string,
+  params?: any[],
+  timeoutMs?: number
+): Promise<pg.QueryResult> {
+  const timeout = timeoutMs || config.statementTimeout;
+  try {
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL statement_timeout = ${timeout}`);
+    const result = await client.query(sql, params);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK').catch((e) => console.error('ROLLBACK failed:', (e as Error).message));
     throw err;
   }
 }
@@ -141,7 +161,7 @@ export async function closeAll(): Promise<void> {
   const entries = Array.from(pools.entries());
   for (const [key, pool] of entries) {
     console.error(`Closing pool: ${key}`);
-    await pool.end().catch(() => {});
+    await pool.end().catch((e) => console.error(`Failed to close pool ${key}:`, (e as Error).message));
     pools.delete(key);
   }
 }

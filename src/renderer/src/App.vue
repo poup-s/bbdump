@@ -59,6 +59,9 @@ const loadConfig = async () => {
       store.language = config.language;
       setLanguage(config.language);
     }
+
+    // Handle SQL mutations setting
+    store.allowSqlMutations = config.allowSqlMutations || false;
   } catch (error) {
     console.error('Error loading config:', error);
     addToast('Error loading configuration', 'error');

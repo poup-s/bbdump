@@ -2,8 +2,10 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import { useI18n } from '../../composables/useI18n';
 import { useToast } from '../../composables/useToast';
+import { useConfirm } from '../../composables/useConfirm';
 import { ipcRenderer } from '../../electron';
 import { buildDbConfig, Database } from '../../types';
+import { store } from '../../store';
 
 const props = defineProps<{
   db: Database | null;
@@ -11,6 +13,10 @@ const props = defineProps<{
 
 const { t } = useI18n();
 const { addToast } = useToast();
+const { showConfirm } = useConfirm();
+
+const MUTATION_REGEX = /^\s*(UPDATE|DELETE|INSERT|DROP|ALTER|TRUNCATE|CREATE)\b/i;
+const DANGEROUS_REGEX = /^\s*(DELETE|DROP|TRUNCATE)\b/i;
 
 // Schema data
 interface SchemaColumn {
@@ -30,8 +36,12 @@ const allColumns = ref<SchemaColumn[]>([]);
 const allForeignKeys = ref<SchemaFK[]>([]);
 const schemaLoaded = ref(false);
 
+// Query mode
+type QueryMode = 'select' | 'update' | 'delete' | 'insert';
+const queryType = ref<QueryMode>('select');
+
 // Block types
-type BlockType = 'select' | 'from' | 'join' | 'where' | 'groupBy' | 'orderBy' | 'limit';
+type BlockType = 'select' | 'from' | 'join' | 'where' | 'groupBy' | 'orderBy' | 'limit' | 'updateTable' | 'set' | 'deleteFrom' | 'insertInto' | 'values';
 
 interface SelectBlock {
   type: 'select';
@@ -79,7 +89,39 @@ interface LimitBlock {
   value: number;
 }
 
-type Block = SelectBlock | FromBlock | JoinBlock | WhereBlock | GroupByBlock | OrderByBlock | LimitBlock;
+// Mutation block types
+interface UpdateTableBlock {
+  type: 'updateTable';
+  table: string;
+}
+
+interface SetItem {
+  column: string;
+  value: string;
+}
+
+interface SetBlock {
+  type: 'set';
+  items: SetItem[];
+}
+
+interface DeleteFromBlock {
+  type: 'deleteFrom';
+  table: string;
+}
+
+interface InsertIntoBlock {
+  type: 'insertInto';
+  table: string;
+  columns: string[];
+}
+
+interface ValuesBlock {
+  type: 'values';
+  rows: Record<string, string>[];
+}
+
+type Block = SelectBlock | FromBlock | JoinBlock | WhereBlock | GroupByBlock | OrderByBlock | LimitBlock | UpdateTableBlock | SetBlock | DeleteFromBlock | InsertIntoBlock | ValuesBlock;
 
 // State
 const blocks = ref<Block[]>([
@@ -100,6 +142,8 @@ const resultRowCount = ref(0);
 const hasResults = ref(false);
 const queryError = ref<string | null>(null);
 const showAddMenu = ref(false);
+const mutationResult = ref<{ command: string; rowCount: number; duration: number } | null>(null);
+const mutationFlash = ref(false);
 
 // Query history
 const queryHistory = ref<{ sql: string; duration: number; rowCount: number; timestamp: number }[]>([]);
@@ -108,7 +152,15 @@ const showHistory = ref(false);
 // Derived
 const fromTable = computed(() => {
   const fromBlock = blocks.value.find(b => b.type === 'from') as FromBlock | undefined;
-  return fromBlock?.table || '';
+  if (fromBlock) return fromBlock.table || '';
+  // For mutation modes, get table from their respective blocks
+  const updateBlock = blocks.value.find(b => b.type === 'updateTable') as UpdateTableBlock | undefined;
+  if (updateBlock) return updateBlock.table || '';
+  const deleteBlock = blocks.value.find(b => b.type === 'deleteFrom') as DeleteFromBlock | undefined;
+  if (deleteBlock) return deleteBlock.table || '';
+  const insertBlock = blocks.value.find(b => b.type === 'insertInto') as InsertIntoBlock | undefined;
+  if (insertBlock) return insertBlock.table || '';
+  return '';
 });
 
 const joinTables = computed(() => {
@@ -135,11 +187,18 @@ const columnOptions = computed(() => {
 const availableBlockTypes = computed(() => {
   const existing = new Set(blocks.value.map(b => b.type));
   const types: { type: BlockType; label: string }[] = [];
-  if (!existing.has('where')) types.push({ type: 'where', label: 'WHERE' });
-  types.push({ type: 'join', label: 'JOIN' }); // can have multiple
-  if (!existing.has('groupBy')) types.push({ type: 'groupBy', label: 'GROUP BY' });
-  if (!existing.has('orderBy')) types.push({ type: 'orderBy', label: 'ORDER BY' });
-  if (!existing.has('limit')) types.push({ type: 'limit', label: 'LIMIT' });
+
+  if (queryType.value === 'select') {
+    if (!existing.has('where')) types.push({ type: 'where', label: 'WHERE' });
+    types.push({ type: 'join', label: 'JOIN' });
+    if (!existing.has('groupBy')) types.push({ type: 'groupBy', label: 'GROUP BY' });
+    if (!existing.has('orderBy')) types.push({ type: 'orderBy', label: 'ORDER BY' });
+    if (!existing.has('limit')) types.push({ type: 'limit', label: 'LIMIT' });
+  } else if (queryType.value === 'update' || queryType.value === 'delete') {
+    if (!existing.has('where')) types.push({ type: 'where', label: 'WHERE' });
+  }
+  // insert: no additional blocks
+
   return types;
 });
 
@@ -158,73 +217,116 @@ const getFkSuggestions = (joinTable: string) => {
   return suggestions;
 };
 
+// Build WHERE clause (shared across query types)
+const buildWhereClause = () => {
+  const whereBlock = blocks.value.find(b => b.type === 'where') as WhereBlock | undefined;
+  if (!whereBlock?.conditions.length) return '';
+  const validConditions = whereBlock.conditions.filter(c => c.column && c.operator);
+  if (validConditions.length === 0) return '';
+  const whereParts = validConditions.map((c, i) => {
+    const prefix = i > 0 ? `${c.connector} ` : '';
+    if (c.operator === 'IS NULL' || c.operator === 'IS NOT NULL') {
+      return `${prefix}${c.column} ${c.operator}`;
+    }
+    const val = c.value;
+    const isNum = val !== '' && !isNaN(Number(val));
+    const quotedVal = isNum ? val : `'${val.replace(/'/g, "''")}'`;
+    return `${prefix}${c.column} ${c.operator} ${quotedVal}`;
+  });
+  return `WHERE ${whereParts.join(' ')}`;
+};
+
 // Build SQL
 const generatedSql = computed(() => {
-  const selectBlock = blocks.value.find(b => b.type === 'select') as SelectBlock | undefined;
-  const fromBlock = blocks.value.find(b => b.type === 'from') as FromBlock | undefined;
-  const joinBlocks = blocks.value.filter(b => b.type === 'join') as JoinBlock[];
-  const whereBlock = blocks.value.find(b => b.type === 'where') as WhereBlock | undefined;
-  const groupByBlock = blocks.value.find(b => b.type === 'groupBy') as GroupByBlock | undefined;
-  const orderByBlock = blocks.value.find(b => b.type === 'orderBy') as OrderByBlock | undefined;
-  const limitBlock = blocks.value.find(b => b.type === 'limit') as LimitBlock | undefined;
+  if (queryType.value === 'select') {
+    const selectBlock = blocks.value.find(b => b.type === 'select') as SelectBlock | undefined;
+    const fromBlock = blocks.value.find(b => b.type === 'from') as FromBlock | undefined;
+    const joinBlocks = blocks.value.filter(b => b.type === 'join') as JoinBlock[];
+    const groupByBlock = blocks.value.find(b => b.type === 'groupBy') as GroupByBlock | undefined;
+    const orderByBlock = blocks.value.find(b => b.type === 'orderBy') as OrderByBlock | undefined;
+    const limitBlock = blocks.value.find(b => b.type === 'limit') as LimitBlock | undefined;
 
-  if (!fromBlock?.table) return '';
-
-  const parts: string[] = [];
-
-  // SELECT
-  const distinct = selectBlock?.distinct ? 'DISTINCT ' : '';
-  const cols = selectBlock?.columns?.length ? selectBlock.columns.join(', ') : '*';
-  parts.push(`SELECT ${distinct}${cols}`);
-
-  // FROM
-  parts.push(`FROM "${fromBlock.table}"`);
-
-  // JOINs
-  for (const join of joinBlocks) {
-    if (join.table && join.onLeft && join.onRight) {
-      parts.push(`${join.joinType} JOIN "${join.table}" ON ${join.onLeft} = ${join.onRight}`);
+    if (!fromBlock?.table) return '';
+    const parts: string[] = [];
+    const distinct = selectBlock?.distinct ? 'DISTINCT ' : '';
+    const cols = selectBlock?.columns?.length ? selectBlock.columns.join(', ') : '*';
+    parts.push(`SELECT ${distinct}${cols}`);
+    parts.push(`FROM "${fromBlock.table}"`);
+    for (const join of joinBlocks) {
+      if (join.table && join.onLeft && join.onRight) {
+        parts.push(`${join.joinType} JOIN "${join.table}" ON ${join.onLeft} = ${join.onRight}`);
+      }
     }
+    const where = buildWhereClause();
+    if (where) parts.push(where);
+    if (groupByBlock?.columns.length) parts.push(`GROUP BY ${groupByBlock.columns.join(', ')}`);
+    if (orderByBlock?.columns.length) {
+      const orderParts = orderByBlock.columns.filter(c => c.column).map(c => `${c.column} ${c.direction}`);
+      if (orderParts.length) parts.push(`ORDER BY ${orderParts.join(', ')}`);
+    }
+    if (limitBlock) parts.push(`LIMIT ${limitBlock.value}`);
+    return parts.join('\n');
   }
 
-  // WHERE
-  if (whereBlock?.conditions.length) {
-    const validConditions = whereBlock.conditions.filter(c => c.column && c.operator);
-    if (validConditions.length > 0) {
-      const whereParts = validConditions.map((c, i) => {
-        const prefix = i > 0 ? `${c.connector} ` : '';
-        if (c.operator === 'IS NULL' || c.operator === 'IS NOT NULL') {
-          return `${prefix}${c.column} ${c.operator}`;
-        }
-        const val = c.value;
-        // Detect if value looks like a number
-        const isNum = val !== '' && !isNaN(Number(val));
-        const quotedVal = isNum ? val : `'${val.replace(/'/g, "''")}'`;
-        return `${prefix}${c.column} ${c.operator} ${quotedVal}`;
+  if (queryType.value === 'update') {
+    const tableBlock = blocks.value.find(b => b.type === 'updateTable') as UpdateTableBlock | undefined;
+    const setBlock = blocks.value.find(b => b.type === 'set') as SetBlock | undefined;
+    if (!tableBlock?.table) return '';
+    const validItems = setBlock?.items.filter(i => i.column) || [];
+    if (validItems.length === 0) return '';
+    const parts: string[] = [];
+    parts.push(`UPDATE "${tableBlock.table}"`);
+    const setParts = validItems.map(i => {
+      const isNum = i.value !== '' && !isNaN(Number(i.value));
+      const val = i.value === 'NULL' ? 'NULL' : isNum ? i.value : `'${i.value.replace(/'/g, "''")}'`;
+      return `${i.column} = ${val}`;
+    });
+    parts.push(`SET ${setParts.join(', ')}`);
+    const where = buildWhereClause();
+    if (where) parts.push(where);
+    return parts.join('\n');
+  }
+
+  if (queryType.value === 'delete') {
+    const tableBlock = blocks.value.find(b => b.type === 'deleteFrom') as DeleteFromBlock | undefined;
+    if (!tableBlock?.table) return '';
+    const parts: string[] = [];
+    parts.push(`DELETE FROM "${tableBlock.table}"`);
+    const where = buildWhereClause();
+    if (where) parts.push(where);
+    return parts.join('\n');
+  }
+
+  if (queryType.value === 'insert') {
+    const insertBlock = blocks.value.find(b => b.type === 'insertInto') as InsertIntoBlock | undefined;
+    const valuesBlock = blocks.value.find(b => b.type === 'values') as ValuesBlock | undefined;
+    if (!insertBlock?.table || !insertBlock.columns.length) return '';
+    if (!valuesBlock?.rows.length) return '';
+    const cols = insertBlock.columns;
+    const parts: string[] = [];
+    parts.push(`INSERT INTO "${insertBlock.table}" (${cols.join(', ')})`);
+    const rowStrings = valuesBlock.rows.map(row => {
+      const vals = cols.map(col => {
+        const v = row[col] ?? '';
+        if (v === 'NULL' || v === '') return 'NULL';
+        const isNum = !isNaN(Number(v));
+        return isNum ? v : `'${v.replace(/'/g, "''")}'`;
       });
-      parts.push(`WHERE ${whereParts.join(' ')}`);
-    }
+      return `(${vals.join(', ')})`;
+    });
+    parts.push(`VALUES ${rowStrings.join(',\n       ')}`);
+    return parts.join('\n');
   }
 
-  // GROUP BY
-  if (groupByBlock?.columns.length) {
-    parts.push(`GROUP BY ${groupByBlock.columns.join(', ')}`);
-  }
+  return '';
+});
 
-  // ORDER BY
-  if (orderByBlock?.columns.length) {
-    const orderParts = orderByBlock.columns
-      .filter(c => c.column)
-      .map(c => `${c.column} ${c.direction}`);
-    if (orderParts.length) parts.push(`ORDER BY ${orderParts.join(', ')}`);
-  }
-
-  // LIMIT
-  if (limitBlock) {
-    parts.push(`LIMIT ${limitBlock.value}`);
-  }
-
-  return parts.join('\n');
+// Warning when mutation has no WHERE clause
+const noWhereWarning = computed(() => {
+  if (queryType.value !== 'update' && queryType.value !== 'delete') return false;
+  const whereBlock = blocks.value.find(b => b.type === 'where') as WhereBlock | undefined;
+  if (!whereBlock) return true;
+  return whereBlock.conditions.filter(c => c.column && c.operator).length === 0;
 });
 
 const activeSql = computed(() => rawMode.value ? rawSql.value.trim() : generatedSql.value);
@@ -275,9 +377,11 @@ const addBlock = (type: BlockType) => {
   }
 };
 
+const coreBlockTypes = new Set(['select', 'from', 'updateTable', 'set', 'deleteFrom', 'insertInto', 'values']);
+
 const removeBlock = (index: number) => {
   const block = blocks.value[index];
-  if (block.type === 'select' || block.type === 'from') return;
+  if (coreBlockTypes.has(block.type)) return;
   blocks.value.splice(index, 1);
 };
 
@@ -322,16 +426,16 @@ const removeOrderByColumn = (block: OrderByBlock, idx: number) => {
   }
 };
 
-const executeQuery = async () => {
-  const sql = activeSql.value;
-  if (!props.db || !sql) return;
+const runQuery = async (sql: string, isMutation: boolean) => {
   isExecuting.value = true;
   queryError.value = null;
   hasResults.value = false;
+  mutationResult.value = null;
 
   try {
-    const result = await ipcRenderer.invoke('execute-sql', {
-      db: buildDbConfig(props.db),
+    const handler = isMutation ? 'execute-sql-mutation' : 'execute-sql';
+    const result = await ipcRenderer.invoke(handler, {
+      db: buildDbConfig(props.db!),
       sql,
       maxRows: 5000,
       timeoutMs: 60000
@@ -343,6 +447,16 @@ const executeQuery = async () => {
     resultTruncated.value = result.truncated;
     resultRowCount.value = result.rowCount ?? result.rows.length;
     hasResults.value = true;
+
+    if (isMutation) {
+      mutationResult.value = {
+        command: result.command || 'MUTATION',
+        rowCount: result.rowCount ?? 0,
+        duration: result.duration
+      };
+      mutationFlash.value = true;
+      setTimeout(() => { mutationFlash.value = false; }, 600);
+    }
 
     queryHistory.value.unshift({
       sql,
@@ -356,6 +470,35 @@ const executeQuery = async () => {
   } finally {
     isExecuting.value = false;
   }
+};
+
+const executeQuery = async () => {
+  const sql = activeSql.value;
+  if (!props.db || !sql) return;
+
+  const isMutation = MUTATION_REGEX.test(sql);
+
+  if (!isMutation) {
+    return runQuery(sql, false);
+  }
+
+  // Mutation detected
+  if (!store.allowSqlMutations) {
+    addToast(t('viewer.sqlMutationDisabled'), 'warning');
+    return;
+  }
+
+  const isDangerous = DANGEROUS_REGEX.test(sql);
+  const match = sql.match(MUTATION_REGEX);
+  const operation = match ? match[1].toUpperCase() : 'MUTATION';
+
+  showConfirm({
+    title: `${operation}`,
+    message: t('viewer.sqlMutationConfirmMessage', { operation }),
+    confirmText: t('viewer.sqlMutationExecute'),
+    type: isDangerous ? 'danger' : 'warning',
+    onConfirm: () => runQuery(sql, true)
+  });
 };
 
 const exportCSV = () => {
@@ -395,16 +538,102 @@ const handleJoinTableChange = (join: JoinBlock) => {
   }
 };
 
+const getDefaultBlocks = (mode: QueryMode): Block[] => {
+  switch (mode) {
+    case 'select':
+      return [
+        { type: 'select', columns: ['*'], distinct: false },
+        { type: 'from', table: '' },
+        { type: 'limit', value: 100 }
+      ];
+    case 'update':
+      return [
+        { type: 'updateTable', table: '' },
+        { type: 'set', items: [{ column: '', value: '' }] },
+        { type: 'where', conditions: [{ column: '', operator: '=', value: '', connector: 'AND' }] }
+      ];
+    case 'delete':
+      return [
+        { type: 'deleteFrom', table: '' },
+        { type: 'where', conditions: [{ column: '', operator: '=', value: '', connector: 'AND' }] }
+      ];
+    case 'insert':
+      return [
+        { type: 'insertInto', table: '', columns: [] },
+        { type: 'values', rows: [{}] }
+      ];
+  }
+};
+
 const resetBlocks = () => {
-  blocks.value = [
-    { type: 'select', columns: ['*'], distinct: false },
-    { type: 'from', table: '' },
-    { type: 'limit', value: 100 }
-  ];
+  blocks.value = getDefaultBlocks(queryType.value);
   hasResults.value = false;
   queryError.value = null;
+  mutationResult.value = null;
   resultRows.value = [];
   resultFields.value = [];
+};
+
+const setQueryType = (mode: QueryMode) => {
+  if (mode === queryType.value) return;
+  queryType.value = mode;
+  blocks.value = getDefaultBlocks(mode);
+  hasResults.value = false;
+  queryError.value = null;
+  mutationResult.value = null;
+  resultRows.value = [];
+  resultFields.value = [];
+};
+
+// Mutation-specific actions
+const addSetItem = (block: SetBlock) => {
+  block.items.push({ column: '', value: '' });
+};
+
+const removeSetItem = (block: SetBlock, idx: number) => {
+  block.items.splice(idx, 1);
+  if (block.items.length === 0) block.items.push({ column: '', value: '' });
+};
+
+const toggleInsertColumn = (block: InsertIntoBlock, col: string) => {
+  const idx = block.columns.indexOf(col);
+  const valuesBlock = blocks.value.find(b => b.type === 'values') as ValuesBlock | undefined;
+  if (idx >= 0) {
+    block.columns.splice(idx, 1);
+    if (valuesBlock) {
+      for (const row of valuesBlock.rows) {
+        delete row[col];
+      }
+    }
+  } else {
+    block.columns.push(col);
+    if (valuesBlock) {
+      for (const row of valuesBlock.rows) {
+        row[col] = '';
+      }
+    }
+  }
+};
+
+const addInsertRow = () => {
+  const insertBlock = blocks.value.find(b => b.type === 'insertInto') as InsertIntoBlock | undefined;
+  const valuesBlock = blocks.value.find(b => b.type === 'values') as ValuesBlock | undefined;
+  if (!insertBlock || !valuesBlock) return;
+  const newRow: Record<string, string> = {};
+  for (const col of insertBlock.columns) newRow[col] = '';
+  valuesBlock.rows.push(newRow);
+};
+
+const removeInsertRow = (idx: number) => {
+  const valuesBlock = blocks.value.find(b => b.type === 'values') as ValuesBlock | undefined;
+  if (!valuesBlock) return;
+  valuesBlock.rows.splice(idx, 1);
+  if (valuesBlock.rows.length === 0) {
+    const insertBlock = blocks.value.find(b => b.type === 'insertInto') as InsertIntoBlock | undefined;
+    const newRow: Record<string, string> = {};
+    if (insertBlock) for (const col of insertBlock.columns) newRow[col] = '';
+    valuesBlock.rows.push(newRow);
+  }
 };
 
 const loadFromHistory = (entry: { sql: string }) => {
@@ -417,20 +646,242 @@ const loadFromHistory = (entry: { sql: string }) => {
   }
 };
 
+// Parse raw SQL into blocks
+const parseRawSqlToBlocks = (sql: string) => {
+  const trimmed = sql.trim().replace(/;\s*$/, '');
+  if (!trimmed) return;
+
+  // Helper: strip quotes from table name
+  const stripQuotes = (s: string) => s.replace(/^"(.*)"$/, '$1').trim();
+
+  // Helper: extract table name from "table alias" or "table" or '"table" alias'
+  const extractTableName = (s: string) => {
+    const m = s.trim().match(/^"?(\w+)"?(?:\s+(?:AS\s+)?(\w+))?$/i);
+    return m ? stripQuotes(m[1]) : s.trim();
+  };
+
+  // Helper: parse WHERE clause into conditions
+  const parseWhere = (whereStr: string): WhereCondition[] => {
+    const conditions: WhereCondition[] = [];
+    // Split on AND/OR at word boundaries, keeping the connector
+    const tokens = whereStr.split(/\b(AND|OR)\b/i);
+    let connector: 'AND' | 'OR' = 'AND';
+    for (const token of tokens) {
+      const t = token.trim();
+      if (!t) continue;
+      const up = t.toUpperCase();
+      if (up === 'AND' || up === 'OR') { connector = up as 'AND' | 'OR'; continue; }
+      const m = t.match(/^(.+?)\s+(IS\s+NOT\s+NULL|IS\s+NULL|!=|<>|>=|<=|ILIKE|LIKE|NOT\s+IN|IN|[=<>])\s*([\s\S]*)?$/i);
+      if (m) {
+        let val = (m[3] || '').trim();
+        // Strip surrounding single quotes
+        if (val.startsWith("'") && val.endsWith("'")) {
+          val = val.slice(1, -1).replace(/''/g, "'");
+        }
+        conditions.push({ column: m[1].trim(), operator: m[2].toUpperCase().replace(/\s+/g, ' '), value: val, connector });
+      }
+      connector = 'AND';
+    }
+    return conditions.length ? conditions : [{ column: '', operator: '=', value: '', connector: 'AND' }];
+  };
+
+  // Normalize whitespace for easier matching
+  const norm = trimmed.replace(/\s+/g, ' ');
+
+  // Try UPDATE: UPDATE table SET col=val, ... WHERE ...
+  const updateMatch = norm.match(/^UPDATE\s+("?\w+"?(?:\s+\w+)?)\s+SET\s+([\s\S]+?)(?:\s+WHERE\s+([\s\S]+))?$/i);
+  if (updateMatch) {
+    const table = extractTableName(updateMatch[1]);
+    const setItems = updateMatch[2].split(',').map(s => {
+      const eqIdx = s.indexOf('=');
+      if (eqIdx < 0) return { column: s.trim(), value: '' };
+      const col = s.substring(0, eqIdx).trim();
+      let val = s.substring(eqIdx + 1).trim();
+      if (val.startsWith("'") && val.endsWith("'")) val = val.slice(1, -1).replace(/''/g, "'");
+      return { column: col, value: val };
+    });
+    const newBlocks: Block[] = [
+      { type: 'updateTable', table },
+      { type: 'set', items: setItems.length ? setItems : [{ column: '', value: '' }] }
+    ];
+    if (updateMatch[3]) newBlocks.push({ type: 'where', conditions: parseWhere(updateMatch[3]) });
+    queryType.value = 'update';
+    blocks.value = newBlocks;
+    return;
+  }
+
+  // Try DELETE: DELETE FROM table WHERE ...
+  const deleteMatch = norm.match(/^DELETE\s+FROM\s+("?\w+"?(?:\s+\w+)?)(?:\s+WHERE\s+([\s\S]+))?$/i);
+  if (deleteMatch) {
+    const table = extractTableName(deleteMatch[1]);
+    const newBlocks: Block[] = [{ type: 'deleteFrom', table }];
+    if (deleteMatch[2]) newBlocks.push({ type: 'where', conditions: parseWhere(deleteMatch[2]) });
+    queryType.value = 'delete';
+    blocks.value = newBlocks;
+    return;
+  }
+
+  // Try INSERT: INSERT INTO table (cols) VALUES (...)
+  const insertMatch = norm.match(/^INSERT\s+INTO\s+("?\w+"?)\s*\(([^)]+)\)\s*VALUES\s*([\s\S]+)$/i);
+  if (insertMatch) {
+    const table = extractTableName(insertMatch[1]);
+    const columns = insertMatch[2].split(',').map(c => c.trim());
+    const rowMatches = [...insertMatch[3].matchAll(/\(([^)]*)\)/g)];
+    const rows = rowMatches.map(rm => {
+      const vals = rm[1].split(',').map(v => {
+        let val = v.trim();
+        if (val.startsWith("'") && val.endsWith("'")) val = val.slice(1, -1).replace(/''/g, "'");
+        return val;
+      });
+      const row: Record<string, string> = {};
+      columns.forEach((col, i) => { row[col] = vals[i] ?? ''; });
+      return row;
+    });
+    queryType.value = 'insert';
+    blocks.value = [
+      { type: 'insertInto', table, columns },
+      { type: 'values', rows: rows.length ? rows : [columns.reduce((r, c) => ({ ...r, [c]: '' }), {} as Record<string, string>)] }
+    ];
+    return;
+  }
+
+  // Try SELECT: use clause-based splitting
+  const selectTest = norm.match(/^SELECT\s+([\s\S]+)/i);
+  if (selectTest) {
+    const body = selectTest[1];
+
+    // Split by SQL keywords to find clause boundaries
+    const fromIdx = body.search(/\bFROM\b/i);
+    if (fromIdx < 0) return;
+
+    const colsPart = body.substring(0, fromIdx).trim();
+    const afterFrom = body.substring(fromIdx + 4).trim(); // skip "FROM"
+
+    // Parse SELECT columns
+    const distinct = /^DISTINCT\s+/i.test(colsPart);
+    const colsStr = colsPart.replace(/^DISTINCT\s+/i, '').trim();
+    const columns = colsStr === '*' ? ['*'] : colsStr.split(',').map(c => c.trim());
+
+    // Find clause positions in afterFrom
+    const findClause = (str: string, pattern: RegExp) => {
+      const m = str.match(pattern);
+      return m ? m.index! : -1;
+    };
+
+    // Find all JOIN, WHERE, GROUP BY, ORDER BY, LIMIT positions
+    const joinPositions: number[] = [];
+    const joinRegex = /\b(?:INNER\s+|LEFT\s+|RIGHT\s+|FULL\s+|LEFT\s+OUTER\s+|RIGHT\s+OUTER\s+)?JOIN\b/gi;
+    let jm;
+    while ((jm = joinRegex.exec(afterFrom)) !== null) joinPositions.push(jm.index);
+
+    const whereIdx = findClause(afterFrom, /\bWHERE\b/i);
+    const groupIdx = findClause(afterFrom, /\bGROUP\s+BY\b/i);
+    const orderIdx = findClause(afterFrom, /\bORDER\s+BY\b/i);
+    const limitIdx = findClause(afterFrom, /\bLIMIT\b/i);
+
+    // First clause boundary after FROM (where the table name ends)
+    const boundaries = [...joinPositions, whereIdx, groupIdx, orderIdx, limitIdx].filter(i => i >= 0);
+    const firstBoundary = boundaries.length > 0 ? Math.min(...boundaries) : afterFrom.length;
+
+    // Extract FROM table (everything before first boundary)
+    const fromPart = afterFrom.substring(0, firstBoundary).trim();
+    const table = extractTableName(fromPart);
+
+    const newBlocks: Block[] = [
+      { type: 'select', columns, distinct },
+      { type: 'from', table }
+    ];
+
+    // Parse JOINs
+    for (let ji = 0; ji < joinPositions.length; ji++) {
+      const start = joinPositions[ji];
+      const end = ji + 1 < joinPositions.length ? joinPositions[ji + 1] : firstBoundary;
+      // Also check against WHERE, GROUP BY, etc.
+      const clauseEnd = boundaries.filter(b => b > start).reduce((min, b) => Math.min(min, b), afterFrom.length);
+      const joinStr = afterFrom.substring(start, clauseEnd).trim();
+
+      const jParsed = joinStr.match(/^(?:(INNER|LEFT|RIGHT|FULL|LEFT\s+OUTER|RIGHT\s+OUTER)\s+)?JOIN\s+("?\w+"?(?:\s+(?:AS\s+)?\w+)?)\s+ON\s+(\S+)\s*=\s*(\S+)/i);
+      if (jParsed) {
+        let joinType = (jParsed[1] || 'INNER').toUpperCase().replace(/\s+OUTER/, '') as 'INNER' | 'LEFT' | 'RIGHT' | 'FULL';
+        newBlocks.push({
+          type: 'join',
+          joinType,
+          table: extractTableName(jParsed[2]),
+          onLeft: jParsed[3],
+          onRight: jParsed[4]
+        });
+      }
+    }
+
+    // Parse WHERE
+    if (whereIdx >= 0) {
+      const whereEnd = [groupIdx, orderIdx, limitIdx].filter(i => i > whereIdx);
+      const endPos = whereEnd.length > 0 ? Math.min(...whereEnd) : afterFrom.length;
+      const whereStr = afterFrom.substring(whereIdx + 5, endPos).trim(); // skip "WHERE"
+      newBlocks.push({ type: 'where', conditions: parseWhere(whereStr) });
+    }
+
+    // Parse GROUP BY
+    if (groupIdx >= 0) {
+      const gEnd = [orderIdx, limitIdx].filter(i => i > groupIdx);
+      const endPos = gEnd.length > 0 ? Math.min(...gEnd) : afterFrom.length;
+      const match = afterFrom.substring(groupIdx, endPos).match(/^GROUP\s+BY\s+([\s\S]+)/i);
+      if (match) newBlocks.push({ type: 'groupBy', columns: match[1].trim().split(',').map(c => c.trim()) });
+    }
+
+    // Parse ORDER BY
+    if (orderIdx >= 0) {
+      const oEnd = [limitIdx].filter(i => i > orderIdx);
+      const endPos = oEnd.length > 0 ? Math.min(...oEnd) : afterFrom.length;
+      const match = afterFrom.substring(orderIdx, endPos).match(/^ORDER\s+BY\s+([\s\S]+)/i);
+      if (match) {
+        const cols = match[1].trim().split(',').map(c => {
+          const parts = c.trim().split(/\s+/);
+          return { column: parts[0], direction: (parts[1]?.toUpperCase() === 'DESC' ? 'DESC' : 'ASC') as 'ASC' | 'DESC' };
+        });
+        newBlocks.push({ type: 'orderBy', columns: cols });
+      }
+    }
+
+    // Parse LIMIT
+    if (limitIdx >= 0) {
+      const lMatch = afterFrom.substring(limitIdx).match(/^LIMIT\s+(\d+)/i);
+      if (lMatch) newBlocks.push({ type: 'limit', value: parseInt(lMatch[1]) });
+    }
+
+    if (!newBlocks.find(b => b.type === 'limit')) {
+      newBlocks.push({ type: 'limit', value: 100 });
+    }
+
+    queryType.value = 'select';
+    blocks.value = newBlocks;
+    return;
+  }
+};
+
 const toggleRawMode = () => {
   if (!rawMode.value && generatedSql.value) {
+    // Builder → Raw: copy generated SQL
     rawSql.value = generatedSql.value;
+  } else if (rawMode.value && rawSql.value.trim()) {
+    // Raw → Builder: parse raw SQL into blocks
+    parseRawSqlToBlocks(rawSql.value);
   }
   rawMode.value = !rawMode.value;
 };
 
 const operators = ['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'ILIKE', 'IN', 'IS NULL', 'IS NOT NULL'];
 
-// When FROM table changes, reset columns that reference the old table
+// When FROM table changes via user dropdown interaction (not from parser), reset columns
+// We track this with a flag to avoid resetting parsed columns
+const fromChangedByUser = ref(false);
 watch(fromTable, () => {
-  const selectBlock = blocks.value.find(b => b.type === 'select') as SelectBlock | undefined;
-  if (selectBlock && selectBlock.columns[0] !== '*') {
-    selectBlock.columns = ['*'];
+  if (fromChangedByUser.value) {
+    const selectBlock = blocks.value.find(b => b.type === 'select') as SelectBlock | undefined;
+    if (selectBlock && selectBlock.columns[0] !== '*') {
+      selectBlock.columns = ['*'];
+    }
+    fromChangedByUser.value = false;
   }
 });
 
@@ -467,7 +918,7 @@ onMounted(() => {
             <ul class="space-y-1.5">
               <li class="flex items-start gap-1.5 text-[11px] text-gray-600 dark:text-gray-400">
                 <span class="text-emerald-500 mt-px shrink-0">&#10003;</span>
-                <span>{{ t('viewer.sqlSafetyReadOnly') }}</span>
+                <span>{{ store.allowSqlMutations ? t('viewer.sqlSafetyMutationsEnabled') : t('viewer.sqlSafetyReadOnly') }}</span>
               </li>
               <li class="flex items-start gap-1.5 text-[11px] text-gray-600 dark:text-gray-400">
                 <span class="text-emerald-500 mt-px shrink-0">&#10003;</span>
@@ -482,6 +933,52 @@ onMounted(() => {
                 <span>{{ t('viewer.sqlSafetyRollback') }}</span>
               </li>
             </ul>
+          </div>
+        </div>
+      </div>
+      <!-- Query type selector (builder mode only) -->
+      <div v-if="!rawMode" class="flex items-center gap-1 bg-gray-100 dark:bg-zinc-800 rounded-lg p-0.5">
+        <button
+          @click="setQueryType('select')"
+          class="px-2.5 py-1 text-[10px] font-bold rounded-md transition-all duration-150"
+          :class="queryType === 'select'
+            ? 'bg-white dark:bg-zinc-700 text-violet-600 dark:text-violet-400 shadow-sm'
+            : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'"
+        >SELECT</button>
+        <template v-if="store.allowSqlMutations">
+          <button
+            @click="setQueryType('update')"
+            class="px-2.5 py-1 text-[10px] font-bold rounded-md transition-all duration-150"
+            :class="queryType === 'update'
+              ? 'bg-white dark:bg-zinc-700 text-orange-600 dark:text-orange-400 shadow-sm'
+              : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'"
+          >UPDATE</button>
+          <button
+            @click="setQueryType('delete')"
+            class="px-2.5 py-1 text-[10px] font-bold rounded-md transition-all duration-150"
+            :class="queryType === 'delete'
+              ? 'bg-white dark:bg-zinc-700 text-red-600 dark:text-red-400 shadow-sm'
+              : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'"
+          >DELETE</button>
+          <button
+            @click="setQueryType('insert')"
+            class="px-2.5 py-1 text-[10px] font-bold rounded-md transition-all duration-150"
+            :class="queryType === 'insert'
+              ? 'bg-white dark:bg-zinc-700 text-emerald-600 dark:text-emerald-400 shadow-sm'
+              : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'"
+          >INSERT</button>
+        </template>
+        <div v-else class="relative group/mutations-hint">
+          <button
+            @click="store.activeTab = 'settings'"
+            class="px-1.5 py-1 text-[10px] text-gray-300 dark:text-gray-600 hover:text-gray-500 dark:hover:text-gray-400 transition-colors"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+          </button>
+          <div class="absolute left-1/2 -translate-x-1/2 top-full mt-1.5 w-48 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg shadow-xl z-20 p-2 opacity-0 invisible group-hover/mutations-hint:opacity-100 group-hover/mutations-hint:visible translate-y-1 group-hover/mutations-hint:translate-y-0 transition-all duration-150 pointer-events-none">
+            <p class="text-[10px] text-gray-500 dark:text-gray-400 leading-relaxed">{{ t('viewer.sqlMutationsHint') }}</p>
           </div>
         </div>
       </div>
@@ -546,6 +1043,18 @@ onMounted(() => {
               @keydown.ctrl.enter="executeQuery"
             ></textarea>
           </div>
+          <!-- Mutations hint (raw mode) -->
+          <div v-if="!store.allowSqlMutations" class="px-4 py-2 border-t border-gray-200 dark:border-zinc-800 bg-gray-50/50 dark:bg-surface/30 shrink-0">
+            <button
+              @click="store.activeTab = 'settings'"
+              class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors group"
+            >
+              <svg class="w-3.5 h-3.5 text-gray-300 dark:text-gray-600 group-hover:text-amber-500 transition-colors shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+              <span class="text-[10px] text-gray-400 dark:text-gray-500 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors">{{ t('viewer.sqlMutationsHint') }}</span>
+            </button>
+          </div>
           <!-- Execute bar (raw) -->
           <div class="p-3 border-t border-gray-200 dark:border-zinc-800 bg-gray-50/50 dark:bg-surface/30 shrink-0">
             <button
@@ -577,12 +1086,14 @@ onMounted(() => {
             class="rounded-xl border-2 transition-all duration-200 shadow-sm"
             :class="{
               'border-blue-300 dark:border-blue-800/50 bg-blue-50 dark:bg-blue-500/5': block.type === 'select',
-              'border-emerald-300 dark:border-emerald-800/50 bg-emerald-50 dark:bg-emerald-500/5': block.type === 'from',
+              'border-emerald-300 dark:border-emerald-800/50 bg-emerald-50 dark:bg-emerald-500/5': block.type === 'from' || block.type === 'insertInto' || block.type === 'values',
               'border-purple-300 dark:border-purple-800/50 bg-purple-50 dark:bg-purple-500/5': block.type === 'join',
               'border-amber-300 dark:border-amber-800/50 bg-amber-50 dark:bg-amber-500/5': block.type === 'where',
               'border-cyan-300 dark:border-cyan-800/50 bg-cyan-50 dark:bg-cyan-500/5': block.type === 'groupBy',
               'border-pink-300 dark:border-pink-800/50 bg-pink-50 dark:bg-pink-500/5': block.type === 'orderBy',
               'border-gray-300 dark:border-zinc-700 bg-gray-100 dark:bg-zinc-800/30': block.type === 'limit',
+              'border-orange-300 dark:border-orange-800/50 bg-orange-50 dark:bg-orange-500/5': block.type === 'updateTable' || block.type === 'set',
+              'border-red-300 dark:border-red-800/50 bg-red-50 dark:bg-red-500/5': block.type === 'deleteFrom',
             }"
           >
             <!-- Block header -->
@@ -591,15 +1102,17 @@ onMounted(() => {
                 class="text-[10px] font-bold uppercase tracking-wider"
                 :class="{
                   'text-blue-600 dark:text-blue-400': block.type === 'select',
-                  'text-emerald-600 dark:text-emerald-400': block.type === 'from',
+                  'text-emerald-600 dark:text-emerald-400': block.type === 'from' || block.type === 'insertInto' || block.type === 'values',
                   'text-purple-600 dark:text-purple-400': block.type === 'join',
                   'text-amber-600 dark:text-amber-400': block.type === 'where',
                   'text-cyan-600 dark:text-cyan-400': block.type === 'groupBy',
                   'text-pink-600 dark:text-pink-400': block.type === 'orderBy',
                   'text-gray-500 dark:text-gray-400': block.type === 'limit',
+                  'text-orange-600 dark:text-orange-400': block.type === 'updateTable' || block.type === 'set',
+                  'text-red-600 dark:text-red-400': block.type === 'deleteFrom',
                 }"
               >
-                {{ block.type === 'groupBy' ? 'GROUP BY' : block.type === 'orderBy' ? 'ORDER BY' : block.type === 'join' ? (block as JoinBlock).joinType + ' JOIN' : block.type.toUpperCase() }}
+                {{ block.type === 'groupBy' ? 'GROUP BY' : block.type === 'orderBy' ? 'ORDER BY' : block.type === 'join' ? (block as JoinBlock).joinType + ' JOIN' : block.type === 'updateTable' ? 'UPDATE' : block.type === 'deleteFrom' ? 'DELETE FROM' : block.type === 'insertInto' ? 'INSERT INTO' : block.type === 'values' ? 'VALUES' : block.type.toUpperCase() }}
               </span>
               <button
                 v-if="block.type !== 'select' && block.type !== 'from'"
@@ -622,14 +1135,17 @@ onMounted(() => {
                     DISTINCT
                   </label>
                   <div v-for="(col, ci) in (block as SelectBlock).columns" :key="ci" class="flex items-center gap-1.5">
-                    <select
+                    <input
                       :value="col"
-                      @change="(block as SelectBlock).columns[ci] = ($event.target as HTMLSelectElement).value"
+                      @input="(block as SelectBlock).columns[ci] = ($event.target as HTMLInputElement).value"
+                      :list="'select-col-opts-' + ci"
+                      :placeholder="t('viewer.column')"
                       class="flex-1 text-xs bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500/30 shadow-sm"
-                    >
-                      <option value="*">*</option>
-                      <option v-for="c in columnOptions" :key="c" :value="c">{{ c }}</option>
-                    </select>
+                    />
+                    <datalist :id="'select-col-opts-' + ci">
+                      <option value="*" />
+                      <option v-for="c in columnOptions" :key="c" :value="c" />
+                    </datalist>
                     <button
                       v-if="(block as SelectBlock).columns.length > 1"
                       @click="removeSelectColumn(ci)"
@@ -654,13 +1170,16 @@ onMounted(() => {
 
               <!-- FROM block -->
               <template v-if="block.type === 'from'">
-                <select
-                  v-model="(block as FromBlock).table"
+                <input
+                  :value="(block as FromBlock).table"
+                  @input="fromChangedByUser = true; (block as FromBlock).table = ($event.target as HTMLInputElement).value"
+                  list="from-table-opts"
+                  :placeholder="t('viewer.sqlSelectTable')"
                   class="w-full text-xs bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-500/30 shadow-sm"
-                >
-                  <option value="" disabled>{{ t('viewer.sqlSelectTable') }}</option>
-                  <option v-for="table in allTables" :key="table" :value="table">{{ table }}</option>
-                </select>
+                />
+                <datalist id="from-table-opts">
+                  <option v-for="table in allTables" :key="table" :value="table" />
+                </datalist>
               </template>
 
               <!-- JOIN block -->
@@ -676,14 +1195,16 @@ onMounted(() => {
                       <option value="RIGHT">RIGHT</option>
                       <option value="FULL">FULL</option>
                     </select>
-                    <select
-                      v-model="(block as JoinBlock).table"
-                      @change="handleJoinTableChange(block as JoinBlock)"
+                    <input
+                      :value="(block as JoinBlock).table"
+                      @input="(block as JoinBlock).table = ($event.target as HTMLInputElement).value; handleJoinTableChange(block as JoinBlock)"
+                      :list="'join-table-opts-' + idx"
+                      :placeholder="t('viewer.sqlSelectTable')"
                       class="flex-1 text-xs bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-purple-500/30 shadow-sm"
-                    >
-                      <option value="" disabled>{{ t('viewer.sqlSelectTable') }}</option>
-                      <option v-for="table in allTables.filter(t => t !== fromTable)" :key="table" :value="table">{{ table }}</option>
-                    </select>
+                    />
+                    <datalist :id="'join-table-opts-' + idx">
+                      <option v-for="table in allTables.filter(t => t !== fromTable)" :key="table" :value="table" />
+                    </datalist>
                   </div>
                   <div class="flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-gray-400">
                     <span class="font-medium shrink-0">ON</span>
@@ -727,13 +1248,15 @@ onMounted(() => {
                       <option value="AND">AND</option>
                       <option value="OR">OR</option>
                     </select>
-                    <select
+                    <input
                       v-model="cond.column"
+                      :list="'where-col-opts-' + ci"
+                      :placeholder="t('viewer.column')"
                       class="flex-1 text-xs bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-amber-500/30 shadow-sm min-w-0"
-                    >
-                      <option value="" disabled>{{ t('viewer.column') }}</option>
-                      <option v-for="c in columnOptions" :key="c" :value="c">{{ c }}</option>
-                    </select>
+                    />
+                    <datalist :id="'where-col-opts-' + ci">
+                      <option v-for="c in columnOptions" :key="c" :value="c" />
+                    </datalist>
                     <select
                       v-model="cond.operator"
                       class="text-xs bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg px-1.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-amber-500/30 shadow-sm w-24"
@@ -770,15 +1293,31 @@ onMounted(() => {
 
               <!-- GROUP BY block -->
               <template v-if="block.type === 'groupBy'">
-                <div class="flex flex-wrap gap-1.5">
-                  <select
-                    multiple
-                    :value="(block as GroupByBlock).columns"
-                    @change="(block as GroupByBlock).columns = [...($event.target as HTMLSelectElement).selectedOptions].map(o => o.value)"
-                    class="w-full text-xs bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 shadow-sm h-20"
-                  >
-                    <option v-for="c in columnOptions" :key="c" :value="c">{{ c }}</option>
-                  </select>
+                <div class="space-y-1.5">
+                  <div class="flex flex-wrap gap-1">
+                    <span
+                      v-for="(gc, gci) in (block as GroupByBlock).columns"
+                      :key="gci"
+                      class="inline-flex items-center gap-0.5 text-[10px] font-medium px-2 py-0.5 rounded-full bg-cyan-100 dark:bg-cyan-500/20 text-cyan-700 dark:text-cyan-400 border border-cyan-200 dark:border-cyan-700"
+                    >
+                      {{ gc }}
+                      <button @click="(block as GroupByBlock).columns.splice(gci, 1)" class="hover:text-red-500 transition-colors ml-0.5">
+                        <svg class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                      </button>
+                    </span>
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <input
+                      :list="'groupby-col-opts'"
+                      :placeholder="t('viewer.sqlAddColumn')"
+                      class="flex-1 text-xs bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-cyan-500/30 shadow-sm"
+                      @keydown.enter.prevent="(e: KeyboardEvent) => { const v = (e.target as HTMLInputElement).value.trim(); if (v && !(block as GroupByBlock).columns.includes(v)) { (block as GroupByBlock).columns.push(v); (e.target as HTMLInputElement).value = ''; } }"
+                      @change="(e: Event) => { const v = (e.target as HTMLInputElement).value.trim(); if (v && !(block as GroupByBlock).columns.includes(v)) { (block as GroupByBlock).columns.push(v); (e.target as HTMLInputElement).value = ''; } }"
+                    />
+                    <datalist id="groupby-col-opts">
+                      <option v-for="c in columnOptions" :key="c" :value="c" />
+                    </datalist>
+                  </div>
                 </div>
               </template>
 
@@ -786,13 +1325,15 @@ onMounted(() => {
               <template v-if="block.type === 'orderBy'">
                 <div class="space-y-1.5">
                   <div v-for="(col, ci) in (block as OrderByBlock).columns" :key="ci" class="flex items-center gap-1.5">
-                    <select
+                    <input
                       v-model="col.column"
+                      :list="'orderby-col-opts-' + ci"
+                      :placeholder="t('viewer.column')"
                       class="flex-1 text-xs bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-pink-500/30 shadow-sm"
-                    >
-                      <option value="" disabled>{{ t('viewer.column') }}</option>
-                      <option v-for="c in columnOptions" :key="c" :value="c">{{ c }}</option>
-                    </select>
+                    />
+                    <datalist :id="'orderby-col-opts-' + ci">
+                      <option v-for="c in columnOptions" :key="c" :value="c" />
+                    </datalist>
                     <button
                       @click="col.direction = col.direction === 'ASC' ? 'DESC' : 'ASC'"
                       class="text-[10px] font-bold px-2 py-1.5 rounded-lg border transition-colors"
@@ -848,11 +1389,151 @@ onMounted(() => {
                   </div>
                 </div>
               </template>
+
+              <!-- UPDATE TABLE block -->
+              <template v-if="block.type === 'updateTable'">
+                <input
+                  v-model="(block as UpdateTableBlock).table"
+                  list="update-table-opts"
+                  :placeholder="t('viewer.sqlSelectTable')"
+                  class="w-full text-xs bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-orange-500/30 shadow-sm"
+                />
+                <datalist id="update-table-opts">
+                  <option v-for="table in allTables" :key="table" :value="table" />
+                </datalist>
+              </template>
+
+              <!-- SET block -->
+              <template v-if="block.type === 'set'">
+                <div class="space-y-1.5">
+                  <div v-for="(item, si) in (block as SetBlock).items" :key="si" class="flex items-center gap-1.5">
+                    <input
+                      v-model="item.column"
+                      :list="'set-col-opts-' + si"
+                      :placeholder="t('viewer.column')"
+                      class="flex-1 text-xs bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-orange-500/30 shadow-sm"
+                    />
+                    <datalist :id="'set-col-opts-' + si">
+                      <option v-for="c in columnOptions" :key="c" :value="c" />
+                    </datalist>
+                    <span class="text-[10px] font-bold text-gray-400">=</span>
+                    <input
+                      v-model="item.value"
+                      type="text"
+                      :placeholder="t('viewer.sqlValue')"
+                      class="flex-1 text-xs bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-orange-500/30 shadow-sm"
+                    />
+                    <button
+                      @click="removeSetItem(block as SetBlock, si)"
+                      class="p-0.5 text-gray-300 dark:text-gray-600 hover:text-red-500 transition-colors shrink-0"
+                    >
+                      <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  <button
+                    @click="addSetItem(block as SetBlock)"
+                    class="text-[11px] text-orange-500 hover:text-orange-600 font-medium flex items-center gap-0.5"
+                  >
+                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                    </svg>
+                    {{ t('viewer.sqlAddSetItem') }}
+                  </button>
+                </div>
+              </template>
+
+              <!-- DELETE FROM block -->
+              <template v-if="block.type === 'deleteFrom'">
+                <input
+                  v-model="(block as DeleteFromBlock).table"
+                  list="delete-table-opts"
+                  :placeholder="t('viewer.sqlSelectTable')"
+                  class="w-full text-xs bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-red-500/30 shadow-sm"
+                />
+                <datalist id="delete-table-opts">
+                  <option v-for="table in allTables" :key="table" :value="table" />
+                </datalist>
+              </template>
+
+              <!-- INSERT INTO block -->
+              <template v-if="block.type === 'insertInto'">
+                <div class="space-y-2">
+                  <input
+                    v-model="(block as InsertIntoBlock).table"
+                    list="insert-table-opts"
+                    :placeholder="t('viewer.sqlSelectTable')"
+                    class="w-full text-xs bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-500/30 shadow-sm"
+                  />
+                  <datalist id="insert-table-opts">
+                    <option v-for="table in allTables" :key="table" :value="table" />
+                  </datalist>
+                  <div v-if="(block as InsertIntoBlock).table" class="flex flex-wrap gap-1">
+                    <button
+                      v-for="col in allColumns.filter(c => c.table_name === (block as InsertIntoBlock).table)"
+                      :key="col.column_name"
+                      @click="toggleInsertColumn(block as InsertIntoBlock, col.column_name)"
+                      class="text-[10px] px-2 py-0.5 rounded-full border transition-colors"
+                      :class="(block as InsertIntoBlock).columns.includes(col.column_name)
+                        ? 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border-emerald-300 dark:border-emerald-700 font-bold'
+                        : 'bg-gray-50 dark:bg-zinc-800 text-gray-400 border-gray-200 dark:border-zinc-700 hover:text-gray-600 dark:hover:text-gray-300'"
+                    >
+                      {{ col.column_name }}
+                    </button>
+                  </div>
+                </div>
+              </template>
+
+              <!-- VALUES block -->
+              <template v-if="block.type === 'values'">
+                <div class="space-y-2">
+                  <div
+                    v-for="(row, ri) in (block as ValuesBlock).rows"
+                    :key="ri"
+                    class="p-2 bg-white dark:bg-zinc-800/50 rounded-lg border border-gray-200 dark:border-zinc-700 space-y-1.5"
+                  >
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-[10px] font-bold text-gray-400">Row {{ ri + 1 }}</span>
+                      <button
+                        @click="removeInsertRow(ri)"
+                        class="p-0.5 text-gray-300 dark:text-gray-600 hover:text-red-500 transition-colors"
+                      >
+                        <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div
+                      v-for="col in (blocks.find(b => b.type === 'insertInto') as InsertIntoBlock | undefined)?.columns || []"
+                      :key="col"
+                      class="flex items-center gap-1.5"
+                    >
+                      <span class="text-[10px] text-gray-500 dark:text-gray-400 w-24 truncate shrink-0" :title="col">{{ col }}</span>
+                      <input
+                        v-model="row[col]"
+                        type="text"
+                        :placeholder="'NULL'"
+                        class="flex-1 text-xs bg-white dark:bg-zinc-800 border border-gray-300 dark:border-zinc-700 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500/30 shadow-sm"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    @click="addInsertRow()"
+                    class="text-[11px] text-emerald-500 hover:text-emerald-600 font-medium flex items-center gap-0.5"
+                  >
+                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                    </svg>
+                    {{ t('viewer.sqlAddValueRow') }}
+                  </button>
+                </div>
+              </template>
             </div>
           </div>
 
           <!-- Add block button -->
-          <div class="relative">
+          <div v-if="availableBlockTypes.length > 0" class="relative">
             <button
               @click="showAddMenu = !showAddMenu"
               :disabled="!fromTable"
@@ -891,12 +1572,27 @@ onMounted(() => {
           </div>
         </div>
 
+        <!-- No WHERE warning -->
+        <div v-if="noWhereWarning && generatedSql" class="px-3 pt-2 shrink-0">
+          <div class="flex items-center gap-1.5 px-2.5 py-1.5 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-lg">
+            <svg class="w-3.5 h-3.5 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <span class="text-[11px] font-medium text-amber-700 dark:text-amber-400">{{ t('viewer.sqlNoWhereWarning') }}</span>
+          </div>
+        </div>
         <!-- Execute bar -->
         <div class="p-3 border-t border-gray-200 dark:border-zinc-800 bg-gray-50/50 dark:bg-surface/30 shrink-0">
           <button
             @click="executeQuery"
             :disabled="!generatedSql || isExecuting"
-            class="w-full py-2 bg-violet-600 hover:bg-violet-700 disabled:bg-gray-300 dark:disabled:bg-zinc-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 shadow-lg shadow-violet-500/20 disabled:shadow-none"
+            class="w-full py-2 text-white rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 disabled:bg-gray-300 dark:disabled:bg-zinc-700 disabled:shadow-none"
+            :class="{
+              'bg-violet-600 hover:bg-violet-700 shadow-lg shadow-violet-500/20': queryType === 'select',
+              'bg-orange-600 hover:bg-orange-700 shadow-lg shadow-orange-500/20': queryType === 'update',
+              'bg-red-600 hover:bg-red-700 shadow-lg shadow-red-500/20': queryType === 'delete',
+              'bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-500/20': queryType === 'insert',
+            }"
           >
             <svg v-if="isExecuting" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -946,6 +1642,53 @@ onMounted(() => {
               </div>
             </div>
           </div>
+
+          <!-- Mutation result banner -->
+          <Transition
+            enter-active-class="transition duration-300 ease-out"
+            enter-from-class="opacity-0 -translate-y-2"
+            enter-to-class="opacity-100 translate-y-0"
+            leave-active-class="transition duration-200 ease-in"
+            leave-from-class="opacity-100 translate-y-0"
+            leave-to-class="opacity-0 -translate-y-2"
+          >
+            <div
+              v-if="mutationResult"
+              class="mx-3 mt-3 p-3 rounded-xl border transition-all duration-500"
+              :class="[
+                mutationFlash
+                  ? 'bg-orange-100 dark:bg-orange-500/20 border-orange-300 dark:border-orange-500/40 shadow-lg shadow-orange-500/10'
+                  : 'bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/20'
+              ]"
+            >
+              <div class="flex items-center gap-3">
+                <div
+                  class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-colors duration-500"
+                  :class="mutationFlash ? 'bg-orange-500/20 text-orange-600 dark:text-orange-400' : 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'"
+                >
+                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs font-bold text-gray-900 dark:text-white">{{ mutationResult.command }}</span>
+                    <span class="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400">
+                      {{ mutationResult.rowCount }} {{ t('viewer.sqlMutationRowsAffected') }}
+                    </span>
+                  </div>
+                  <p class="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                    {{ t('viewer.sqlMutationSuccess') }} — {{ mutationResult.duration }}ms
+                  </p>
+                </div>
+                <button @click="mutationResult = null" class="p-1 text-gray-300 dark:text-gray-600 hover:text-gray-500 dark:hover:text-gray-400 transition-colors">
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </Transition>
 
           <!-- Results table -->
           <template v-if="hasResults && !queryError">

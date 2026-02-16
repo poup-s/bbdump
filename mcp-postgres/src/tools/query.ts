@@ -3,7 +3,11 @@ import { z } from 'zod';
 import { getClient, executeReadOnly } from '../db.js';
 import { jsonResult, errorResult, config } from '../types.js';
 
-const WRITE_PATTERN = /\b(DROP|DELETE|UPDATE|INSERT\s+INTO|ALTER|TRUNCATE|CREATE|GRANT|REVOKE)\b/i;
+// Defense-in-depth: early rejection of write operations with a clear error message.
+// The real protection is the BEGIN READ ONLY transaction in executeReadOnly().
+// This regex can be bypassed (comments, CTEs, etc.) but that's fine — PostgreSQL
+// will reject the write attempt anyway. This just provides a better UX.
+const WRITE_PATTERN = /\b(DROP|DELETE|UPDATE|INSERT\s+INTO|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|COPY)\b/i;
 
 export function registerQueryTools(server: McpServer) {
   server.tool(

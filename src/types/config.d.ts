@@ -27,6 +27,7 @@ export interface AppConfig {
   onboardingCompleted?: boolean;
   language?: 'en' | 'fr';
   defaultBackupPath?: string;
+  allowSqlMutations?: boolean;
 }
 
 export interface BackupResult {

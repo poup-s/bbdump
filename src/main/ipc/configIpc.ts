@@ -119,9 +119,10 @@ export function registerConfigHandlers() {
         return config;
     });
 
-    ipcMain.handle('save-settings', async (_, settings: { language?: 'en' | 'fr', defaultBackupPath?: string }) => {
+    ipcMain.handle('save-settings', async (_, settings: { language?: 'en' | 'fr', defaultBackupPath?: string, allowSqlMutations?: boolean }) => {
         if (settings.language) config.language = settings.language;
         if (settings.defaultBackupPath) config.defaultBackupPath = settings.defaultBackupPath;
+        if (settings.allowSqlMutations !== undefined) config.allowSqlMutations = settings.allowSqlMutations;
         saveConfig(config);
         return config;
     });

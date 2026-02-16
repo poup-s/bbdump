@@ -41,7 +41,7 @@ export interface ConnectionParams {
 function decryptPassword(encryptedText: string, key: Buffer): string {
   const parts = encryptedText.split(':');
   if (parts.length !== 3) {
-    return encryptedText;
+    throw new Error('Invalid encrypted password format: expected iv:authTag:ciphertext');
   }
 
   const iv = Buffer.from(parts[0], 'hex');

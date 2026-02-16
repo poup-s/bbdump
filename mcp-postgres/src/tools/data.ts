@@ -2,7 +2,16 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getClient, executeReadOnly } from '../db.js';
 import { jsonResult, errorResult, config } from '../types.js';
+import { buildWhereClause, type Filter } from '../filters.js';
 import pgFormat from 'pg-format';
+
+const filterSchema = z.object({
+  column: z.string().describe('Column name'),
+  operator: z.enum(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is_null', 'is_not_null'])
+    .describe('Comparison operator'),
+  value: z.union([z.string(), z.number(), z.boolean()]).optional()
+    .describe('Value to compare (not needed for is_null/is_not_null)'),
+});
 
 export function registerDataTools(server: McpServer) {
   server.tool(
@@ -66,7 +75,7 @@ export function registerDataTools(server: McpServer) {
 
   server.tool(
     'search_table',
-    'Full-text search (ILIKE) across all columns of a table. Casts all columns to text for comparison. Useful for finding data without knowing the exact schema.',
+    'Pattern search (ILIKE) across all columns of a table. Casts all columns to text for comparison. Useful for finding data without knowing the exact schema.',
     {
       table: z.string().describe('Table name'),
       search: z.string().describe('Search term (case-insensitive, partial match)'),
@@ -114,18 +123,81 @@ export function registerDataTools(server: McpServer) {
   );
 
   server.tool(
+    'full_text_search',
+    'PostgreSQL full-text search using tsvector/tsquery. Supports language-aware stemming and relevance ranking. More powerful than ILIKE search for natural language queries.',
+    {
+      table: z.string().describe('Table name'),
+      query: z.string().describe('Search query (supports PostgreSQL tsquery syntax: & for AND, | for OR, ! for NOT)'),
+      database: z.string().optional().describe('Database name'),
+      schema: z.string().default('public').describe('Schema (default: public)'),
+      language: z.string().default('english').describe('Text search language config (default: english). Use "french", "simple", etc.'),
+      columns: z.array(z.string()).optional().describe('Columns to search (default: all text/varchar columns)'),
+      limit: z.number().min(1).max(1000).default(50).describe('Max results (default: 50)'),
+    },
+    async ({ table, database, schema, query, language, columns, limit }) => {
+      const client = await getClient(database);
+      try {
+        // Get text columns if not specified
+        let searchColumns: string[];
+        if (columns?.length) {
+          searchColumns = columns;
+        } else {
+          const colResult = await executeReadOnly(client, `
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = $1 AND table_name = $2
+              AND data_type IN ('text', 'character varying', 'character', 'varchar', 'char')
+            ORDER BY ordinal_position
+          `, [schema, table]);
+
+          if (colResult.rows.length === 0) {
+            return errorResult(`No text columns found in "${schema}"."${table}"`);
+          }
+          searchColumns = colResult.rows.map((r: any) => r.column_name);
+        }
+
+        // Build tsvector from columns: to_tsvector(lang, coalesce(col1,'') || ' ' || coalesce(col2,'') ...)
+        const tsvectorParts = searchColumns
+          .map(c => pgFormat('COALESCE(%I::text, \'\')', c))
+          .join(" || ' ' || ");
+        const tsvector = `to_tsvector($1, ${tsvectorParts})`;
+        const tsquery = `plainto_tsquery($1, $2)`;
+
+        const sql = pgFormat('SELECT *, ts_rank(%s, %s) as search_rank FROM %I.%I', tsvector, tsquery, schema, table)
+          + ` WHERE ${tsvector} @@ ${tsquery}`
+          + ` ORDER BY search_rank DESC LIMIT $3`;
+
+        const result = await executeReadOnly(client, sql, [language, query, limit]);
+
+        return jsonResult({
+          rows: result.rows,
+          row_count: result.rows.length,
+          query,
+          language,
+          searched_columns: searchColumns,
+          table: `${schema}.${table}`,
+        });
+      } catch (err: any) {
+        return errorResult(err.message);
+      } finally {
+        client.release();
+      }
+    }
+  );
+
+  server.tool(
     'count_rows',
-    'Count rows in a table. Uses fast pg_class estimates when no filter is specified, falls back to COUNT(*) with filters.',
+    'Count rows in a table. Uses fast pg_class estimates when no filter is specified, falls back to COUNT(*) with structured filters.',
     {
       table: z.string().describe('Table name'),
       database: z.string().optional().describe('Database name'),
       schema: z.string().default('public').describe('Schema (default: public)'),
-      where: z.string().optional().describe('Optional WHERE clause (e.g., "age > 18 AND status = \'active\'")'),
+      filters: z.array(filterSchema).optional().describe('Optional filters (e.g., [{column: "age", operator: "gt", value: 18}])'),
     },
-    async ({ table, database, schema, where }) => {
+    async ({ table, database, schema, filters }) => {
       const client = await getClient(database);
       try {
-        if (!where) {
+        if (!filters || filters.length === 0) {
           // Fast estimate via reltuples
           const estimateResult = await executeReadOnly(client, `
             SELECT COALESCE(reltuples::bigint, 0) as estimate
@@ -156,15 +228,16 @@ export function registerDataTools(server: McpServer) {
           });
         }
 
-        // With WHERE filter, must use actual COUNT
-        const sql = pgFormat('SELECT COUNT(*) as count FROM %I.%I WHERE ', schema, table) + where;
-        const result = await executeReadOnly(client, sql);
+        // With filters, use parameterized COUNT
+        const { clause, params } = buildWhereClause(filters as Filter[]);
+        const sql = pgFormat('SELECT COUNT(*) as count FROM %I.%I ', schema, table) + clause;
+        const result = await executeReadOnly(client, sql, params);
 
         return jsonResult({
           table: `${schema}.${table}`,
           count: parseInt(result.rows[0].count, 10),
           is_estimate: false,
-          filter: where,
+          filters,
         });
       } catch (err: any) {
         return errorResult(err.message);

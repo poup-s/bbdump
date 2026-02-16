@@ -6,6 +6,7 @@ import { registerQueryTools } from './tools/query.js';
 import { registerSchemaTools } from './tools/schema.js';
 import { registerExtraTools } from './tools/extras.js';
 import { registerConnectionTools } from './tools/connections.js';
+import { registerMutationTools } from './tools/mutations.js';
 
 export function createServer(): McpServer {
   const server = new McpServer({
@@ -20,6 +21,7 @@ export function createServer(): McpServer {
   registerQueryTools(server);
   registerSchemaTools(server);
   registerExtraTools(server);
+  registerMutationTools(server);
 
   return server;
 }

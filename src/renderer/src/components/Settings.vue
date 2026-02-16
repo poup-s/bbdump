@@ -49,10 +49,13 @@ const copyMcpConfig = async () => {
   }
 };
 
+const allowSqlMutations = ref(false);
+
 const loadSettings = async () => {
   try {
     const config = await ipcRenderer.invoke('get-config');
     currentLang.value = config.language || 'en';
+    allowSqlMutations.value = config.allowSqlMutations || false;
     defaultPath.value = await ipcRenderer.invoke('get-default-path');
   } catch (error) {
     console.error('Error loading settings:', error);
@@ -109,6 +112,17 @@ const changeBackupLocation = async () => {
 
 const replayOnboarding = () => {
   store.onboardingCompleted = false;
+};
+
+const toggleSqlMutations = async () => {
+  allowSqlMutations.value = !allowSqlMutations.value;
+  store.allowSqlMutations = allowSqlMutations.value;
+  try {
+    await ipcRenderer.invoke('save-settings', { allowSqlMutations: allowSqlMutations.value });
+    addToast(t('toasts.settingsSaved'), 'success');
+  } catch (error: any) {
+    addToast('Error saving settings: ' + error.message, 'error');
+  }
 };
 
 const loadMcpStatus = async () => {
@@ -194,6 +208,23 @@ onMounted(() => {
               class="px-3 py-1.5 text-xs font-medium bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors"
             >
               {{ t('settings.replayOnboarding') || 'Replay Onboarding' }}
+            </button>
+          </div>
+          <div class="border-t border-gray-100 dark:border-zinc-800"></div>
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('settings.allowSqlMutations') }}</span>
+              <p class="text-[11px] text-gray-400 mt-0.5">{{ t('settings.allowSqlMutationsDesc') }}</p>
+            </div>
+            <button
+              @click="toggleSqlMutations"
+              class="relative w-10 h-5 rounded-full transition-colors duration-200 shrink-0 ml-4"
+              :class="allowSqlMutations ? 'bg-orange-500' : 'bg-gray-300 dark:bg-zinc-600'"
+            >
+              <span
+                class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200"
+                :class="allowSqlMutations ? 'translate-x-5' : 'translate-x-0'"
+              />
             </button>
           </div>
         </div>
