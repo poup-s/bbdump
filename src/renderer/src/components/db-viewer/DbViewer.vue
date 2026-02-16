@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, watch } from 'vue';
 import { store } from '../../store';
 import { useI18n } from '../../composables/useI18n';
 import { useConfirm } from '../../composables/useConfirm';
@@ -110,6 +110,16 @@ const handleClose = () => {
 
 onMounted(() => {
   loadTables();
+});
+
+watch(() => store.viewerDb, (newDb, oldDb) => {
+  if (newDb && newDb !== oldDb) {
+    selectedTable.value = null;
+    viewMode.value = 'visualizer';
+    activeTab.value = 'data';
+    error.value = null;
+    loadTables();
+  }
 });
 </script>
 
