@@ -14,6 +14,7 @@ export default defineConfig({
         rollupOptions: {
             input: {
                 main: path.resolve(__dirname, 'src/renderer/index.html'),
+                tray: path.resolve(__dirname, 'src/renderer/tray.html'),
             },
         },
     },

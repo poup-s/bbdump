@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { backupManager } from './backup';
@@ -14,7 +14,10 @@ import { registerDatabaseCreationHandlers } from './ipc/databaseCreationIpc';
 import { encryptionManager } from './encryption';
 
 let mainWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
+let trayPopup: BrowserWindow | null = null;
 let handlersRegistered = false;
+let isQuitting = false;
 
 // Créer la fenêtre principale
 function createWindow(): void {
@@ -49,10 +52,20 @@ function createWindow(): void {
   // Configurer le backupManager avec la référence à mainWindow
   backupManager.setMainWindow(mainWindow);
 
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-    backupManager.setMainWindow(null);
-    cronManager.setMainWindow(null);
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      mainWindow?.hide();
+    } else {
+      mainWindow = null;
+      backupManager.setMainWindow(null);
+      cronManager.setMainWindow(null);
+    }
+  });
+
+  mainWindow.on('minimize', (e: Electron.Event) => {
+    e.preventDefault();
+    mainWindow?.hide();
   });
 
   // Passer la référence de la fenêtre au cron manager pour les notifications
@@ -91,6 +104,103 @@ function createWindow(): void {
   }
 }
 
+function showWindow(): void {
+  if (mainWindow) {
+    mainWindow.show();
+    mainWindow.focus();
+  } else {
+    createWindow();
+  }
+}
+
+function createTrayPopup(): void {
+  trayPopup = new BrowserWindow({
+    width: 320,
+    height: 420,
+    show: false,
+    frame: false,
+    resizable: false,
+    movable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false
+    }
+  });
+
+  const trayPath = path.join(__dirname, '../renderer/tray.html');
+  if (fs.existsSync(trayPath)) {
+    trayPopup.loadFile(trayPath);
+  } else {
+    trayPopup.loadFile(path.join(process.cwd(), 'src/renderer/tray.html'));
+  }
+
+  trayPopup.on('blur', () => {
+    trayPopup?.hide();
+  });
+}
+
+function toggleTrayPopup(): void {
+  if (!trayPopup) return;
+  if (trayPopup.isVisible()) {
+    trayPopup.hide();
+    return;
+  }
+  // Reload data each time popup is shown
+  trayPopup.webContents.send('tray-refresh');
+
+  const trayBounds = tray!.getBounds();
+  const popupBounds = trayPopup.getBounds();
+  const x = Math.round(trayBounds.x + trayBounds.width / 2 - popupBounds.width / 2);
+  const y = Math.round(trayBounds.y + trayBounds.height + 4);
+  trayPopup.setPosition(x, y);
+  trayPopup.show();
+}
+
+function createTray(): void {
+  const iconPath = path.join(__dirname, 'assets', 'trayIconTemplate.png');
+  const icon = nativeImage.createFromPath(iconPath);
+  icon.setTemplateImage(true);
+  tray = new Tray(icon);
+  tray.setToolTip('bbdump');
+
+  tray.on('click', toggleTrayPopup);
+  tray.on('right-click', () => {
+    const contextMenu = Menu.buildFromTemplate([
+      { label: 'Open bbdump', click: showWindow },
+      { type: 'separator' },
+      { label: 'Quit', click: () => { app.quit(); } }
+    ]);
+    tray!.popUpContextMenu(contextMenu);
+  });
+
+  // IPC: open full app from tray popup
+  ipcMain.on('tray-open-app', () => {
+    trayPopup?.hide();
+    showWindow();
+  });
+
+  // IPC: open db viewer from tray popup
+  ipcMain.on('tray-open-dbviewer', (_, dbName: string) => {
+    trayPopup?.hide();
+    showWindow();
+    mainWindow?.webContents.send('open-dbviewer', dbName);
+  });
+
+  // IPC: edit database from tray popup
+  ipcMain.on('tray-edit-db', (_, dbName: string) => {
+    trayPopup?.hide();
+    showWindow();
+    mainWindow?.webContents.send('edit-db', dbName);
+  });
+}
+
 // Initialisation de l'application
 app.whenReady().then(() => {
   // Initialiser les managers
@@ -118,15 +228,16 @@ app.whenReady().then(() => {
   registerDbViewerHandlers(); // DbViewer handlers don't need window
 
   createWindow();
+  createTrayPopup();
+  createTray();
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+    showWindow();
   });
 });
 
 app.on('before-quit', async () => {
+  isQuitting = true;
   logger.info('Application shutting down, cleaning up...');
   cronManager.cancelAllBackups();
   try {

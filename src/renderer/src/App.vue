@@ -125,6 +125,22 @@ const setupListeners = () => {
     store.backupProgress = { status: 'starting', dbName, logs: [], error: null };
     addToast(t('backup.started', { db: dbName }), 'info');
   });
+
+  ipcRenderer.on('open-dbviewer', (_: any, dbName: string) => {
+    const db = store.databases.find(d => d.name === dbName);
+    if (db) {
+      store.viewerDb = db;
+      store.showDbViewer = true;
+    }
+  });
+
+  ipcRenderer.on('edit-db', (_: any, dbName: string) => {
+    const db = store.databases.find(d => d.name === dbName);
+    if (db) {
+      store.editingDb = db;
+      store.showEditModal = true;
+    }
+  });
 };
 
 onMounted(() => {
@@ -138,6 +154,8 @@ onUnmounted(() => {
   ipcRenderer.removeAllListeners('backup-complete');
   ipcRenderer.removeAllListeners('backup-progress');
   ipcRenderer.removeAllListeners('backup-started');
+  ipcRenderer.removeAllListeners('open-dbviewer');
+  ipcRenderer.removeAllListeners('edit-db');
 });
 
 const handleLoaderComplete = () => {

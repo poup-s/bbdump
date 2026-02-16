@@ -905,6 +905,19 @@ export const translations = {
             mcpInstallBtn: 'Install',
             mcpUninstallBtn: 'Remove',
             mcpOtherTools: 'For Cursor, Windsurf or other tools, you can configure MCP later in Settings.'
+        },
+        tray: {
+            openApp: 'Open bbdump',
+            backupNow: 'Backup now',
+            lastBackup: 'Last backup',
+            never: 'Never',
+            justNow: 'Just now',
+            databases: 'databases',
+            totalBackups: 'backups',
+            backing: 'Backing up...',
+            noDatabases: 'No databases configured',
+            viewDb: 'View database',
+            editDb: 'Edit database'
         }
     },
     fr: {
@@ -1812,6 +1825,19 @@ export const translations = {
             mcpInstallBtn: 'Installer',
             mcpUninstallBtn: 'Retirer',
             mcpOtherTools: 'Pour Cursor, Windsurf ou d\'autres outils, vous pourrez configurer MCP plus tard dans les Réglages.'
+        },
+        tray: {
+            openApp: 'Ouvrir bbdump',
+            backupNow: 'Sauvegarder',
+            lastBackup: 'Dernier backup',
+            never: 'Jamais',
+            justNow: 'À l\'instant',
+            databases: 'bases de données',
+            totalBackups: 'sauvegardes',
+            backing: 'Sauvegarde...',
+            noDatabases: 'Aucune base de données configurée',
+            viewDb: 'Voir la base',
+            editDb: 'Modifier la base'
         }
     }
 };
