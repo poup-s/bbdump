@@ -28,6 +28,7 @@ export interface AppConfig {
   language?: 'en' | 'fr';
   defaultBackupPath?: string;
   allowSqlMutations?: boolean;
+  mcpSkipConfirmation?: boolean;
 }
 
 export interface BackupResult {

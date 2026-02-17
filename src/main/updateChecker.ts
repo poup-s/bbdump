@@ -1,4 +1,5 @@
-import { app, net } from 'electron';
+import { autoUpdater, UpdateInfo as ElectronUpdateInfo } from 'electron-updater';
+import { BrowserWindow } from 'electron';
 import { logger } from './logger';
 
 export interface UpdateInfo {
@@ -9,107 +10,82 @@ export interface UpdateInfo {
   error?: string;
 }
 
-const GITHUB_REPO = 'poup-s/bbDump-app';
-const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+let mainWindow: BrowserWindow | null = null;
 
-export async function checkForUpdates(): Promise<UpdateInfo> {
-  return new Promise((resolve) => {
-    let resolved = false;
-    const safeResolve = (value: UpdateInfo) => {
-      if (!resolved) {
-        resolved = true;
-        clearTimeout(timeoutHandle);
-        resolve(value);
-      }
-    };
+export function initAutoUpdater(win: BrowserWindow): void {
+  mainWindow = win;
 
-    // Timeout: abort request after 15 seconds
-    const timeoutHandle = setTimeout(() => {
-      logger.warn('Update check timed out after 15 seconds');
-      request.abort();
-      safeResolve({
-        updateAvailable: false,
-        version: '',
-        url: '',
-        releaseNotes: '',
-        error: 'Update check timed out'
-      });
-    }, 15000);
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
 
-    const request = net.request(GITHUB_API_URL);
-
-    request.on('response', (response) => {
-      let data = '';
-
-      response.on('data', (chunk) => {
-        data += chunk.toString();
-      });
-
-      response.on('end', () => {
-        if (response.statusCode === 200) {
-          try {
-            const release = JSON.parse(data);
-            const latestVersion = release.tag_name.replace(/^v/, '');
-            const currentVersion = app.getVersion();
-
-            // Simple semantic version comparison
-            const updateAvailable = compareVersions(latestVersion, currentVersion) > 0;
-
-            safeResolve({
-              updateAvailable,
-              version: latestVersion,
-              url: release.html_url,
-              releaseNotes: release.body
-            });
-          } catch (error: any) {
-            logger.error(`Error parsing update response: ${error.message}`);
-            safeResolve({
-              updateAvailable: false,
-              version: '',
-              url: '',
-              releaseNotes: '',
-              error: 'Failed to parse update information'
-            });
-          }
-        } else {
-          logger.error(`Update check failed with status: ${response.statusCode}`);
-          safeResolve({
-            updateAvailable: false,
-            version: '',
-            url: '',
-            releaseNotes: '',
-            error: `Failed to check for updates (Status: ${response.statusCode})`
-          });
-        }
-      });
+  autoUpdater.on('update-available', (info: ElectronUpdateInfo) => {
+    logger.info(`Update available: ${info.version}`);
+    mainWindow?.webContents.send('update-available', {
+      version: info.version,
+      releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
     });
+  });
 
-    request.on('error', (error) => {
-      logger.error(`Update check request error: ${error.message}`);
-      safeResolve({
-        updateAvailable: false,
-        version: '',
-        url: '',
-        releaseNotes: '',
-        error: error.message
-      });
+  autoUpdater.on('update-not-available', () => {
+    logger.info('No update available');
+    mainWindow?.webContents.send('update-not-available');
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    mainWindow?.webContents.send('update-download-progress', {
+      percent: Math.round(progress.percent),
+      bytesPerSecond: progress.bytesPerSecond,
+      transferred: progress.transferred,
+      total: progress.total,
     });
+  });
 
-    request.end();
+  autoUpdater.on('update-downloaded', () => {
+    logger.info('Update downloaded, ready to install');
+    mainWindow?.webContents.send('update-downloaded');
+  });
+
+  autoUpdater.on('error', (error) => {
+    logger.error(`Auto-updater error: ${error.message}`);
+    mainWindow?.webContents.send('update-error', error.message);
   });
 }
 
-function compareVersions(v1: string, v2: string): number {
-  const parts1 = v1.split('.').map(Number);
-  const parts2 = v2.split('.').map(Number);
+export function setUpdaterWindow(win: BrowserWindow | null): void {
+  mainWindow = win;
+}
 
-  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
-    const p1 = parts1[i] || 0;
-    const p2 = parts2[i] || 0;
-
-    if (p1 > p2) return 1;
-    if (p1 < p2) return -1;
+export async function checkForUpdates(): Promise<UpdateInfo> {
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    if (!result || !result.updateInfo) {
+      return { updateAvailable: false, version: '', url: '', releaseNotes: '' };
+    }
+    const info = result.updateInfo;
+    const currentVersion = autoUpdater.currentVersion.version;
+    const updateAvailable = info.version !== currentVersion;
+    return {
+      updateAvailable,
+      version: info.version,
+      url: `https://github.com/poup-s/bbDump-app/releases/tag/v${info.version}`,
+      releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
+    };
+  } catch (error: any) {
+    logger.error(`Update check failed: ${error.message}`);
+    return {
+      updateAvailable: false,
+      version: '',
+      url: '',
+      releaseNotes: '',
+      error: error.message,
+    };
   }
+}
 
-  return 0;
+export async function downloadUpdate(): Promise<void> {
+  await autoUpdater.downloadUpdate();
+}
+
+export function quitAndInstall(): void {
+  autoUpdater.quitAndInstall();
 }

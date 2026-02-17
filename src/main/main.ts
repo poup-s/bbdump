@@ -12,18 +12,23 @@ import { registerDbViewerHandlers, closeAllPools } from './ipc/dbViewerIpc';
 import { registerSystemHandlers } from './ipc/systemIpc';
 import { registerDatabaseCreationHandlers } from './ipc/databaseCreationIpc';
 import { encryptionManager } from './encryption';
+import { initAutoUpdater, setUpdaterWindow } from './updateChecker';
+import { startConfirmServer, onConfirmRequest, stopConfirmServer } from './mcpConfirmServer';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let trayPopup: BrowserWindow | null = null;
 let handlersRegistered = false;
 let isQuitting = false;
+let mcpConfirmActive = false;
+const isMcpConfirmLaunch = process.argv.includes('--mcp-confirm');
 
 // Créer la fenêtre principale
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    show: !isMcpConfirmLaunch,
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 20, y: 20 },
     webPreferences: {
@@ -52,6 +57,9 @@ function createWindow(): void {
   // Configurer le backupManager avec la référence à mainWindow
   backupManager.setMainWindow(mainWindow);
 
+  // Initialiser l'auto-updater
+  initAutoUpdater(mainWindow);
+
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
       e.preventDefault();
@@ -60,6 +68,7 @@ function createWindow(): void {
       mainWindow = null;
       backupManager.setMainWindow(null);
       cronManager.setMainWindow(null);
+      setUpdaterWindow(null);
     }
   });
 
@@ -142,6 +151,8 @@ function createTrayPopup(): void {
   }
 
   trayPopup.on('blur', () => {
+    // Don't auto-hide while an MCP confirmation is pending
+    if (mcpConfirmActive) return;
     trayPopup?.hide();
   });
 }
@@ -202,9 +213,24 @@ function createTray(): void {
 }
 
 // Initialisation de l'application
-app.whenReady().then(() => {
-  // Initialiser les managers
-  // pathManager.ensureDirectories(); // Called in constructor
+app.whenReady().then(async () => {
+  // Fix PATH pour macOS/Linux : quand l'app est lancée depuis Finder/Dock,
+  // le PATH ne contient pas les chemins Homebrew/usr/local
+  if (process.platform === 'darwin') {
+    const additionalPaths = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/local/sbin'];
+    const currentPath = process.env.PATH || '';
+    const missingPaths = additionalPaths.filter(p => !currentPath.includes(p));
+    if (missingPaths.length > 0) {
+      process.env.PATH = [...missingPaths, currentPath].join(':');
+    }
+  } else if (process.platform === 'linux') {
+    const additionalPaths = ['/usr/local/bin', '/usr/bin', '/snap/bin'];
+    const currentPath = process.env.PATH || '';
+    const missingPaths = additionalPaths.filter(p => !currentPath.includes(p));
+    if (missingPaths.length > 0) {
+      process.env.PATH = [...missingPaths, currentPath].join(':');
+    }
+  }
 
   // Charger la configuration
   const config = loadConfig();
@@ -231,14 +257,66 @@ app.whenReady().then(() => {
   createTrayPopup();
   createTray();
 
+  // Start MCP confirmation HTTP server and write port file
+  try {
+    const confirmPort = await startConfirmServer();
+
+    // Register callback: show tray popup when a MCP mutation needs confirmation
+    onConfirmRequest(async (_data) => {
+      if (!trayPopup || trayPopup.isDestroyed()) return null;
+
+      mcpConfirmActive = true;
+
+      // Wait for tray popup to finish loading if needed
+      if (trayPopup.webContents.isLoading()) {
+        await new Promise<void>((resolve) => {
+          trayPopup!.webContents.once('did-finish-load', () => resolve());
+        });
+      }
+
+      // Resize tray popup to accommodate the confirmation UI
+      trayPopup.setSize(320, 520);
+
+      // Position near the tray icon
+      if (tray) {
+        const trayBounds = tray.getBounds();
+        const popupBounds = trayPopup.getBounds();
+        const x = Math.round(trayBounds.x + trayBounds.width / 2 - popupBounds.width / 2);
+        const y = Math.round(trayBounds.y + trayBounds.height + 4);
+        trayPopup.setPosition(x, y);
+      }
+
+      trayPopup.show();
+      return trayPopup;
+    });
+
+    // When the tray popup responds to a confirmation, reset state
+    ipcMain.on('mcp-confirm-done', () => {
+      mcpConfirmActive = false;
+      if (trayPopup && !trayPopup.isDestroyed()) {
+        trayPopup.setSize(320, 420);
+        trayPopup.hide();
+      }
+    });
+
+    const portFilePath = path.join(pathManager.appDataPath, '.mcp-confirm-port');
+    fs.writeFileSync(portFilePath, String(confirmPort), 'utf-8');
+    logger.info(`MCP confirm port file written: ${portFilePath} (port ${confirmPort})`);
+  } catch (error) {
+    logger.error(`Failed to start MCP confirm server: ${error}`);
+  }
+
   app.on('activate', () => {
-    showWindow();
+    if (!isMcpConfirmLaunch) {
+      showWindow();
+    }
   });
 });
 
 app.on('before-quit', async () => {
   isQuitting = true;
   logger.info('Application shutting down, cleaning up...');
+  stopConfirmServer();
   cronManager.cancelAllBackups();
   try {
     await closeAllPools();

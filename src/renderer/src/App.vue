@@ -141,6 +141,24 @@ const setupListeners = () => {
       store.showEditModal = true;
     }
   });
+
+  ipcRenderer.on('update-download-progress', (_: any, progress: any) => {
+    store.downloadingUpdate = true;
+    store.downloadProgress = progress.percent;
+  });
+
+  ipcRenderer.on('update-downloaded', () => {
+    store.downloadingUpdate = false;
+    store.updateDownloaded = true;
+    addToast(t('settings.updateReady'), 'success');
+  });
+
+  ipcRenderer.on('update-error', (_: any, errorMsg: string) => {
+    store.downloadingUpdate = false;
+    store.downloadProgress = 0;
+    addToast(t('settings.updateError'), 'error');
+  });
+
 };
 
 onMounted(() => {
@@ -156,6 +174,9 @@ onUnmounted(() => {
   ipcRenderer.removeAllListeners('backup-started');
   ipcRenderer.removeAllListeners('open-dbviewer');
   ipcRenderer.removeAllListeners('edit-db');
+  ipcRenderer.removeAllListeners('update-download-progress');
+  ipcRenderer.removeAllListeners('update-downloaded');
+  ipcRenderer.removeAllListeners('update-error');
 });
 
 const handleLoaderComplete = () => {

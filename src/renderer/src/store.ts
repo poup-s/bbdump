@@ -13,6 +13,9 @@ export const store = reactive({
     updateAvailable: false,
     checkingUpdate: false,
     updateDetails: null as { version: string; url: string; releaseNotes: string } | null,
+    downloadingUpdate: false,
+    downloadProgress: 0,
+    updateDownloaded: false,
 
     // Modal states
     showAddModal: false,

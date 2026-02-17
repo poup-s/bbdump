@@ -1,9 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getClient, executeWrite } from '../db.js';
+import { getClient, executeWrite, getActiveConnectionInfo } from '../db.js';
 import { jsonResult, errorResult } from '../types.js';
 import { buildWhereClause, type Filter } from '../filters.js';
 import pgFormat from 'pg-format';
+import { requestConfirmation } from '../confirm.js';
 
 const filterSchema = z.object({
   column: z.string().describe('Column name'),
@@ -26,35 +27,47 @@ export function registerMutationTools(server: McpServer) {
         .describe('Array of row objects to insert (e.g., [{"name": "Alice", "age": 30}])'),
     },
     async ({ table, database, schema, rows }) => {
+      // Build the SQL first so we can show it in the confirmation
+      const columns = Object.keys(rows[0]);
+      if (columns.length === 0) {
+        return errorResult('Row objects must have at least one column');
+      }
+
+      const colList = columns.map(c => pgFormat('%I', c)).join(', ');
+      const valuePlaceholders: string[] = [];
+      const params: any[] = [];
+      let paramIndex = 1;
+
+      for (const row of rows) {
+        const placeholders: string[] = [];
+        for (const col of columns) {
+          placeholders.push(`$${paramIndex}`);
+          params.push(row[col] ?? null);
+          paramIndex++;
+        }
+        valuePlaceholders.push(`(${placeholders.join(', ')})`);
+      }
+
+      const sql = pgFormat('INSERT INTO %I.%I', schema, table)
+        + ` (${colList}) VALUES ${valuePlaceholders.join(', ')}`
+        + ' RETURNING *';
+
+      // Request user confirmation
+      const dbName = database || getActiveConnectionInfo().database;
+      const approved = await requestConfirmation({
+        tool: 'insert_rows',
+        database: dbName,
+        table,
+        schema,
+        sql,
+        description: `INSERT ${rows.length} row(s) into ${schema}.${table}`,
+      });
+      if (!approved) {
+        return errorResult('Mutation refused by user');
+      }
+
       const client = await getClient(database);
       try {
-        // Use columns from the first row — all rows must have the same keys
-        const columns = Object.keys(rows[0]);
-        if (columns.length === 0) {
-          return errorResult('Row objects must have at least one column');
-        }
-
-        const colList = columns.map(c => pgFormat('%I', c)).join(', ');
-
-        // Build parameterized VALUES: ($1, $2, $3), ($4, $5, $6), ...
-        const valuePlaceholders: string[] = [];
-        const params: any[] = [];
-        let paramIndex = 1;
-
-        for (const row of rows) {
-          const placeholders: string[] = [];
-          for (const col of columns) {
-            placeholders.push(`$${paramIndex}`);
-            params.push(row[col] ?? null);
-            paramIndex++;
-          }
-          valuePlaceholders.push(`(${placeholders.join(', ')})`);
-        }
-
-        const sql = pgFormat('INSERT INTO %I.%I', schema, table)
-          + ` (${colList}) VALUES ${valuePlaceholders.join(', ')}`
-          + ' RETURNING *';
-
         const result = await executeWrite(client, sql, params);
 
         return jsonResult({
@@ -83,33 +96,47 @@ export function registerMutationTools(server: McpServer) {
         .describe('Filters to select rows to update (at least one required)'),
     },
     async ({ table, database, schema, set, filters }) => {
+      const setCols = Object.keys(set);
+      if (setCols.length === 0) {
+        return errorResult('SET object must have at least one column to update');
+      }
+
+      // Build SET clause: col1 = $1, col2 = $2, ...
+      const setClauseParts: string[] = [];
+      const params: any[] = [];
+      let paramIndex = 1;
+
+      for (const col of setCols) {
+        setClauseParts.push(`${pgFormat('%I', col)} = $${paramIndex}`);
+        params.push(set[col] ?? null);
+        paramIndex++;
+      }
+
+      // Build WHERE clause starting after SET params
+      const { clause, params: whereParams } = buildWhereClause(filters as Filter[], paramIndex);
+      params.push(...whereParams);
+
+      const sql = pgFormat('UPDATE %I.%I SET ', schema, table)
+        + setClauseParts.join(', ')
+        + ` ${clause}`
+        + ' RETURNING *';
+
+      // Request user confirmation
+      const dbName = database || getActiveConnectionInfo().database;
+      const approved = await requestConfirmation({
+        tool: 'update_rows',
+        database: dbName,
+        table,
+        schema,
+        sql,
+        description: `UPDATE rows in ${schema}.${table} (SET ${setCols.join(', ')})`,
+      });
+      if (!approved) {
+        return errorResult('Mutation refused by user');
+      }
+
       const client = await getClient(database);
       try {
-        const setCols = Object.keys(set);
-        if (setCols.length === 0) {
-          return errorResult('SET object must have at least one column to update');
-        }
-
-        // Build SET clause: col1 = $1, col2 = $2, ...
-        const setClauseParts: string[] = [];
-        const params: any[] = [];
-        let paramIndex = 1;
-
-        for (const col of setCols) {
-          setClauseParts.push(`${pgFormat('%I', col)} = $${paramIndex}`);
-          params.push(set[col] ?? null);
-          paramIndex++;
-        }
-
-        // Build WHERE clause starting after SET params
-        const { clause, params: whereParams } = buildWhereClause(filters as Filter[], paramIndex);
-        params.push(...whereParams);
-
-        const sql = pgFormat('UPDATE %I.%I SET ', schema, table)
-          + setClauseParts.join(', ')
-          + ` ${clause}`
-          + ' RETURNING *';
-
         const result = await executeWrite(client, sql, params);
 
         return jsonResult({
@@ -136,12 +163,25 @@ export function registerMutationTools(server: McpServer) {
         .describe('Filters to select rows to delete (at least one required)'),
     },
     async ({ table, database, schema, filters }) => {
+      const { clause, params } = buildWhereClause(filters as Filter[]);
+      const sql = pgFormat('DELETE FROM %I.%I ', schema, table) + clause + ' RETURNING *';
+
+      // Request user confirmation
+      const dbName = database || getActiveConnectionInfo().database;
+      const approved = await requestConfirmation({
+        tool: 'delete_rows',
+        database: dbName,
+        table,
+        schema,
+        sql,
+        description: `DELETE rows from ${schema}.${table}`,
+      });
+      if (!approved) {
+        return errorResult('Mutation refused by user');
+      }
+
       const client = await getClient(database);
       try {
-        const { clause, params } = buildWhereClause(filters as Filter[]);
-
-        const sql = pgFormat('DELETE FROM %I.%I ', schema, table) + clause + ' RETURNING *';
-
         const result = await executeWrite(client, sql, params);
 
         return jsonResult({
@@ -166,6 +206,18 @@ export function registerMutationTools(server: McpServer) {
       timeout_ms: z.number().default(60000).describe('Timeout in milliseconds (default: 60000)'),
     },
     async ({ sql, database, timeout_ms }) => {
+      // Request user confirmation
+      const dbName = database || getActiveConnectionInfo().database;
+      const approved = await requestConfirmation({
+        tool: 'execute_write_query',
+        database: dbName,
+        sql,
+        description: `Execute write SQL query`,
+      });
+      if (!approved) {
+        return errorResult('Mutation refused by user');
+      }
+
       const client = await getClient(database);
       try {
         const startTime = Date.now();

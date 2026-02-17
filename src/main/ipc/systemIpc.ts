@@ -6,13 +6,14 @@ import { logger } from '../logger';
 import { pathManager } from '../paths';
 import { fileEncryptionManager } from '../fileEncryption';
 import { backupManager } from '../backup';
-import { checkForUpdates } from '../updateChecker';
+import { checkForUpdates, downloadUpdate, quitAndInstall } from '../updateChecker';
 import { DatabaseConfig } from '../../types/config';
 import { encryptionManager } from '../encryption';
 import * as databaseCreator from '../databaseCreator';
 import { getConfig, saveConfig } from './configIpc';
 import { sanitizeDatabaseConfig, sanitizeAppConfig } from '../configHelper';
 import { cronManager } from '../cron';
+import { resolveConfirmation } from '../mcpConfirmServer';
 
 export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
 
@@ -64,12 +65,21 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
     ipcMain.handle('install-postgresql', async () => {
         try {
             const { installPostgreSQL } = await import('../tools/toolInstaller');
+            const { detectHomebrew } = await import('../tools/toolDetector');
+
+            // Détecter le chemin complet de brew pour le passer à l'installateur
+            let brewPath: string | undefined;
+            const homebrewResult = await detectHomebrew();
+            if (homebrewResult.installed && homebrewResult.path) {
+                brewPath = homebrewResult.path;
+            }
+
             const onProgress = (progress: { step: string; message: string; progress: number }) => {
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('install-progress', progress);
                 }
             };
-            return await installPostgreSQL(onProgress);
+            return await installPostgreSQL(onProgress, { brewPath });
         } catch (error: any) {
             logger.error(`Error installing PostgreSQL: ${error.message}`);
             throw error;
@@ -77,6 +87,11 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
     });
 
 
+
+    // MCP Confirmation Handler
+    ipcMain.handle('mcp-confirm-response', (_, { id, approved }: { id: string; approved: boolean }) => {
+        resolveConfirmation(id, approved);
+    });
 
     // Backup & Restore Handlers
     ipcMain.handle('backup-now', async (_, name: string) => {
@@ -225,6 +240,14 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
     // Updates
     ipcMain.handle('check-for-updates', async () => {
         return await checkForUpdates();
+    });
+
+    ipcMain.handle('download-update', async () => {
+        await downloadUpdate();
+    });
+
+    ipcMain.handle('install-update', () => {
+        quitAndInstall();
     });
 
     // Encryption Key Handlers
@@ -376,6 +399,10 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
             const env: Record<string, string> = {
                 BBDUMP_CONFIG_PATH: pathManager.configPath,
                 BBDUMP_KEY_PATH: pathManager.encryptionKeyPath,
+                MCP_CONFIRM_PORT_FILE: path.join(pathManager.appDataPath, '.mcp-confirm-port'),
+                BBDUMP_APP_PATH: app.isPackaged
+                    ? (process.platform === 'darwin' ? app.getPath('exe').replace(/\/Contents\/MacOS\/.*$/, '') : app.getPath('exe'))
+                    : '',
             };
 
             config.mcpServers['bbdump-postgres'] = {

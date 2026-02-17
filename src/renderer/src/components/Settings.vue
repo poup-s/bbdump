@@ -2,12 +2,14 @@
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
+import { useConfirm } from '../composables/useConfirm';
 import { ipcRenderer } from '../electron';
 import { store } from '../store';
 import PostgresConfig from './PostgresConfig.vue';
 
 const { t, setLanguage } = useI18n();
 const { addToast } = useToast();
+const { showConfirm } = useConfirm();
 
 const currentLang = ref('en');
 const defaultPath = ref('');
@@ -50,12 +52,14 @@ const copyMcpConfig = async () => {
 };
 
 const allowSqlMutations = ref(false);
+const mcpSkipConfirmation = ref(false);
 
 const loadSettings = async () => {
   try {
     const config = await ipcRenderer.invoke('get-config');
     currentLang.value = config.language || 'en';
     allowSqlMutations.value = config.allowSqlMutations || false;
+    mcpSkipConfirmation.value = config.mcpSkipConfirmation || false;
     defaultPath.value = await ipcRenderer.invoke('get-default-path');
   } catch (error) {
     console.error('Error loading settings:', error);
@@ -122,6 +126,38 @@ const toggleSqlMutations = async () => {
     addToast(t('toasts.settingsSaved'), 'success');
   } catch (error: any) {
     addToast('Error saving settings: ' + error.message, 'error');
+  }
+};
+
+const toggleMcpSkipConfirmation = async () => {
+  if (!mcpSkipConfirmation.value) {
+    // Enabling skip → show danger confirmation
+    showConfirm({
+      title: t('settings.mcpSkipConfirmation'),
+      message: t('settings.mcpSkipConfirmationWarning'),
+      confirmText: t('settings.mcpSkipConfirmation'),
+      type: 'danger',
+      onConfirm: async () => {
+        mcpSkipConfirmation.value = true;
+        try {
+          await ipcRenderer.invoke('save-settings', { mcpSkipConfirmation: true });
+          addToast(t('toasts.settingsSaved'), 'success');
+        } catch (error: any) {
+          addToast('Error saving settings: ' + error.message, 'error');
+          mcpSkipConfirmation.value = false;
+        }
+      }
+    });
+  } else {
+    // Disabling skip → no confirmation needed
+    mcpSkipConfirmation.value = false;
+    try {
+      await ipcRenderer.invoke('save-settings', { mcpSkipConfirmation: false });
+      addToast(t('toasts.settingsSaved'), 'success');
+    } catch (error: any) {
+      addToast('Error saving settings: ' + error.message, 'error');
+      mcpSkipConfirmation.value = true;
+    }
   }
 };
 
@@ -373,6 +409,26 @@ onMounted(() => {
             </svg>
             {{ t('settings.mcpRestartHint') }}
           </div>
+
+          <!-- Skip MCP Confirmation -->
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('settings.mcpSkipConfirmation') }}</span>
+              <p class="text-[11px] text-gray-400 mt-0.5">{{ t('settings.mcpSkipConfirmationDesc') }}</p>
+            </div>
+            <button
+              @click="toggleMcpSkipConfirmation"
+              class="relative w-10 h-5 rounded-full transition-colors duration-200 shrink-0 ml-4"
+              :class="mcpSkipConfirmation ? 'bg-red-500' : 'bg-gray-300 dark:bg-zinc-600'"
+            >
+              <span
+                class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200"
+                :class="mcpSkipConfirmation ? 'translate-x-5' : 'translate-x-0'"
+              />
+            </button>
+          </div>
+
+          <div class="border-t border-gray-100 dark:border-zinc-800"></div>
 
           <!-- Config path -->
           <div v-if="mcpConfigPath" class="flex items-center gap-1.5 font-mono text-[10px] text-gray-400 bg-gray-50 dark:bg-zinc-800/50 px-2 py-1 rounded">

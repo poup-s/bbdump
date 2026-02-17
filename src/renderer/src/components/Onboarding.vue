@@ -36,6 +36,16 @@ const installing = ref<{
 
 const installProgress = ref<{ step: string; message: string; progress: number } | null>(null);
 
+const waitingForExternal = ref<{
+  homebrew: boolean;
+  postgresql: boolean;
+}>({
+  homebrew: false,
+  postgresql: false
+});
+
+const installError = ref<string | null>(null);
+
 // MCP Server
 const mcpInstalled = ref(false);
 const mcpLoading = ref(false);
@@ -152,36 +162,45 @@ const toggleAllDatabases = () => {
 
 const checkPrerequisites = async () => {
   checkingPrerequisites.value = true;
-  
+  installError.value = null;
+
   // Réinitialiser les étapes
   verificationSteps.value.forEach(s => s.status = 'pending');
-  
+
   try {
     // Vérifier pg_dump
     verificationSteps.value[0].status = 'checking';
     await new Promise(resolve => setTimeout(resolve, 300));
-    
+
     // Vérifier psql
     verificationSteps.value[1].status = 'checking';
     await new Promise(resolve => setTimeout(resolve, 300));
-    
+
     // Vérifier homebrew
     verificationSteps.value[2].status = 'checking';
     await new Promise(resolve => setTimeout(resolve, 300));
-    
+
     // Vérifier postgresServer
     verificationSteps.value[3].status = 'checking';
     await new Promise(resolve => setTimeout(resolve, 300));
-    
+
     const result = await ipcRenderer.invoke('check-prerequisites');
     prerequisites.value = result;
-    
+
     // Mettre à jour les statuts
     verificationSteps.value[0].status = result.pgDump.installed ? 'done' : 'error';
     verificationSteps.value[1].status = result.psql.installed ? 'done' : 'error';
     verificationSteps.value[2].status = result.homebrew?.installed ? 'done' : 'pending';
     verificationSteps.value[3].status = result.postgresServer.installed && result.postgresServer.hasServer ? 'done' : 'pending';
-    
+
+    // Réinitialiser les états d'attente externe si les outils sont maintenant installés
+    if (result.homebrew?.installed) {
+      waitingForExternal.value.homebrew = false;
+    }
+    if (result.pgDump.installed && result.psql.installed) {
+      waitingForExternal.value.postgresql = false;
+    }
+
     // Ouvrir automatiquement les sections avec des erreurs
     if (!result.pgDump.installed || !result.psql.installed) {
       expandedSections.value.required = true;
@@ -295,23 +314,28 @@ const canProceedFromPrerequisites = () => {
 
 const installHomebrew = async () => {
   if (installing.value.homebrew) return;
-  
+
   installing.value.homebrew = true;
+  installError.value = null;
   installProgress.value = { step: 'starting', message: 'Starting Homebrew installation...', progress: 0 };
   expandedSections.value.optional = true;
-  
+
   try {
     const result = await ipcRenderer.invoke('install-homebrew');
-    if (result.success) {
+    if (result.externalInstallation) {
+      waitingForExternal.value.homebrew = true;
+      verificationSteps.value[2].status = 'pending';
+    } else if (result.success) {
       verificationSteps.value[2].status = 'done';
+      waitingForExternal.value.homebrew = false;
       await checkPrerequisites();
     } else {
       verificationSteps.value[2].status = 'error';
-      alert(result.error || 'Failed to install Homebrew');
+      installError.value = result.error || 'Failed to install Homebrew';
     }
   } catch (error: any) {
     verificationSteps.value[2].status = 'error';
-    alert('Error installing Homebrew: ' + error.message);
+    installError.value = 'Error installing Homebrew: ' + error.message;
   } finally {
     installing.value.homebrew = false;
     installProgress.value = null;
@@ -320,8 +344,9 @@ const installHomebrew = async () => {
 
 const installPostgreSQL = async () => {
   if (installing.value.postgresql) return;
-  
+
   installing.value.postgresql = true;
+  installError.value = null;
   installProgress.value = { step: 'starting', message: 'Starting PostgreSQL installation...', progress: 0 };
   expandedSections.value.required = true;
   if (prerequisites.value && !prerequisites.value.pgDump.installed) {
@@ -330,23 +355,28 @@ const installPostgreSQL = async () => {
   if (prerequisites.value && !prerequisites.value.psql.installed) {
     verificationSteps.value[1].status = 'checking';
   }
-  
+
   try {
     const result = await ipcRenderer.invoke('install-postgresql');
-    if (result.success) {
+    if (result.externalInstallation) {
+      waitingForExternal.value.postgresql = true;
+      verificationSteps.value[0].status = 'pending';
+      verificationSteps.value[1].status = 'pending';
+    } else if (result.success) {
       verificationSteps.value[0].status = 'done';
       verificationSteps.value[1].status = 'done';
       verificationSteps.value[3].status = 'done';
+      waitingForExternal.value.postgresql = false;
       await checkPrerequisites();
     } else {
       verificationSteps.value[0].status = 'error';
       verificationSteps.value[1].status = 'error';
-      alert(result.error || 'Failed to install PostgreSQL');
+      installError.value = result.error || 'Failed to install PostgreSQL';
     }
   } catch (error: any) {
     verificationSteps.value[0].status = 'error';
     verificationSteps.value[1].status = 'error';
-    alert('Error installing PostgreSQL: ' + error.message);
+    installError.value = 'Error installing PostgreSQL: ' + error.message;
   } finally {
     installing.value.postgresql = false;
     installProgress.value = null;
@@ -643,6 +673,10 @@ const installPostgreSQL = async () => {
                     <div v-if="prerequisites.homebrew.installed" class="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-xs font-medium">
                       {{ t('onboarding.installed') || 'Installé' }}
                     </div>
+                    <div v-else-if="waitingForExternal.homebrew" class="px-3 py-1.5 bg-amber-500/20 text-amber-400 rounded text-xs font-medium flex items-center gap-1.5">
+                      <div class="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></div>
+                      {{ t('onboarding.waitingForTerminal') || 'En attente...' }}
+                    </div>
                     <button
                       v-else-if="!installing.homebrew"
                       @click="installHomebrew"
@@ -702,8 +736,60 @@ const installPostgreSQL = async () => {
               </div>
             </div>
 
+            <!-- Waiting for external installation banner -->
+            <div v-if="waitingForExternal.homebrew || waitingForExternal.postgresql" class="bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/30 rounded-lg p-2.5">
+              <div class="flex items-start gap-2">
+                <div class="w-6 h-6 rounded-lg bg-indigo-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                  <svg class="w-3 h-3 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-xs font-medium text-indigo-300 mb-0.5">{{ t('onboarding.terminalOpened') || 'Une fenêtre Terminal a été ouverte' }}</div>
+                  <div class="text-xs text-indigo-400/80 leading-relaxed">{{ t('onboarding.completeInTerminal') || 'Terminez l\'installation dans le Terminal, puis cliquez sur "Revérifier" ci-dessous.' }}</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Installation error banner -->
+            <div v-if="installError" class="bg-gradient-to-r from-red-500/10 to-rose-500/10 border border-red-500/30 rounded-lg p-2.5">
+              <div class="flex items-start gap-2">
+                <div class="w-6 h-6 rounded-lg bg-red-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                  <svg class="w-3 h-3 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-xs text-red-300 whitespace-pre-line leading-relaxed">{{ installError }}</div>
+                </div>
+                <button @click="installError = null" class="text-red-400 hover:text-red-300 shrink-0">
+                  <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <!-- Re-check button -->
+            <div class="flex justify-center">
+              <button
+                @click="checkPrerequisites"
+                :disabled="checkingPrerequisites"
+                class="px-4 py-2 bg-zinc-800/50 hover:bg-zinc-700/50 border border-zinc-700/30 rounded-lg text-sm text-gray-300 hover:text-white transition-all flex items-center gap-2"
+              >
+                <svg v-if="checkingPrerequisites" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <svg v-else class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                {{ t('onboarding.recheck') || 'Revérifier' }}
+              </button>
+            </div>
+
             <!-- Helpful Message if required tools missing -->
-            <div v-if="!canProceedFromPrerequisites()" class="bg-gradient-to-r from-orange-500/10 to-amber-500/10 border border-orange-500/30 rounded-lg p-2.5">
+            <div v-if="!canProceedFromPrerequisites() && !waitingForExternal.homebrew && !waitingForExternal.postgresql" class="bg-gradient-to-r from-orange-500/10 to-amber-500/10 border border-orange-500/30 rounded-lg p-2.5">
               <div class="flex items-start gap-2">
                 <div class="w-6 h-6 rounded-lg bg-orange-500/20 flex items-center justify-center shrink-0 mt-0.5">
                   <svg class="w-3 h-3 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">

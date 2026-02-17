@@ -34,10 +34,20 @@ const checkForUpdates = async () => {
   }
 };
 
-const openRelease = () => {
-  if (store.updateDetails?.url) {
-    window.open(store.updateDetails.url, '_blank');
+const downloadUpdate = async () => {
+  if (store.downloadingUpdate) return;
+  store.downloadingUpdate = true;
+  store.downloadProgress = 0;
+  try {
+    await ipcRenderer.invoke('download-update');
+  } catch (error) {
+    store.downloadingUpdate = false;
+    addToast(t('settings.updateError'), 'error');
   }
+};
+
+const installUpdate = () => {
+  ipcRenderer.invoke('install-update');
 };
 </script>
 
@@ -79,39 +89,71 @@ const openRelease = () => {
         <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Status</h3>
         
         <div class="flex items-center gap-3">
-          <template v-if="store.updateAvailable">
+          <template v-if="store.updateDownloaded">
+            <div class="w-3 h-3 bg-green-500 rounded-full animate-pulse shadow-[0_0_12px_rgba(34,197,94,0.5)]"></div>
+            <span class="text-lg font-bold text-green-500 tracking-tight">{{ t('settings.updateReady') }}</span>
+          </template>
+          <template v-else-if="store.downloadingUpdate">
             <div class="w-3 h-3 bg-blue-500 rounded-full animate-pulse shadow-[0_0_12px_rgba(59,130,246,0.5)]"></div>
-            <span class="text-lg font-bold text-blue-500 tracking-tight">Update Available</span>
+            <span class="text-lg font-bold text-blue-500 tracking-tight">{{ t('settings.downloading') }}</span>
+          </template>
+          <template v-else-if="store.updateAvailable">
+            <div class="w-3 h-3 bg-blue-500 rounded-full animate-pulse shadow-[0_0_12px_rgba(59,130,246,0.5)]"></div>
+            <span class="text-lg font-bold text-blue-500 tracking-tight">{{ t('settings.updateAvailableShort') }}</span>
           </template>
           <template v-else>
             <div class="w-3 h-3 bg-green-500 rounded-full shadow-[0_0_12px_rgba(34,197,94,0.5)]"></div>
-            <span class="text-lg font-bold text-green-500 tracking-tight">System Up to Date</span>
+            <span class="text-lg font-bold text-green-500 tracking-tight">{{ t('settings.upToDate') }}</span>
           </template>
         </div>
-        
+
         <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
-          {{ store.updateAvailable ? `Version v${store.updateDetails?.version} is now available.` : 'You are running the latest version.' }}
+          <template v-if="store.updateDownloaded">
+            v{{ store.updateDetails?.version }} {{ t('settings.readyToInstall') }}
+          </template>
+          <template v-else-if="store.downloadingUpdate">
+            {{ t('settings.downloading') }} {{ store.downloadProgress }}%
+          </template>
+          <template v-else-if="store.updateAvailable">
+            v{{ store.updateDetails?.version }} {{ t('settings.isAvailable') }}
+          </template>
+          <template v-else>
+            {{ t('settings.latestVersion') }}
+          </template>
         </p>
-        
+
+        <!-- Progress bar -->
+        <div v-if="store.downloadingUpdate" class="mt-3 w-full bg-zinc-200 dark:bg-zinc-700 rounded-full h-2 overflow-hidden">
+          <div class="bg-blue-500 h-full rounded-full transition-all duration-300" :style="{ width: store.downloadProgress + '%' }"></div>
+        </div>
+
         <div class="mt-4 flex gap-2">
-          <button 
-            v-if="store.updateAvailable"
-            @click="openRelease()"
+          <button
+            v-if="store.updateDownloaded"
+            @click="installUpdate"
+            class="px-4 py-2 bg-green-500 hover:bg-green-600 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-green-500/20 active:scale-95"
+          >
+            {{ t('settings.installAndRestart') }}
+          </button>
+          <button
+            v-else-if="store.updateAvailable && !store.downloadingUpdate"
+            @click="downloadUpdate"
             class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20 active:scale-95"
           >
-            Download v{{ store.updateDetails?.version }}
+            {{ t('settings.downloadUpdate') }} v{{ store.updateDetails?.version }}
           </button>
-          <button 
+          <button
+            v-if="!store.downloadingUpdate && !store.updateDownloaded"
             @click="checkForUpdates"
             class="p-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition-all group active:scale-95 disabled:opacity-50"
             :disabled="store.checkingUpdate"
             :title="t('settings.checkForUpdates')"
           >
-            <svg 
+            <svg
               class="w-5 h-5 text-gray-400 group-hover:text-foreground transition-colors"
-              :class="{ 'animate-spin': store.checkingUpdate }" 
-              fill="none" 
-              viewBox="0 0 24 24" 
+              :class="{ 'animate-spin': store.checkingUpdate }"
+              fill="none"
+              viewBox="0 0 24 24"
               stroke="currentColor"
             >
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />

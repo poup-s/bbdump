@@ -119,10 +119,11 @@ export function registerConfigHandlers() {
         return config;
     });
 
-    ipcMain.handle('save-settings', async (_, settings: { language?: 'en' | 'fr', defaultBackupPath?: string, allowSqlMutations?: boolean }) => {
+    ipcMain.handle('save-settings', async (_, settings: { language?: 'en' | 'fr', defaultBackupPath?: string, allowSqlMutations?: boolean, mcpSkipConfirmation?: boolean }) => {
         if (settings.language) config.language = settings.language;
         if (settings.defaultBackupPath) config.defaultBackupPath = settings.defaultBackupPath;
         if (settings.allowSqlMutations !== undefined) config.allowSqlMutations = settings.allowSqlMutations;
+        if (settings.mcpSkipConfirmation !== undefined) config.mcpSkipConfirmation = settings.mcpSkipConfirmation;
         saveConfig(config);
         return config;
     });
