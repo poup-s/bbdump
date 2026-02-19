@@ -90,7 +90,7 @@ const checkForUpdates = async () => {
         url: result.url,
         releaseNotes: result.releaseNotes
       };
-      addToast(t('settings.updateAvailable', { version: result.version }), 'info', result.url);
+      addToast(t('settings.updateAvailable', { version: result.version }), 'info', '__navigate:about');
     } else {
       store.updateAvailable = false;
       store.updateDetails = null;
@@ -222,6 +222,23 @@ const handleLoaderComplete = () => {
           </div>
           <span class="text-[9px] font-medium leading-tight truncate w-full text-center">{{ t(tab.short) }}</span>
         </button>
+
+        <!-- Ko-fi -->
+        <a
+          href="https://ko-fi.com/poup_s"
+          target="_blank"
+          class="flex flex-col items-center gap-0.5 px-2 py-1.5 rounded-xl transition-all duration-500 ease-out group relative transform-style-3d no-drag w-16 text-amber-500/60 hover:text-amber-500 hover:bg-amber-500/10"
+        >
+          <div class="relative transform transition-transform duration-300 group-active:scale-75">
+            <svg class="w-6 h-6 drop-shadow-md" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 14c.83.642 2.077 1.017 3.5 1c1.423.017 2.67-.358 3.5-1s2.077-1.017 3.5-1c1.423-.017 2.67.358 3.5 1"/>
+              <path d="M8 3a2.4 2.4 0 0 0-1 2a2.4 2.4 0 0 0 1 2m4-4a2.4 2.4 0 0 0-1 2a2.4 2.4 0 0 0 1 2"/>
+              <path d="M3 10h14v5a6 6 0 0 1-6 6H9a6 6 0 0 1-6-6z"/>
+              <path d="M16.746 16.726a3 3 0 1 0 .252-5.555"/>
+            </svg>
+          </div>
+          <span class="text-[9px] font-medium leading-tight truncate w-full text-center">Ko-fi</span>
+        </a>
       </div>
 
       <div class="p-4 mb-2">
@@ -279,6 +296,7 @@ const handleLoaderComplete = () => {
       @close="store.showDbViewer = false; store.viewerDb = null"
     />
     <ExtensionsModal v-if="store.showExtensionsModal" />
+
   </div>
 </template>
 

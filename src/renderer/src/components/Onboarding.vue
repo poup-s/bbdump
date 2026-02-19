@@ -51,14 +51,8 @@ const mcpInstalled = ref(false);
 const mcpLoading = ref(false);
 const claudeDesktopDetected = ref(false);
 
-// État des accordéons
-const expandedSections = ref<{
-  required: boolean;
-  optional: boolean;
-}>({
-  required: false,
-  optional: false
-});
+// État de l'accordéon
+const expandedTools = ref(false);
 
 // Étapes de vérification
 const verificationSteps = ref<Array<{ name: string; status: 'pending' | 'checking' | 'done' | 'error' }>>([
@@ -190,8 +184,8 @@ const checkPrerequisites = async () => {
     // Mettre à jour les statuts
     verificationSteps.value[0].status = result.pgDump.installed ? 'done' : 'error';
     verificationSteps.value[1].status = result.psql.installed ? 'done' : 'error';
-    verificationSteps.value[2].status = result.homebrew?.installed ? 'done' : 'pending';
-    verificationSteps.value[3].status = result.postgresServer.installed && result.postgresServer.hasServer ? 'done' : 'pending';
+    verificationSteps.value[2].status = result.homebrew?.installed ? 'done' : 'error';
+    verificationSteps.value[3].status = result.postgresServer.installed && result.postgresServer.hasServer ? 'done' : 'error';
 
     // Réinitialiser les états d'attente externe si les outils sont maintenant installés
     if (result.homebrew?.installed) {
@@ -201,12 +195,9 @@ const checkPrerequisites = async () => {
       waitingForExternal.value.postgresql = false;
     }
 
-    // Ouvrir automatiquement les sections avec des erreurs
-    if (!result.pgDump.installed || !result.psql.installed) {
-      expandedSections.value.required = true;
-    }
-    if (result.homebrew && !result.homebrew.installed) {
-      expandedSections.value.optional = true;
+    // Ouvrir automatiquement la section si des outils manquent
+    if (!result.pgDump.installed || !result.psql.installed || !result.homebrew?.installed || !(result.postgresServer.installed && result.postgresServer.hasServer)) {
+      expandedTools.value = true;
     }
   } catch (error) {
     console.error('Failed to check prerequisites:', error);
@@ -309,7 +300,10 @@ const uninstallMcp = async () => {
 
 const canProceedFromPrerequisites = () => {
   if (!prerequisites.value) return false;
-  return prerequisites.value.pgDump.installed && prerequisites.value.psql.installed;
+  return prerequisites.value.pgDump.installed
+    && prerequisites.value.psql.installed
+    && (prerequisites.value.homebrew?.installed ?? true)
+    && (prerequisites.value.postgresServer?.installed && prerequisites.value.postgresServer?.hasServer);
 };
 
 const installHomebrew = async () => {
@@ -318,7 +312,7 @@ const installHomebrew = async () => {
   installing.value.homebrew = true;
   installError.value = null;
   installProgress.value = { step: 'starting', message: 'Starting Homebrew installation...', progress: 0 };
-  expandedSections.value.optional = true;
+  expandedTools.value = true;
 
   try {
     const result = await ipcRenderer.invoke('install-homebrew');
@@ -348,7 +342,7 @@ const installPostgreSQL = async () => {
   installing.value.postgresql = true;
   installError.value = null;
   installProgress.value = { step: 'starting', message: 'Starting PostgreSQL installation...', progress: 0 };
-  expandedSections.value.required = true;
+  expandedTools.value = true;
   if (prerequisites.value && !prerequisites.value.pgDump.installed) {
     verificationSteps.value[0].status = 'checking';
   }
@@ -385,29 +379,29 @@ const installPostgreSQL = async () => {
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 bg-zinc-950 text-white overflow-hidden flex flex-col items-center justify-center">
+  <div class="fixed inset-0 z-50 bg-zinc-950 text-white overflow-y-auto flex flex-col items-center py-4 sm:py-6 md:justify-center md:py-0">
     <!-- Background Pattern -->
-    <div class="absolute inset-0 z-0 opacity-20">
+    <div class="fixed inset-0 z-0 opacity-20 pointer-events-none">
       <div class="absolute inset-0 bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px]"></div>
     </div>
 
     <!-- Content -->
-    <div class="relative z-10 w-full max-w-lg mx-4 px-2 sm:px-4">
+    <div class="relative z-10 w-full max-w-lg mx-auto px-3 sm:px-4">
       <div class="bg-zinc-900/50 backdrop-blur-xl p-4 sm:p-6 md:p-8 rounded-2xl sm:rounded-3xl border border-white/10 shadow-2xl">
-        
+
         <!-- Logo -->
-        <div class="flex justify-center mb-8">
-          <div class="w-32 h-32 bg-foreground text-background rounded-3xl flex items-center justify-center shadow-2xl rotate-3 hover:rotate-0 transition-transform duration-500 bg-white dark:bg-zinc-800">
-            <img src="/logo.png" alt="logo" class="w-32 h-32 rounded-3xl shadow-2xl"/>
+        <div class="flex justify-center mb-4 sm:mb-6 md:mb-8">
+          <div class="w-20 h-20 sm:w-28 sm:h-28 md:w-32 md:h-32 bg-foreground text-background rounded-2xl sm:rounded-3xl flex items-center justify-center shadow-2xl rotate-3 hover:rotate-0 transition-transform duration-500 bg-white dark:bg-zinc-800">
+            <img src="/logo.png" alt="logo" class="w-20 h-20 sm:w-28 sm:h-28 md:w-32 md:h-32 rounded-2xl sm:rounded-3xl shadow-2xl"/>
           </div>
         </div>
 
         <!-- Step 1: Language -->
-        <div v-if="step === 1" class="text-center space-y-8">
-          <h1 class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
+        <div v-if="step === 1" class="text-center space-y-4 sm:space-y-6 md:space-y-8">
+          <h1 class="text-2xl sm:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">
             Welcome to bbdump
           </h1>
-          <p class="text-gray-400 text-lg">Choose your language / Choisissez votre langue</p>
+          <p class="text-gray-400 text-sm sm:text-lg">Choose your language / Choisissez votre langue</p>
           
           <div class="flex justify-center gap-6">
             <button 
@@ -523,16 +517,16 @@ const installPostgreSQL = async () => {
               </div>
             </div>
 
-            <!-- Required Tools Accordion -->
+            <!-- Tools Accordion (single unified list) -->
             <div class="bg-zinc-800/30 rounded-lg border border-zinc-700/30 overflow-hidden">
               <button
-                @click="expandedSections.required = !expandedSections.required"
+                @click="expandedTools = !expandedTools"
                 class="w-full flex items-center justify-between p-3 hover:bg-zinc-800/50 transition-colors"
               >
                 <div class="flex items-center gap-2">
                   <div class="w-6 h-6 rounded-lg flex items-center justify-center shrink-0"
-                       :class="prerequisites.pgDump.installed && prerequisites.psql.installed ? 'bg-green-500/20' : 'bg-orange-500/20'">
-                    <svg v-if="prerequisites.pgDump.installed && prerequisites.psql.installed" class="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                       :class="canProceedFromPrerequisites() ? 'bg-green-500/20' : 'bg-orange-500/20'">
+                    <svg v-if="canProceedFromPrerequisites()" class="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                     </svg>
                     <svg v-else class="w-3.5 h-3.5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -541,19 +535,19 @@ const installPostgreSQL = async () => {
                   </div>
                   <span class="font-medium text-sm text-white">{{ t('onboarding.requiredTools') || 'Outils requis' }}</span>
                   <span class="text-xs text-gray-400 ml-2">
-                    ({{ [prerequisites.pgDump.installed, prerequisites.psql.installed].filter(Boolean).length }}/2)
+                    ({{ [prerequisites.pgDump.installed, prerequisites.psql.installed, prerequisites.homebrew?.installed, prerequisites.postgresServer?.installed && prerequisites.postgresServer?.hasServer].filter(Boolean).length }}/4)
                   </span>
                 </div>
-                <svg 
+                <svg
                   class="w-4 h-4 text-gray-400 transition-transform duration-200"
-                  :class="{ 'rotate-180': expandedSections.required }"
+                  :class="{ 'rotate-180': expandedTools }"
                   fill="none" viewBox="0 0 24 24" stroke="currentColor"
                 >
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                 </svg>
               </button>
-              
-              <div v-show="expandedSections.required" class="border-t border-zinc-700/30 divide-y divide-zinc-700/30">
+
+              <div v-show="expandedTools" class="border-t border-zinc-700/30 divide-y divide-zinc-700/30">
                 <!-- pg_dump -->
                 <div class="p-3 flex items-center justify-between gap-3">
                   <div class="flex items-center gap-2 flex-1 min-w-0">
@@ -625,52 +619,26 @@ const installPostgreSQL = async () => {
                     </div>
                   </div>
                 </div>
-              </div>
-            </div>
 
-            <!-- Optional Tools Accordion -->
-            <div v-if="prerequisites.homebrew || prerequisites.postgresServer" class="bg-zinc-800/30 rounded-lg border border-zinc-700/30 overflow-hidden">
-              <button
-                @click="expandedSections.optional = !expandedSections.optional"
-                class="w-full flex items-center justify-between p-3 hover:bg-zinc-800/50 transition-colors"
-              >
-                <div class="flex items-center gap-2">
-                  <div class="w-6 h-6 rounded-lg flex items-center justify-center shrink-0 bg-blue-500/10">
-                    <svg class="w-3.5 h-3.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                  <span class="font-medium text-sm text-gray-300">{{ t('onboarding.optionalTools') || 'Outils optionnels' }}</span>
-                  <span class="text-xs text-gray-500 ml-2">({{ t('onboarding.forLocalDb') || 'pour créer des bases locales' }})</span>
-                </div>
-                <svg 
-                  class="w-4 h-4 text-gray-400 transition-transform duration-200"
-                  :class="{ 'rotate-180': expandedSections.optional }"
-                  fill="none" viewBox="0 0 24 24" stroke="currentColor"
-                >
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-              
-              <div v-show="expandedSections.optional" class="border-t border-zinc-700/30 divide-y divide-zinc-700/30">
                 <!-- Homebrew (macOS only) -->
                 <div v-if="prerequisites.homebrew" class="p-3 flex items-center justify-between gap-3">
                   <div class="flex items-center gap-2 flex-1 min-w-0">
-                    <div class="w-6 h-6 rounded-lg flex items-center justify-center shrink-0 bg-blue-500/10">
-                      <svg v-if="prerequisites.homebrew.installed" class="w-3.5 h-3.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <div class="w-6 h-6 rounded-lg flex items-center justify-center shrink-0"
+                         :class="prerequisites.homebrew.installed ? 'bg-green-500/20' : 'bg-orange-500/20'">
+                      <svg v-if="prerequisites.homebrew.installed" class="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                       </svg>
-                      <svg v-else class="w-3.5 h-3.5 text-blue-400/60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      <svg v-else class="w-3.5 h-3.5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
                     </div>
                     <div class="flex-1 min-w-0">
-                      <div class="font-medium text-gray-300 text-sm">Homebrew</div>
-                      <div class="text-xs text-gray-500 truncate">{{ t('onboarding.prereqHomebrew') || 'Gestionnaire de paquets pour macOS' }}</div>
+                      <div class="font-medium text-white text-sm">Homebrew</div>
+                      <div class="text-xs text-gray-400 truncate">{{ t('onboarding.prereqHomebrew') || 'Gestionnaire de paquets pour macOS' }}</div>
                     </div>
                   </div>
                   <div class="flex items-center gap-2 shrink-0">
-                    <div v-if="prerequisites.homebrew.installed" class="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-xs font-medium">
+                    <div v-if="prerequisites.homebrew.installed" class="px-2 py-1 bg-green-500/20 text-green-400 rounded text-xs font-medium">
                       {{ t('onboarding.installed') || 'Installé' }}
                     </div>
                     <div v-else-if="waitingForExternal.homebrew" class="px-3 py-1.5 bg-amber-500/20 text-amber-400 rounded text-xs font-medium flex items-center gap-1.5">
@@ -680,11 +648,11 @@ const installPostgreSQL = async () => {
                     <button
                       v-else-if="!installing.homebrew"
                       @click="installHomebrew"
-                      class="px-3 py-1.5 bg-zinc-700/50 hover:bg-zinc-700 rounded text-xs font-medium transition-all active:scale-95 whitespace-nowrap"
+                      class="px-3 py-1.5 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 rounded text-xs font-medium transition-all active:scale-95 whitespace-nowrap"
                     >
                       {{ t('onboarding.install') || 'Installer' }}
                     </button>
-                    <div v-else-if="installing.homebrew" class="px-3 py-1.5 bg-zinc-700/50 rounded text-xs font-medium flex items-center gap-1.5">
+                    <div v-else-if="installing.homebrew" class="px-3 py-1.5 bg-indigo-500/50 rounded text-xs font-medium flex items-center gap-1.5">
                       <div class="animate-spin rounded-full h-2.5 w-2.5 border-2 border-white border-t-transparent"></div>
                       <span class="hidden sm:inline text-xs">{{ installProgress?.message || t('onboarding.installing') || 'Installation...' }}</span>
                       <span class="sm:hidden text-xs">{{ t('onboarding.installing') || 'Installation...' }}</span>
@@ -695,19 +663,20 @@ const installPostgreSQL = async () => {
                 <!-- PostgreSQL Server -->
                 <div class="p-3 flex items-center justify-between gap-3">
                   <div class="flex items-center gap-2 flex-1 min-w-0">
-                    <div class="w-6 h-6 rounded-lg flex items-center justify-center shrink-0 bg-blue-500/10">
-                      <svg v-if="prerequisites.postgresServer.installed && prerequisites.postgresServer.hasServer" class="w-3.5 h-3.5 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <div class="w-6 h-6 rounded-lg flex items-center justify-center shrink-0"
+                         :class="prerequisites.postgresServer.installed && prerequisites.postgresServer.hasServer ? 'bg-green-500/20' : 'bg-orange-500/20'">
+                      <svg v-if="prerequisites.postgresServer.installed && prerequisites.postgresServer.hasServer" class="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                       </svg>
-                      <svg v-else class="w-3.5 h-3.5 text-blue-400/60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      <svg v-else class="w-3.5 h-3.5 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
                     </div>
                     <div class="flex-1 min-w-0">
-                      <div class="font-medium text-gray-300 text-sm">PostgreSQL Server</div>
-                      <div class="text-xs text-gray-500 truncate">
+                      <div class="font-medium text-white text-sm">PostgreSQL Server</div>
+                      <div class="text-xs text-gray-400 truncate">
                         {{ t('onboarding.prereqPostgresServer') || 'Serveur de base de données local' }}
-                        <span v-if="prerequisites.postgresServer.version" class="ml-1 text-blue-400">v{{ prerequisites.postgresServer.version }}</span>
+                        <span v-if="prerequisites.postgresServer.version" class="ml-1 text-green-400">v{{ prerequisites.postgresServer.version }}</span>
                       </div>
                       <div v-if="installProgress && installing.postgresql" class="mt-1 text-xs text-indigo-400 flex items-center gap-1.5">
                         <div class="animate-spin rounded-full h-2 w-2 border border-indigo-400 border-t-transparent"></div>
@@ -716,17 +685,17 @@ const installPostgreSQL = async () => {
                     </div>
                   </div>
                   <div class="flex items-center gap-2 shrink-0">
-                    <div v-if="prerequisites.postgresServer.installed && prerequisites.postgresServer.hasServer" class="px-2 py-1 bg-blue-500/20 text-blue-400 rounded text-xs font-medium">
+                    <div v-if="prerequisites.postgresServer.installed && prerequisites.postgresServer.hasServer" class="px-2 py-1 bg-green-500/20 text-green-400 rounded text-xs font-medium">
                       {{ t('onboarding.installed') || 'Installé' }}
                     </div>
                     <button
                       v-else-if="!installing.postgresql"
                       @click="installPostgreSQL"
-                      class="px-3 py-1.5 bg-zinc-700/50 hover:bg-zinc-700 rounded text-xs font-medium transition-all active:scale-95 whitespace-nowrap"
+                      class="px-3 py-1.5 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 rounded text-xs font-medium transition-all active:scale-95 whitespace-nowrap"
                     >
                       {{ t('onboarding.install') || 'Installer' }}
                     </button>
-                    <div v-else-if="installing.postgresql" class="px-3 py-1.5 bg-zinc-700/50 rounded text-xs font-medium flex items-center gap-1.5">
+                    <div v-else-if="installing.postgresql" class="px-3 py-1.5 bg-indigo-500/50 rounded text-xs font-medium flex items-center gap-1.5">
                       <div class="animate-spin rounded-full h-2.5 w-2.5 border-2 border-white border-t-transparent"></div>
                       <span class="hidden sm:inline text-xs">{{ installProgress?.message || t('onboarding.installing') || 'Installation...' }}</span>
                       <span class="sm:hidden text-xs">{{ t('onboarding.installing') || 'Installation...' }}</span>
@@ -927,11 +896,11 @@ const installPostgreSQL = async () => {
         </div>
 
         <!-- Step 4: Path -->
-        <div v-if="step === 4" class="text-center space-y-8">
-          <h1 class="text-3xl font-bold">
+        <div v-if="step === 4" class="text-center space-y-4 sm:space-y-6 md:space-y-8">
+          <h1 class="text-xl sm:text-2xl md:text-3xl font-bold">
             {{ t('onboarding.backupLocation') || 'Backup Location' }}
           </h1>
-          <p class="text-gray-400">
+          <p class="text-gray-400 text-xs sm:text-sm">
             {{ t('onboarding.backupLocationDesc') || 'Where should we store your database backups?' }}
           </p>
 

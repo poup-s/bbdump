@@ -98,40 +98,86 @@ export async function checkPostgresInstalled(): Promise<{ installed: boolean; ve
       // Ignore
     }
 
-    // Vérifier si PostgreSQL SERVER est installé via brew (pas seulement libpq)
-    try {
-      const brewPath = await findBrewPath();
-      if (brewPath) {
-        const { stdout: brewList } = await execAsync(`"${brewPath}" list 2>/dev/null | grep "^postgresql@" || echo ""`);
-        if (brewList.trim()) {
-          method = 'brew';
-          hasServer = true;
-          logger.info(`PostgreSQL server found via Homebrew: ${brewList.trim()}`);
-        } else {
-          // Vérifier si seulement libpq est installé
-          const { stdout: libpqCheck } = await execAsync(`"${brewPath}" list 2>/dev/null | grep "^libpq" || echo ""`);
-          if (libpqCheck.trim()) {
-            method = 'brew';
-            hasServer = false;
-            logger.warn(`Only libpq (client) found via Homebrew, not PostgreSQL server: ${libpqCheck.trim()}`);
+    // Vérifier si PostgreSQL SERVER est installé
+    const osType = getOS();
+
+    if (osType === 'linux') {
+      // On Linux, check for the postgres binary in standard paths
+      const linuxPostgresPaths = [
+        '/usr/bin/postgres',
+        '/usr/local/bin/postgres',
+        '/usr/lib/postgresql/*/bin/postgres'
+      ];
+      for (const p of linuxPostgresPaths) {
+        try {
+          const { stdout: found } = await execAsync(`ls ${p} 2>/dev/null | head -1 || echo ""`);
+          if (found.trim()) {
+            hasServer = true;
+            method = 'system';
+            logger.info(`PostgreSQL server binary found on Linux at: ${found.trim()}`);
+            break;
           }
+        } catch {
+          // Ignore
         }
       }
-    } catch {
-      // Ignore
-    }
 
-    // Vérifier si le serveur postgres existe
-    if (!hasServer && method === 'brew') {
-      try {
-        // Chercher postgres dans les chemins Homebrew
-        const { stdout: postgresPath } = await execAsync('find /opt/homebrew/opt/postgresql* /usr/local/opt/postgresql* -name postgres -type f 2>/dev/null | head -1 || echo ""');
-        if (postgresPath.trim()) {
+      // Fallback: check if postgresql service exists via systemctl or dpkg/rpm
+      if (!hasServer) {
+        try {
+          await execAsync('systemctl list-unit-files postgresql*.service 2>/dev/null | grep -q postgresql');
           hasServer = true;
-          logger.info(`PostgreSQL server binary found at: ${postgresPath.trim()}`);
+          method = 'system';
+          logger.info('PostgreSQL server detected via systemctl service');
+        } catch {
+          // Ignore
+        }
+      }
+      if (!hasServer) {
+        try {
+          await execAsync('dpkg -l postgresql 2>/dev/null | grep -q "^ii" || rpm -q postgresql-server 2>/dev/null');
+          hasServer = true;
+          method = 'system';
+          logger.info('PostgreSQL server detected via package manager');
+        } catch {
+          // Ignore
+        }
+      }
+    } else {
+      // macOS: check via Homebrew
+      try {
+        const brewPath = await findBrewPath();
+        if (brewPath) {
+          const { stdout: brewList } = await execAsync(`"${brewPath}" list 2>/dev/null | grep "^postgresql@" || echo ""`);
+          if (brewList.trim()) {
+            method = 'brew';
+            hasServer = true;
+            logger.info(`PostgreSQL server found via Homebrew: ${brewList.trim()}`);
+          } else {
+            // Vérifier si seulement libpq est installé
+            const { stdout: libpqCheck } = await execAsync(`"${brewPath}" list 2>/dev/null | grep "^libpq" || echo ""`);
+            if (libpqCheck.trim()) {
+              method = 'brew';
+              hasServer = false;
+              logger.warn(`Only libpq (client) found via Homebrew, not PostgreSQL server: ${libpqCheck.trim()}`);
+            }
+          }
         }
       } catch {
         // Ignore
+      }
+
+      // Vérifier si le serveur postgres existe dans les chemins Homebrew
+      if (!hasServer && method === 'brew') {
+        try {
+          const { stdout: postgresPath } = await execAsync('find /opt/homebrew/opt/postgresql* /usr/local/opt/postgresql* -name postgres -type f 2>/dev/null | head -1 || echo ""');
+          if (postgresPath.trim()) {
+            hasServer = true;
+            logger.info(`PostgreSQL server binary found at: ${postgresPath.trim()}`);
+          }
+        } catch {
+          // Ignore
+        }
       }
     }
 
