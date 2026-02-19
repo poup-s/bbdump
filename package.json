@@ -1,6 +1,6 @@
 {
   "name": "bbdump",
-  "version": "1.0.11",
+  "version": "1.0.13",
   "description": "Cross-platform PostgreSQL manager with automated scheduling, encryption, and modern UI",
   "main": "dist/main/main.js",
   "scripts": {
