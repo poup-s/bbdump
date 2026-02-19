@@ -45,7 +45,7 @@ export function registerConnectionTools(server: McpServer) {
     'use_connection',
     'Switch the active database connection to one configured in bbdump. All subsequent tool calls will use this connection. The password is decrypted from bbdump config automatically.',
     {
-      name: z.string().describe('The connection name as shown in list_connections'),
+      name: z.string().describe('The connection name, displayName, or id as shown in list_connections. Use id to disambiguate when multiple databases share the same name.'),
     },
     async ({ name }) => {
       if (!isBbdumpConfigured()) {

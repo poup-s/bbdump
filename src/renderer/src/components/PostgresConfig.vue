@@ -197,9 +197,10 @@ const addDatabaseToConfig = async (connectionInfo: any) => {
     store.databases = config.databases;
     await loadConfig();
 
-    store.newlyAddedDbName = connectionInfo.database;
+    const addedDb = store.databases.find(d => d.name === connectionInfo.database && d.host === connectionInfo.host && d.port === connectionInfo.port);
+    store.newlyAddedDbId = addedDb?.id || null;
     setTimeout(() => {
-      store.newlyAddedDbName = null;
+      store.newlyAddedDbId = null;
     }, 2000);
 
     store.activeTab = 'databases';
@@ -278,6 +279,8 @@ const isSystemDatabase = (dbName: string) => {
 };
 
 const disconnectDatabase = async (dbName: string) => {
+  const dbToRemove = store.databases.find(d => d.name === dbName && d.isLocalBbdump);
+  if (!dbToRemove) return;
   showConfirm({
     title: t('postgresConfig.removeFromListTitle'),
     message: t('postgresConfig.removeFromListMessage', { name: dbName }),
@@ -285,7 +288,7 @@ const disconnectDatabase = async (dbName: string) => {
     type: 'warning',
     onConfirm: async () => {
       try {
-        await ipcRenderer.invoke('remove-database', dbName);
+        await ipcRenderer.invoke('remove-database', dbToRemove.id);
         const config = await ipcRenderer.invoke('get-config');
         store.databases = config.databases;
         addToast(

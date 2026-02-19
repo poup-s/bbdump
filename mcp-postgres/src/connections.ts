@@ -4,6 +4,7 @@ import * as fs from 'fs';
 const ALGORITHM = 'aes-256-gcm';
 
 interface BbdumpDatabaseConfig {
+  id: string;
   name: string;
   displayName?: string;
   host: string;
@@ -20,6 +21,7 @@ interface BbdumpConfig {
 }
 
 export interface ConnectionInfo {
+  id: string;
   name: string;
   displayName?: string;
   host: string;
@@ -91,6 +93,7 @@ export function listConnections(): ConnectionInfo[] | null {
   if (!bbdumpConfig) return null;
 
   return bbdumpConfig.databases.map((db) => ({
+    id: db.id,
     name: db.name,
     displayName: db.displayName,
     host: db.host,
@@ -101,11 +104,13 @@ export function listConnections(): ConnectionInfo[] | null {
   }));
 }
 
-export function getConnectionParams(name: string): ConnectionParams | null {
+export function getConnectionParams(identifier: string): ConnectionParams | null {
   const bbdumpConfig = loadBbdumpConfig();
   if (!bbdumpConfig) return null;
 
-  const db = bbdumpConfig.databases.find((d) => d.name === name || d.displayName === name);
+  // Try matching by id first, then by name or displayName
+  const db = bbdumpConfig.databases.find((d) => d.id === identifier)
+          || bbdumpConfig.databases.find((d) => d.name === identifier || d.displayName === identifier);
   if (!db) return null;
 
   let password = db.password;

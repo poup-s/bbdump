@@ -94,14 +94,14 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
     });
 
     // Backup & Restore Handlers
-    ipcMain.handle('backup-now', async (_, name: string) => {
+    ipcMain.handle('backup-now', async (_, id: string) => {
         try {
             const config = getConfig();
-            const db = config.databases.find(d => d.name === name);
+            const db = config.databases.find(d => d.id === id);
             if (!db) {
-                const error = `Database not found: ${name}`;
+                const error = `Database not found: ${id}`;
                 logger.error(error);
-                return { success: false, database: name, timestamp: new Date().toISOString(), error };
+                return { success: false, database: id, timestamp: new Date().toISOString(), error };
             }
 
             let decryptedDb = { ...db };
@@ -112,27 +112,27 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
             } catch (error) {
                 const msg = `Failed to decrypt password for ${db.name}: ${error}`;
                 logger.error(msg);
-                return { success: false, database: name, timestamp: new Date().toISOString(), error: msg };
+                return { success: false, database: db.name, timestamp: new Date().toISOString(), error: msg };
             }
 
-            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('backup-started', name);
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('backup-started', id);
 
             const result = await backupManager.backupDatabase(decryptedDb);
 
             if (result.success) {
-                const dbIndex = config.databases.findIndex(d => d.name === name);
+                const dbIndex = config.databases.findIndex(d => d.id === id);
                 if (dbIndex !== -1) {
                     config.databases[dbIndex].lastBackup = result.timestamp;
                     saveConfig(config);
                 }
             }
 
-            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('backup-complete', result);
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('backup-complete', { ...result, databaseId: id });
             return result;
         } catch (error) {
-            const msg = `Unexpected error during backup of ${name}: ${error}`;
+            const msg = `Unexpected error during backup of ${id}: ${error}`;
             logger.error(msg);
-            return { success: false, database: name, timestamp: new Date().toISOString(), error: msg };
+            return { success: false, database: id, timestamp: new Date().toISOString(), error: msg };
         }
     });
 
@@ -160,6 +160,7 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
                 return { backups: [], stats: { total: 0, totalSize: 0 } };
             }
 
+            const config = getConfig();
             const files = fs.readdirSync(backupDir);
             const backups = files
                 .filter(file => file.endsWith('.backup'))
@@ -170,11 +171,16 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
 
                     const fileNameWithoutExt = file.replace('.backup', '');
                     const parts = fileNameWithoutExt.split('_');
-                    const database = parts[0] || 'unknown';
+                    const prefix = parts[0] || 'unknown';
+
+                    // Try to match by id first, then by name (backwards compatibility)
+                    const matchedDb = config.databases.find(d => d.id === prefix) ||
+                                     config.databases.find(d => d.name === prefix);
+                    const databaseId = matchedDb ? matchedDb.id : prefix;
 
                     return {
                         filename: file,
-                        database: database,
+                        databaseId: databaseId,
                         name: file,
                         path: path.relative(pathManager.appDataPath, filePath),
                         size: stats.size,

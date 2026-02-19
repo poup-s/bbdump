@@ -12,13 +12,14 @@ import { DatabaseConfig } from '../../types/config';
 
 // Define explicit types for database objects to avoid TS errors
 interface DatabaseInfo {
+    id?: string;
     name: string;
     displayName?: string;
     host: string;
     port: number;
     user: string;
     password?: string;
-    encrypted?: boolean; // Add optional encrypted property
+    encrypted?: boolean;
 }
 
 export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | null) {
@@ -100,15 +101,15 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
         try {
             const config = getConfig();
 
-            const sourceDbName = params.sourceDb?.name;
-            if (!sourceDbName) {
-                throw new Error('Source database name is required');
+            const sourceDbId = params.sourceDb?.id;
+            if (!sourceDbId) {
+                throw new Error('Source database id is required');
             }
 
-            const sourceDb = config.databases.find(d => d.name === sourceDbName);
+            const sourceDb = config.databases.find(d => d.id === sourceDbId);
 
             if (!sourceDb) {
-                throw new Error(`Source database not found: ${sourceDbName}`);
+                throw new Error(`Source database not found: ${sourceDbId}`);
             }
 
             // 1. Decrypt password if needed
@@ -138,7 +139,7 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
 
             // Update source DB last backup time
             if (backupResult.timestamp) {
-                const sourceIndex = config.databases.findIndex(d => d.name === sourceDbName);
+                const sourceIndex = config.databases.findIndex(d => d.id === sourceDbId);
                 if (sourceIndex !== -1) {
                     config.databases[sourceIndex].lastBackup = backupResult.timestamp;
                     saveConfig(config);
@@ -147,10 +148,10 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
 
             sendProgress('backup', 'Backup created successfully', 30);
 
-            // Find the created backup file
+            // Find the created backup file (try id prefix first, then name for backwards compat)
             const backupDir = sourceDbConfig.output || config.defaultBackupPath || pathManager.backupsPath;
             const backupFiles = fs.readdirSync(backupDir)
-                .filter(f => f.startsWith(`${sourceDbConfig.name}_`) && f.endsWith('.backup'))
+                .filter(f => (f.startsWith(`${sourceDbConfig.id}_`) || f.startsWith(`${sourceDbConfig.name}_`)) && f.endsWith('.backup'))
                 .map(f => ({
                     name: f,
                     path: path.join(backupDir, f),

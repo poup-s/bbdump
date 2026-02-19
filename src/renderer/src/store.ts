@@ -36,11 +36,11 @@ export const store = reactive({
     extensionsModalDb: null as Database | null,
     backupProgress: null as {
         status: string;
-        dbName: string;
+        dbId: string;
         logs: string[];
         error: string | null;
     } | null,
-    newlyAddedDbName: null as string | null,
+    newlyAddedDbId: null as string | null,
     onboardingCompleted: false,
     language: 'en' as 'en' | 'fr',
     activeTab: 'dashboard' as string,

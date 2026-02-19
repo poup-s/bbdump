@@ -1,4 +1,5 @@
 export interface Database {
+    id: string;
     name: string;
     displayName?: string;
     host: string;
@@ -15,11 +16,12 @@ export interface Database {
     lastBackup?: string;
     _originalPassword?: string; // For UI logic
     isLocalBbdump?: boolean; // True if created by bbdump
+    masked?: boolean; // True if name should be hidden in UI
 }
 
 export interface Backup {
     filename: string;
-    database: string;
+    databaseId: string;
     path: string;
     size: number;
     created: string;
@@ -34,7 +36,7 @@ export interface Log {
 }
 
 export interface ScheduledTask {
-    database: string;
+    databaseId: string;
     schedule: string;
 }
 
@@ -76,6 +78,7 @@ export interface TableRelation {
  */
 export function buildDbConfig(db: Database) {
     return {
+        id: db.id,
         name: db.name,
         host: db.host,
         port: db.port,

@@ -17,6 +17,7 @@ const connectionMode = ref<'manual' | 'url' | null>(null);
 const connectionUrl = ref('');
 
 const form = ref<Database>({
+  id: '',
   name: '',
   displayName: '',
   host: 'localhost',
@@ -74,6 +75,7 @@ watch(() => store.showDatabaseModal, async (show) => {
       }
 
       form.value = {
+        id: '',
         name: '',
         displayName: '',
         host: 'localhost',
@@ -200,6 +202,7 @@ const save = async () => {
   isLoading.value = true;
   try {
     const dbData: Database = {
+      id: form.value.id,
       name: form.value.name,
       displayName: form.value.displayName,
       host: form.value.host,
@@ -215,15 +218,19 @@ const save = async () => {
     };
 
     if (isEditing.value) {
-      await ipcRenderer.invoke('update-database', store.editingDatabase!.name, dbData);
+      await ipcRenderer.invoke('update-database', store.editingDatabase!.id, dbData);
       addToast(t('toasts.databaseUpdated'), 'success');
     } else {
       await ipcRenderer.invoke('add-database', dbData);
       addToast(t('toasts.databaseAdded'), 'success');
-      store.newlyAddedDbName = dbData.name;
-      setTimeout(() => {
-        store.newlyAddedDbName = null;
-      }, 2000);
+      // After refresh, find the newly added DB by name to highlight it
+      const config = await ipcRenderer.invoke('get-config');
+      store.databases = config.databases;
+      const newDb = store.databases.find((d: any) => d.name === dbData.name && !d.id || d.name === dbData.name);
+      if (newDb) {
+        store.newlyAddedDbId = newDb.id;
+        setTimeout(() => { store.newlyAddedDbId = null; }, 2000);
+      }
     }
     
     const config = await ipcRenderer.invoke('get-config');

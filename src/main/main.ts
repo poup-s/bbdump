@@ -81,9 +81,9 @@ function createWindow(): void {
   cronManager.setMainWindow(mainWindow);
 
   // Configurer le callback pour mettre à jour lastBackup
-  cronManager.setBackupCompleteCallback((dbName: string, timestamp: string) => {
+  cronManager.setBackupCompleteCallback((dbId: string, timestamp: string) => {
     const config = getConfig();
-    const db = config.databases.find(d => d.name === dbName);
+    const db = config.databases.find(d => d.id === dbId);
     if (db) {
       db.lastBackup = timestamp;
       saveConfig(config);
@@ -198,17 +198,17 @@ function createTray(): void {
   });
 
   // IPC: open db viewer from tray popup
-  ipcMain.on('tray-open-dbviewer', (_, dbName: string) => {
+  ipcMain.on('tray-open-dbviewer', (_, dbId: string) => {
     trayPopup?.hide();
     showWindow();
-    mainWindow?.webContents.send('open-dbviewer', dbName);
+    mainWindow?.webContents.send('open-dbviewer', dbId);
   });
 
   // IPC: edit database from tray popup
-  ipcMain.on('tray-edit-db', (_, dbName: string) => {
+  ipcMain.on('tray-edit-db', (_, dbId: string) => {
     trayPopup?.hide();
     showWindow();
-    mainWindow?.webContents.send('edit-db', dbName);
+    mainWindow?.webContents.send('edit-db', dbId);
   });
 }
 

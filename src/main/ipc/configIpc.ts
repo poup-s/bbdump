@@ -6,6 +6,7 @@ import { cronManager } from '../cron';
 import { logger } from '../logger';
 import { pathManager } from '../paths';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 
 // Variable locale pour stocker la configuration en mémoire
 let config: AppConfig = { databases: [] };
@@ -21,12 +22,23 @@ export function loadConfig(): AppConfig {
             // Migrer les mots de passe non chiffrés
             loadedConfig = encryptionManager.migrateConfig(loadedConfig);
 
+            // Migrate: assign UUID to databases missing an id
+            let uuidMigrated = false;
+            if (Array.isArray(loadedConfig.databases)) {
+                for (const db of loadedConfig.databases) {
+                    if (!db.id) {
+                        db.id = crypto.randomUUID();
+                        uuidMigrated = true;
+                    }
+                }
+            }
+
             // Sanitize the entire configuration
             loadedConfig = sanitizeAppConfig(loadedConfig);
 
             // Sauvegarder si migration effectuée
             const originalData = JSON.parse(data);
-            const needsSave = JSON.stringify(loadedConfig) !== JSON.stringify(originalData);
+            const needsSave = uuidMigrated || JSON.stringify(loadedConfig) !== JSON.stringify(originalData);
             if (needsSave) {
                 saveConfig(loadedConfig);
             }
@@ -131,7 +143,10 @@ export function registerConfigHandlers() {
     // Database management handlers that modify config
     ipcMain.handle('add-database', async (_, db: DatabaseConfig): Promise<AppConfig> => {
         const shouldEncrypt = db.encrypted !== false;
-        const sanitizedDb = sanitizeDatabaseConfig(db);
+        const sanitizedDb = sanitizeDatabaseConfig({
+            ...db,
+            id: db.id || crypto.randomUUID(),
+        });
 
         const passwordValue = db.password || '';
         const dbToSave = {
@@ -150,8 +165,8 @@ export function registerConfigHandlers() {
         return config;
     });
 
-    ipcMain.handle('update-database', async (_, name: string, updatedDb: DatabaseConfig): Promise<AppConfig> => {
-        const index = config.databases.findIndex(db => db.name === name);
+    ipcMain.handle('update-database', async (_, id: string, updatedDb: DatabaseConfig): Promise<AppConfig> => {
+        const index = config.databases.findIndex(db => db.id === id);
         if (index !== -1) {
             const existingDb = config.databases[index];
             const shouldEncrypt = updatedDb.encrypted !== false;
@@ -169,6 +184,7 @@ export function registerConfigHandlers() {
 
             const dbToSave = sanitizeDatabaseConfig({
                 ...updatedDb,
+                id: existingDb.id,
                 encrypted: shouldEncrypt,
                 password: passwordToSave,
                 isLocalBbdump: existingDb.isLocalBbdump
@@ -193,18 +209,18 @@ export function registerConfigHandlers() {
         return config;
     });
 
-    ipcMain.handle('remove-database', async (_, name: string): Promise<AppConfig> => {
-        config.databases = config.databases.filter(db => db.name !== name);
+    ipcMain.handle('remove-database', async (_, id: string): Promise<AppConfig> => {
+        config.databases = config.databases.filter(db => db.id !== id);
         saveConfig(config);
-        cronManager.cancelBackup(name);
+        cronManager.cancelBackup(id);
         return config;
     });
 
-    ipcMain.handle('toggle-schedule', async (_, name: string, enabled: boolean): Promise<AppConfig> => {
-        const db = config.databases.find(d => d.name === name);
+    ipcMain.handle('toggle-schedule', async (_, id: string, enabled: boolean): Promise<AppConfig> => {
+        const db = config.databases.find(d => d.id === id);
         if (db) {
             db.enabled = enabled;
-            const index = config.databases.findIndex(d => d.name === name);
+            const index = config.databases.findIndex(d => d.id === id);
             if (index !== -1) {
                 config.databases[index] = sanitizeDatabaseConfig(db);
             }
@@ -222,6 +238,19 @@ export function registerConfigHandlers() {
                 }
             });
             cronManager.rescheduleAll(decryptedDatabases);
+        }
+        return config;
+    });
+
+    ipcMain.handle('toggle-mask', async (_, id: string, masked: boolean): Promise<AppConfig> => {
+        const db = config.databases.find(d => d.id === id);
+        if (db) {
+            db.masked = masked;
+            const index = config.databases.findIndex(d => d.id === id);
+            if (index !== -1) {
+                config.databases[index] = sanitizeDatabaseConfig(db);
+            }
+            saveConfig(config);
         }
         return config;
     });

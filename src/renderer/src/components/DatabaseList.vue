@@ -77,12 +77,15 @@ const onDuplicateSuccess = async (newDbName: string) => {
     // Refresh config
     const config = await ipcRenderer.invoke('get-config');
     store.databases = config.databases;
-    
-    // Highlight new DB
-    store.newlyAddedDbName = newDbName;
-    setTimeout(() => {
-    store.newlyAddedDbName = null;
-    }, 2000);
+
+    // Find the newly added DB by name to get its id
+    const newDb = store.databases.find((d: any) => d.name === newDbName);
+    if (newDb) {
+      store.newlyAddedDbId = newDb.id;
+      setTimeout(() => {
+        store.newlyAddedDbId = null;
+      }, 2000);
+    }
 }
 
 const importAllHidden = async () => {
@@ -157,7 +160,7 @@ const deleteDatabase = (db: Database) => {
             }
           }
           
-          await ipcRenderer.invoke('remove-database', db.name);
+          await ipcRenderer.invoke('remove-database', db.id);
           const config = await ipcRenderer.invoke('get-config');
           store.databases = config.databases;
           addToast(isLocal ? t('toasts.dbDeleted') : t('toasts.connectionDeleted'), 'success');
@@ -171,7 +174,7 @@ const deleteDatabase = (db: Database) => {
 const backupNow = async (db: Database) => {
   try {
     store.isBackingUp = true;
-    await ipcRenderer.invoke('backup-now', db.name);
+    await ipcRenderer.invoke('backup-now', db.id);
   } catch (error: any) {
     store.isBackingUp = false;
     addToast('Error starting backup: ' + error.message, 'error');
@@ -211,11 +214,11 @@ const disconnectDatabase = async (db: Database) => {
     type: 'warning',
     onConfirm: async () => {
       try {
-        await ipcRenderer.invoke('remove-database', db.name);
+        await ipcRenderer.invoke('remove-database', db.id);
         const config = await ipcRenderer.invoke('get-config');
         store.databases = config.databases;
         addToast(
-          t('databases.databaseRemovedFromList', { name: db.name }), 
+          t('databases.databaseRemovedFromList', { name: db.name }),
           'success'
         );
       } catch (error: any) {
@@ -229,6 +232,16 @@ const scrollToExternal = () => {
   const externalSection = document.querySelector('[data-external-connections]');
   if (externalSection) {
     externalSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+};
+
+const toggleMask = async (db: Database) => {
+  try {
+    await ipcRenderer.invoke('toggle-mask', db.id, !db.masked);
+    const config = await ipcRenderer.invoke('get-config');
+    store.databases = config.databases;
+  } catch (error: any) {
+    addToast('Error toggling mask: ' + error.message, 'error');
   }
 };
 
@@ -336,8 +349,8 @@ const openExtensions = (db: Database) => {
                   <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                   <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-                <svg v-else class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L6.59 6.59m7.532 7.532l3.29 3.29M3 3l18 18" />
+                <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                  <path fill-rule="evenodd" d="m18.922 16.8l3.17 3.17l-1.06 1.061L4.06 4.061L5.12 3l2.74 2.738A11.9 11.9 0 0 1 12 5c4.808 0 8.972 2.848 11 7a12.66 12.66 0 0 1-4.078 4.8m-8.098-8.097l4.473 4.473a3.5 3.5 0 0 0-4.474-4.474zm5.317 9.56A11.9 11.9 0 0 1 12 19c-4.808 0-8.972-2.848-11-7a12.66 12.66 0 0 1 4.078-4.8l3.625 3.624a3.5 3.5 0 0 0 4.474 4.474l2.964 2.964z" />
                 </svg>
                 {{ hiddenDatabasesCount }} {{ t('databases.hiddenDatabases') }}
               </button>
@@ -347,7 +360,7 @@ const openExtensions = (db: Database) => {
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           <DatabaseCard 
             v-for="db in store.databases.filter(db => db.isLocalBbdump)"
-            :key="db.name"
+            :key="db.id"
             :db="db"
             @backup="backupNow"
             @view="openViewer"
@@ -357,6 +370,7 @@ const openExtensions = (db: Database) => {
             @disconnect="disconnectDatabase"
             @copy-url="copyConnectionUrl"
             @addons="openExtensions"
+            @toggle-mask="toggleMask"
           />
         </div>
       </div>
@@ -377,7 +391,7 @@ const openExtensions = (db: Database) => {
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           <DatabaseCard 
             v-for="db in store.databases.filter(db => !db.isLocalBbdump)"
-            :key="db.name"
+            :key="db.id"
             :db="db"
             @backup="backupNow"
             @view="openViewer"
@@ -387,6 +401,7 @@ const openExtensions = (db: Database) => {
             @disconnect="disconnectDatabase"
             @copy-url="copyConnectionUrl"
             @addons="openExtensions"
+            @toggle-mask="toggleMask"
           />
         </div>
       </div>

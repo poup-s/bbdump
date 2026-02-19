@@ -106,9 +106,8 @@ const setupListeners = () => {
   ipcRenderer.on('backup-complete', (_: any, result: any) => {
     store.isBackingUp = false;
     if (result.success) {
-      addToast(t('backup.success', { db: result.database }), 'success');
-      // Update last backup time in store
-      const db = store.databases.find(d => d.name === result.database);
+      const db = store.databases.find(d => d.id === result.databaseId);
+      addToast(t('backup.success', { db: db?.name || result.database }), 'success');
       if (db) db.lastBackup = result.timestamp;
     } else {
       addToast(t('backup.error', { db: result.database, error: result.error }), 'error');
@@ -120,22 +119,23 @@ const setupListeners = () => {
     store.backupProgress = data;
   });
 
-  ipcRenderer.on('backup-started', (_: any, dbName: string) => {
+  ipcRenderer.on('backup-started', (_: any, dbId: string) => {
     store.isBackingUp = true;
-    store.backupProgress = { status: 'starting', dbName, logs: [], error: null };
-    addToast(t('backup.started', { db: dbName }), 'info');
+    const db = store.databases.find(d => d.id === dbId);
+    store.backupProgress = { status: 'starting', dbId, logs: [], error: null };
+    addToast(t('backup.started', { db: db?.name || dbId }), 'info');
   });
 
-  ipcRenderer.on('open-dbviewer', (_: any, dbName: string) => {
-    const db = store.databases.find(d => d.name === dbName);
+  ipcRenderer.on('open-dbviewer', (_: any, dbId: string) => {
+    const db = store.databases.find(d => d.id === dbId);
     if (db) {
       store.viewerDb = db;
       store.showDbViewer = true;
     }
   });
 
-  ipcRenderer.on('edit-db', (_: any, dbName: string) => {
-    const db = store.databases.find(d => d.name === dbName);
+  ipcRenderer.on('edit-db', (_: any, dbId: string) => {
+    const db = store.databases.find(d => d.id === dbId);
     if (db) {
       store.editingDb = db;
       store.showEditModal = true;

@@ -6,6 +6,7 @@ import { useI18n } from '../composables/useI18n';
 const { t, setLanguage } = useI18n();
 
 interface TrayDatabase {
+  id: string;
   name: string;
   displayName?: string;
   host: string;
@@ -13,6 +14,7 @@ interface TrayDatabase {
   lastBackup?: string;
   status?: 'success' | 'error' | 'running' | 'idle';
   cron?: string;
+  masked?: boolean;
 }
 
 interface TrayBackupStats {
@@ -109,13 +111,15 @@ const loadData = async () => {
     const config = await ipcRenderer.invoke('get-config');
     if (config?.language) setLanguage(config.language);
     databases.value = (config?.databases || []).map((db: any) => ({
+      id: db.id,
       name: db.name,
       displayName: db.displayName,
       host: db.host,
       enabled: db.enabled,
       lastBackup: db.lastBackup,
       status: db.status || 'idle',
-      cron: db.cron
+      cron: db.cron,
+      masked: db.masked
     }));
 
     const backupsResult = await ipcRenderer.invoke('get-backups');
@@ -129,8 +133,8 @@ const loadData = async () => {
   }
 };
 
-const openDbViewer = (dbName: string) => {
-  ipcRenderer.send('tray-open-dbviewer', dbName);
+const openDbViewer = (dbId: string) => {
+  ipcRenderer.send('tray-open-dbviewer', dbId);
 };
 
 const openApp = () => {
@@ -310,7 +314,7 @@ onUnmounted(() => {
           </div>
           <div
             v-for="db in databases"
-            :key="db.name"
+            :key="db.id"
             class="px-4 py-2.5 flex items-center gap-3 hover:bg-zinc-800/50 transition-colors border-b border-zinc-800/50 last:border-b-0"
           >
             <!-- Status dot -->
@@ -320,12 +324,12 @@ onUnmounted(() => {
 
             <!-- Info -->
             <div class="flex-1 min-w-0">
-              <div class="text-[12px] font-semibold text-white truncate">{{ db.displayName || db.name }}</div>
+              <div class="text-[12px] font-semibold text-white truncate">{{ db.masked ? '••••••••' : (db.displayName || db.name) }}</div>
             </div>
 
             <!-- DB Viewer button -->
             <button
-              @click.stop="openDbViewer(db.name)"
+              @click.stop="openDbViewer(db.id)"
               class="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center transition-all bg-zinc-800 text-zinc-400 hover:bg-violet-500/20 hover:text-violet-400"
               :title="t('tray.viewDb')"
             >

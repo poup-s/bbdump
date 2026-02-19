@@ -18,7 +18,7 @@ let countdownInterval: NodeJS.Timeout | null = null;
 // Auto-select first database if available
 const databases = computed(() => store.databases || []);
 if (databases.value.length > 0 && !selectedDb.value) {
-  selectedDb.value = databases.value[0].name;
+  selectedDb.value = databases.value[0].id;
 }
 
 const newDbNameExists = computed(() => {
@@ -45,7 +45,7 @@ watch(() => store.showRestoreModal, (show) => {
     newDbName.value = '';
     newDbPort.value = 5432;
     if (databases.value.length > 0) {
-      selectedDb.value = databases.value[0].name;
+      selectedDb.value = databases.value[0].id;
     }
     startCountdown();
   } else {
@@ -95,7 +95,7 @@ const proceedToConfirm = () => {
       return;
     }
 
-    const db = databases.value.find(db => db.name === selectedDb.value);
+    const db = databases.value.find(db => db.id === selectedDb.value);
     if (!db) {
       addToast('Please select a target database', 'error');
       return;
@@ -225,7 +225,7 @@ const close = () => {
                   v-model="selectedDb"
                   class="w-full px-3 py-2 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
                 >
-                  <option v-for="db in databases" :key="db.name" :value="db.name">
+                  <option v-for="db in databases" :key="db.id" :value="db.id">
                     {{ db.displayName || db.name }} ({{ db.host }}:{{ db.port }})
                   </option>
                 </select>

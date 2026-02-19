@@ -9,16 +9,16 @@ export async function closeAllPools() {
     await dbViewer.closeAllPools();
 }
 
-// Helper to get db config from the shared config state
-const getDbConfig = (dbName: string) => {
+// Helper to get db config from the shared config state (lookup by id)
+const getDbConfig = (dbId: string) => {
     const config = getConfig();
     if (!config || !config.databases || !Array.isArray(config.databases)) {
         throw new Error(`Configuration not loaded or databases array is missing`);
     }
 
-    const db = config.databases.find(d => d.name === dbName);
+    const db = config.databases.find(d => d.id === dbId);
     if (!db) {
-        throw new Error(`Database "${dbName}" not found in configuration`);
+        throw new Error(`Database with id "${dbId}" not found in configuration`);
     }
 
     let password = db.password;
@@ -27,8 +27,8 @@ const getDbConfig = (dbName: string) => {
             password = encryptionManager.decrypt(db.password);
         }
     } catch (error) {
-        logger.error(`Failed to decrypt password for ${dbName}: ${error}`);
-        throw new Error(`Failed to decrypt password for ${dbName}`);
+        logger.error(`Failed to decrypt password for ${db.name}: ${error}`);
+        throw new Error(`Failed to decrypt password for ${db.name}`);
     }
 
     return {
@@ -55,10 +55,10 @@ export function registerDbViewerHandlers() {
     });
 
     // Alias for compatibility with frontend usage via store.viewerDb
-    ipcMain.handle('get-db-tables', async (_, params: { db: { name: string } }) => {
+    ipcMain.handle('get-db-tables', async (_, params: { db: { id: string } }) => {
         try {
-            logger.info(`Getting tables for database: ${params.db.name}`);
-            const dbConfig = getDbConfig(params.db.name);
+            logger.info(`Getting tables for database: ${params.db.id}`);
+            const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.getDatabaseTables(dbConfig);
         } catch (error: any) {
             logger.error(`Error getting database tables: ${error.message || error}`);
@@ -66,10 +66,10 @@ export function registerDbViewerHandlers() {
         }
     });
 
-    ipcMain.handle('get-db-full-schema', async (_, params: { db: { name: string } }) => {
+    ipcMain.handle('get-db-full-schema', async (_, params: { db: { id: string } }) => {
         try {
-            logger.info(`Getting full schema for database: ${params.db.name}`);
-            const dbConfig = getDbConfig(params.db.name);
+            logger.info(`Getting full schema for database: ${params.db.id}`);
+            const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.getDatabaseFullSchema(dbConfig);
         } catch (error: any) {
             logger.error(`Error getting database full schema: ${error.message || error}`);
@@ -77,10 +77,10 @@ export function registerDbViewerHandlers() {
         }
     });
 
-    ipcMain.handle('get-table-schema', async (_, params: { db: { name: string }, table: string }) => {
+    ipcMain.handle('get-table-schema', async (_, params: { db: { id: string }, table: string }) => {
         try {
             logger.info(`Getting schema for table: ${params.table}`);
-            const dbConfig = getDbConfig(params.db.name);
+            const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.getTableSchema({ ...dbConfig, table: params.table });
         } catch (error) {
             logger.error(`Error getting table schema: ${error}`);
@@ -88,10 +88,10 @@ export function registerDbViewerHandlers() {
         }
     });
 
-    ipcMain.handle('get-table-relations', async (_, params: { db: { name: string }, table: string }) => {
+    ipcMain.handle('get-table-relations', async (_, params: { db: { id: string }, table: string }) => {
         try {
             logger.info(`Getting relations for table: ${params.table}`);
-            const dbConfig = getDbConfig(params.db.name);
+            const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.getTableRelations({ ...dbConfig, table: params.table });
         } catch (error) {
             logger.error(`Error getting table relations: ${error}`);
@@ -99,13 +99,13 @@ export function registerDbViewerHandlers() {
         }
     });
 
-    ipcMain.handle('get-table-data', async (_, params: { db: { name: string }, table: string, limit?: number, page?: number, pageSize?: number, search?: string, sortBy?: string, sortOrder?: 'asc' | 'desc' }) => {
+    ipcMain.handle('get-table-data', async (_, params: { db: { id: string }, table: string, limit?: number, page?: number, pageSize?: number, search?: string, sortBy?: string, sortOrder?: 'asc' | 'desc' }) => {
         try {
             const limit = params.limit || params.pageSize || 50;
             const offset = params.page ? (params.page - 1) * limit : 0;
 
             logger.info(`Getting data for table: ${params.table} (limit: ${limit}, offset: ${offset}, search: ${params.search || ''}, sort: ${params.sortBy || ''} ${params.sortOrder || ''})`);
-            const dbConfig = getDbConfig(params.db.name);
+            const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.getTableData({
                 ...dbConfig,
                 table: params.table,
@@ -122,13 +122,13 @@ export function registerDbViewerHandlers() {
     });
 
     ipcMain.handle('get-fk-row', async (_, params: {
-        db: { name: string };
+        db: { id: string };
         table: string;
         column: string;
         value: any;
     }) => {
         try {
-            const dbConfig = getDbConfig(params.db.name);
+            const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.getFkRow({
                 ...dbConfig,
                 table: params.table,
@@ -142,13 +142,13 @@ export function registerDbViewerHandlers() {
     });
 
     ipcMain.handle('update-table-data', async (_, params: {
-        db: { name: string };
+        db: { id: string };
         table: string;
         changes: Array<any>;
     }) => {
         try {
             logger.info(`Updating table data: ${params.table} (${params.changes.length} changes)`);
-            const dbConfig = getDbConfig(params.db.name);
+            const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.updateTableData({
                 ...dbConfig,
                 table: params.table,
@@ -161,14 +161,14 @@ export function registerDbViewerHandlers() {
     });
 
     ipcMain.handle('delete-table-row', async (_, params: {
-        db: { name: string };
+        db: { id: string };
         table: string;
         rowId: any;
         primaryKeyColumn: string;
     }) => {
         try {
             logger.info(`Deleting row from table: ${params.table}`);
-            const dbConfig = getDbConfig(params.db.name);
+            const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.deleteTableRow({
                 ...dbConfig,
                 table: params.table,
@@ -182,13 +182,13 @@ export function registerDbViewerHandlers() {
     });
 
     ipcMain.handle('insert-table-row', async (_, params: {
-        db: { name: string };
+        db: { id: string };
         table: string;
         rowData: any;
     }) => {
         try {
             logger.info(`Inserting row into table: ${params.table}`);
-            const dbConfig = getDbConfig(params.db.name);
+            const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.insertTableRow({
                 ...dbConfig,
                 table: params.table,
@@ -201,12 +201,12 @@ export function registerDbViewerHandlers() {
     });
 
     ipcMain.handle('get-enum-values', async (_, params: {
-        db: { name: string };
+        db: { id: string };
         typeName: string;
     }) => {
         try {
             logger.info(`Getting enum values for type: ${params.typeName}`);
-            const dbConfig = getDbConfig(params.db.name);
+            const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.getEnumValues({
                 ...dbConfig,
                 typeName: params.typeName
@@ -218,14 +218,14 @@ export function registerDbViewerHandlers() {
     });
 
     ipcMain.handle('execute-sql', async (_, params: {
-        db: { name: string };
+        db: { id: string };
         sql: string;
         maxRows?: number;
         timeoutMs?: number;
     }) => {
         try {
-            logger.info(`Executing SQL query on ${params.db.name} (maxRows: ${params.maxRows || 500})`);
-            const dbConfig = getDbConfig(params.db.name);
+            logger.info(`Executing SQL query on ${params.db.id} (maxRows: ${params.maxRows || 500})`);
+            const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.executeQuery({
                 ...dbConfig,
                 sql: params.sql,
@@ -239,14 +239,14 @@ export function registerDbViewerHandlers() {
     });
 
     ipcMain.handle('execute-sql-mutation', async (_, params: {
-        db: { name: string };
+        db: { id: string };
         sql: string;
         maxRows?: number;
         timeoutMs?: number;
     }) => {
         try {
-            logger.info(`Executing SQL mutation on ${params.db.name}`);
-            const dbConfig = getDbConfig(params.db.name);
+            logger.info(`Executing SQL mutation on ${params.db.id}`);
+            const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.executeMutationQuery({
                 ...dbConfig,
                 sql: params.sql,

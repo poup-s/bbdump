@@ -49,6 +49,7 @@ const downloadUpdate = async () => {
 const installUpdate = () => {
   ipcRenderer.invoke('install-update');
 };
+
 </script>
 
 <template>

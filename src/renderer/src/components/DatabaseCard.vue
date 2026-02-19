@@ -19,6 +19,7 @@ const emit = defineEmits<{
   (e: 'delete', db: Database): void;
   (e: 'copy-url', db: Database): void;
   (e: 'addons', db: Database): void;
+  (e: 'toggle-mask', db: Database): void;
 }>();
 
 const { t } = useI18n();
@@ -95,12 +96,12 @@ const handleBackupClick = () => {
     </div>
 
     <!-- Animation Overlay (covers entire card) -->
-    <div v-if="store.newlyAddedDbName === db.name" class="absolute inset-0 z-50 rounded-2xl overflow-hidden pointer-events-none">
+    <div v-if="store.newlyAddedDbId === db.id" class="absolute inset-0 z-50 rounded-2xl overflow-hidden pointer-events-none">
       <NewDbAnimation />
     </div>
 
     <!-- Content -->
-    <div v-if="store.backupProgress?.dbName === db.name" class="h-32 mb-6 flex items-center justify-center mt-8">
+    <div v-if="store.backupProgress?.dbId === db.id" class="h-32 mb-6 flex items-center justify-center mt-8">
       <BackupAnimation />
     </div>
 
@@ -108,14 +109,29 @@ const handleBackupClick = () => {
       <div class="flex items-center gap-2 mb-1">
         <button
           @click="emit('copy-url', db)"
-          class="p-1 hover:bg-surface rounded transition-colors"
+          class="p-1 hover:bg-surface rounded transition-colors shrink-0"
           :title="t('databases.copyUrl')"
         >
           <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
           </svg>
         </button>
-        <h3 class="text-lg font-bold truncate">{{ db.displayName || db.name }}</h3>
+        <h3 class="text-lg font-bold truncate">{{ db.masked ? '••••••••' : (db.displayName || db.name) }}</h3>
+        <button
+          @click="emit('toggle-mask', db)"
+          class="p-1 rounded transition-colors shrink-0"
+          :class="db.masked ? 'text-purple-500 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/20' : 'text-gray-400 hover:text-gray-600 hover:bg-surface'"
+          :title="db.masked ? t('cardAction.unmask') : t('cardAction.mask')"
+        >
+          <!-- weui:eyes-off-filled -->
+          <svg v-if="db.masked" class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+            <path fill-rule="evenodd" d="m18.922 16.8l3.17 3.17l-1.06 1.061L4.06 4.061L5.12 3l2.74 2.738A11.9 11.9 0 0 1 12 5c4.808 0 8.972 2.848 11 7a12.66 12.66 0 0 1-4.078 4.8m-8.098-8.097l4.473 4.473a3.5 3.5 0 0 0-4.474-4.474zm5.317 9.56A11.9 11.9 0 0 1 12 19c-4.808 0-8.972-2.848-11-7a12.66 12.66 0 0 1 4.078-4.8l3.625 3.624a3.5 3.5 0 0 0 4.474 4.474l2.964 2.964z" />
+          </svg>
+          <!-- weui:eyes-on-filled -->
+          <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+            <path fill-rule="evenodd" d="M1 12c2.028-4.152 6.192-7 11-7s8.972 2.848 11 7c-2.028 4.152-6.192 7-11 7s-8.972-2.848-11-7m11 3.5a3.5 3.5 0 1 0 0-7a3.5 3.5 0 0 0 0 7" />
+          </svg>
+        </button>
       </div>
       <div class="mt-4 flex items-center gap-2 text-xs font-medium px-1.5 py-0.5 bg-surface rounded-full w-fit">
         <span class="text-gray-400">{{ t('databases.lastBackup') }}:</span>

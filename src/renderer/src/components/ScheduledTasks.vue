@@ -18,24 +18,29 @@ const loadScheduledTasks = async () => {
   }
 };
 
-const getDbLastBackup = (dbName: string) => {
-  const db = store.databases.find(d => d.name === dbName);
+const getDbLastBackup = (databaseId: string) => {
+  const db = store.databases.find(d => d.id === databaseId);
   return db ? db.lastBackup : null;
 };
 
-const getDbStatus = (dbName: string) => {
-  const db = store.databases.find(d => d.name === dbName);
+const getDbStatus = (databaseId: string) => {
+  const db = store.databases.find(d => d.id === databaseId);
   return db && db.enabled !== false;
 };
 
-const scheduledDbNames = computed(() => new Set(store.scheduledTasks.map(t => t.database)));
+const getDbDisplayName = (databaseId: string) => {
+  const db = store.databases.find(d => d.id === databaseId);
+  return db ? (db.displayName || db.name) : databaseId;
+};
+
+const scheduledDbIds = computed(() => new Set(store.scheduledTasks.map(t => t.databaseId)));
 
 const unscheduledDatabases = computed(() =>
-  store.databases.filter(db => !scheduledDbNames.value.has(db.name))
+  store.databases.filter(db => !scheduledDbIds.value.has(db.id))
 );
 
-const configureSchedule = (dbName: string) => {
-  const db = store.databases.find(d => d.name === dbName);
+const configureSchedule = (dbId: string) => {
+  const db = store.databases.find(d => d.id === dbId);
   if (db) {
     store.editingDatabase = JSON.parse(JSON.stringify(db));
     store.modalTargetSection = 'schedule';
@@ -44,8 +49,8 @@ const configureSchedule = (dbName: string) => {
   showAddMenu.value = false;
 };
 
-const editSchedule = (dbName: string) => {
-  const db = store.databases.find(d => d.name === dbName);
+const editSchedule = (databaseId: string) => {
+  const db = store.databases.find(d => d.id === databaseId);
   if (db) {
     store.editingDatabase = JSON.parse(JSON.stringify(db));
     store.modalTargetSection = 'schedule';
@@ -120,8 +125,8 @@ onMounted(() => {
                 </div>
                 <button
                   v-for="db in unscheduledDatabases"
-                  :key="db.name"
-                  @click="configureSchedule(db.name)"
+                  :key="db.id"
+                  @click="configureSchedule(db.id)"
                   class="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-zinc-700/50 transition-colors flex items-center gap-2"
                 >
                   <span class="w-1.5 h-1.5 rounded-full shrink-0" :class="db.isLocalBbdump ? 'bg-blue-500' : 'bg-gray-400'"></span>
@@ -178,34 +183,34 @@ onMounted(() => {
         <tbody class="divide-y divide-gray-100 dark:divide-zinc-800/50">
           <tr
             v-for="task in store.scheduledTasks"
-            :key="task.database"
+            :key="task.databaseId"
             class="hover:bg-gray-50 dark:hover:bg-zinc-800/30 transition-colors group"
           >
             <td class="px-4 py-2.5">
-              <span class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ task.database }}</span>
+              <span class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ getDbDisplayName(task.databaseId) }}</span>
             </td>
             <td class="px-4 py-2.5">
               <code class="text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded">{{ task.schedule }}</code>
             </td>
             <td class="px-4 py-2.5 text-xs text-gray-500 dark:text-gray-400">
-              {{ formatDate(getDbLastBackup(task.database) || '') || t('scheduled.never') }}
+              {{ formatDate(getDbLastBackup(task.databaseId) || '') || t('scheduled.never') }}
             </td>
             <td class="px-4 py-2.5 text-center">
               <span
                 :class="[
                   'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium',
-                  getDbStatus(task.database)
+                  getDbStatus(task.databaseId)
                     ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
                     : 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'
                 ]"
               >
-                <span class="w-1.5 h-1.5 rounded-full" :class="getDbStatus(task.database) ? 'bg-emerald-500' : 'bg-amber-500'"></span>
-                {{ getDbStatus(task.database) ? t('scheduled.active') : t('scheduled.paused') }}
+                <span class="w-1.5 h-1.5 rounded-full" :class="getDbStatus(task.databaseId) ? 'bg-emerald-500' : 'bg-amber-500'"></span>
+                {{ getDbStatus(task.databaseId) ? t('scheduled.active') : t('scheduled.paused') }}
               </span>
             </td>
             <td class="px-4 py-2.5">
               <button
-                @click="editSchedule(task.database)"
+                @click="editSchedule(task.databaseId)"
                 class="p-1 text-gray-300 dark:text-gray-600 hover:text-gray-500 dark:hover:text-gray-400 opacity-0 group-hover:opacity-100 transition-all rounded"
                 :title="t('scheduled.editSchedule')"
               >

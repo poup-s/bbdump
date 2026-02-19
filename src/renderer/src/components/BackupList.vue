@@ -18,7 +18,7 @@ const isDeleting = ref(false);
 
 const filteredBackups = computed(() => {
   if (selectedDb.value === 'all') return store.backups;
-  return store.backups.filter(b => b.database === selectedDb.value);
+  return store.backups.filter(b => b.databaseId === selectedDb.value);
 });
 
 const allSelected = computed(() =>
@@ -160,7 +160,7 @@ onMounted(() => {
             class="bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 text-gray-700 dark:text-gray-300 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500/30"
           >
             <option value="all">{{ t('common.allDatabases') }}</option>
-            <option v-for="db in store.databases" :key="db.name" :value="db.name">
+            <option v-for="db in store.databases" :key="db.id" :value="db.id">
               {{ db.displayName || db.name }}
             </option>
           </select>
@@ -265,7 +265,7 @@ onMounted(() => {
                 />
               </td>
               <td class="px-4 py-2.5">
-                <span class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ backup.database }}</span>
+                <span class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ store.databases.find(d => d.id === backup.databaseId)?.displayName || store.databases.find(d => d.id === backup.databaseId)?.name || backup.databaseId }}</span>
                 <span class="text-[10px] text-gray-400 font-mono ml-2">{{ backup.filename }}</span>
               </td>
               <td class="px-4 py-2.5 text-xs text-gray-500 dark:text-gray-400">

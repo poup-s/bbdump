@@ -105,6 +105,8 @@ export const translations = {
             view: 'View',
             duplicate: 'Duplicate',
             hide: 'Hide',
+            mask: 'Mask',
+            unmask: 'Unmask',
             edit: 'Edit',
             delete: 'Delete'
         },
@@ -1058,6 +1060,8 @@ export const translations = {
             view: 'Voir',
             duplicate: 'Dupliquer',
             hide: 'Masquer',
+            mask: 'Cacher',
+            unmask: 'Montrer',
             edit: 'Éditer',
             delete: 'Suppr.'
         },

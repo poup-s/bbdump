@@ -1,5 +1,5 @@
 import { autoUpdater, UpdateInfo as ElectronUpdateInfo } from 'electron-updater';
-import { BrowserWindow } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import { logger } from './logger';
 
 export interface UpdateInfo {
@@ -87,5 +87,8 @@ export async function downloadUpdate(): Promise<void> {
 }
 
 export function quitAndInstall(): void {
-  autoUpdater.quitAndInstall();
+  logger.info('Quitting and installing update...');
+  // On macOS, force the app to quit and relaunch after install
+  // isSilent=false (show installer), isForceRunAfter=true (relaunch app after install)
+  autoUpdater.quitAndInstall(false, true);
 }

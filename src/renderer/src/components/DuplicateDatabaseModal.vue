@@ -85,6 +85,7 @@ const duplicateToLocal = async () => {
     // Créer un objet simple sérialisable pour éviter les erreurs de clonage IPC
     const sourceDb = props.sourceDb;
     const sourceDbConfig: Partial<Database> = {
+      id: sourceDb.id,
       name: sourceDb.name,
       displayName: sourceDb.displayName,
       host: sourceDb.host,

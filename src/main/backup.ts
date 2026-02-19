@@ -1107,7 +1107,7 @@ export class BackupManager {
     let outputPath: string;
     if (!db.output || db.output.trim() === '') {
       // Utiliser le chemin par défaut des backups
-      outputPath = path.join(pathManager.backupsPath, `${db.name}.backup`);
+      outputPath = path.join(pathManager.backupsPath, `${db.id}.backup`);
     } else if (path.isAbsolute(db.output)) {
       // Si c'est un chemin absolu, vérifier s'il pointe vers un dossier ou un fichier
       if (db.output.endsWith('.backup') || db.output.includes('.')) {
@@ -1115,7 +1115,7 @@ export class BackupManager {
         outputPath = db.output;
       } else {
         // C'est un dossier, ajouter le nom du fichier
-        outputPath = path.join(db.output, `${db.name}.backup`);
+        outputPath = path.join(db.output, `${db.id}.backup`);
       }
     } else {
       // Chemin relatif
@@ -1125,7 +1125,7 @@ export class BackupManager {
         outputPath = fullPath;
       } else {
         // C'est un dossier, ajouter le nom du fichier
-        outputPath = path.join(fullPath, `${db.name}.backup`);
+        outputPath = path.join(fullPath, `${db.id}.backup`);
       }
     }
 

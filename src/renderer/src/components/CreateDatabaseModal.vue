@@ -96,9 +96,10 @@ const createDatabase = async () => {
       store.databases = config.databases;
       
       // Highlight the newly created database
-      store.newlyAddedDbName = form.value.name;
+      const newDb = store.databases.find(d => d.name === form.value.name && d.isLocalBbdump);
+      store.newlyAddedDbId = newDb?.id || null;
       setTimeout(() => {
-        store.newlyAddedDbName = null;
+        store.newlyAddedDbId = null;
       }, 2000);
       
       progress.value = null;

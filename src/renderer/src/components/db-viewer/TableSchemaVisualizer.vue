@@ -4,7 +4,7 @@ import { VueFlow, useVueFlow } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { ipcRenderer } from '../../electron';
-import { Database } from '../../types';
+import { Database, buildDbConfig } from '../../types';
 import { useI18n } from '../../composables/useI18n';
 import TableNode from './TableNode.vue';
 import dagre from 'dagre';
@@ -78,15 +78,8 @@ const loadFullSchema = async () => {
   error.value = null;
   
   try {
-    const dbConfig = {
-      name: props.db.name,
-      host: props.db.host,
-      port: props.db.port,
-      user: props.db.user,
-      password: props.db.password,
-      connectionString: props.db.connectionString
-    };
-    
+    const dbConfig = buildDbConfig(props.db);
+
     const schema = await ipcRenderer.invoke('get-db-full-schema', { db: dbConfig });
     
     // 1. Prepare raw nodes

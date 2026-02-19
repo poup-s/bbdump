@@ -1,4 +1,5 @@
 export interface DatabaseConfig {
+  id: string;
   isLocalBbdump?: boolean;
   name: string;
   displayName?: string;
@@ -20,6 +21,7 @@ export interface DatabaseConfig {
   jobs?: number; // Nombre de jobs parallèles pour pg_dump (défaut: 1)
   backupTimeout?: number; // Timeout en millisecondes (défaut: 30 minutes)
   ssl?: boolean; // Si true, force l'utilisation de SSL (sslmode=require)
+  masked?: boolean; // Si true, le nom de la DB est masqué dans l'UI (screen sharing)
 }
 
 export interface AppConfig {

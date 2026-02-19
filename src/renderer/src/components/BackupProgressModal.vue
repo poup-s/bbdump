@@ -23,7 +23,7 @@ const { t } = useI18n();
         </div>
         
         <h3 class="text-xl font-bold mb-2">{{ t('modal.backupInProgress') }}</h3>
-        <p class="text-gray-500 mb-6">{{ store.backupProgress.database }}</p>
+        <p class="text-gray-500 mb-6">{{ store.databases.find(d => d.id === store.backupProgress?.dbId)?.displayName || store.databases.find(d => d.id === store.backupProgress?.dbId)?.name || store.backupProgress?.dbId }}</p>
         
         <div class="w-full bg-surface rounded-full h-2 mb-2 overflow-hidden">
           <div 

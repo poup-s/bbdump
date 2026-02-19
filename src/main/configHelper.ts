@@ -1,4 +1,5 @@
 import { AppConfig, DatabaseConfig } from '../types/config';
+import * as crypto from 'crypto';
 
 /**
  * Sanitizes and normalizes a database configuration object.
@@ -11,6 +12,8 @@ export function sanitizeDatabaseConfig(db: any): DatabaseConfig {
 
     return {
         ...db,
+        // Ensure id is always present
+        id: db.id || crypto.randomUUID(),
         // Explicitly set isLocalBbdump to ensure it's not lost
         isLocalBbdump: isLocalBbdump,
 
@@ -19,6 +22,7 @@ export function sanitizeDatabaseConfig(db: any): DatabaseConfig {
         encryptBackups: db.encryptBackups === true, // Default to false if undefined
         enabled: db.enabled !== false, // Default to true if undefined
         ssl: db.ssl === true, // Default to false if undefined
+        masked: db.masked === true, // Default to false if undefined
     };
 }
 
