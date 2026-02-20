@@ -64,6 +64,9 @@ class ConnectionPoolManager {
 
     logger.info(`Creating new connection pool for ${params.database}`);
 
+    const isLinux = process.platform === 'linux';
+    const isLocalHost = params.host === 'localhost' || params.host === '127.0.0.1';
+
     let poolConfig;
 
     if (params.connectionString) {
@@ -75,6 +78,19 @@ class ConnectionPoolManager {
         connectionString: cleanedConnectionString,
         ssl: needsSsl ? { rejectUnauthorized: false } : undefined,
         max: 10, // Max clients in pool
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000,
+      };
+    } else if (isLinux && isLocalHost && !params.ssl) {
+      // On Linux, use Unix socket for local connections (peer auth, no password needed).
+      // TCP with empty password fails with SCRAM auth on default Linux pg_hba.conf.
+      poolConfig = {
+        host: '/var/run/postgresql',
+        port: params.port,
+        user: params.user,
+        password: params.password || '',
+        database: params.database,
+        max: 10,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 5000,
       };
@@ -163,6 +179,7 @@ export async function closeAllPools() {
 
 /**
  * Obtient un client du pool, avec auto-retry SSL si le serveur exige le chiffrement
+ * et fallback Unix socket → TCP → /tmp socket sur Linux
  */
 async function getClient(params: ConnectionParams): Promise<PoolClient> {
   const pool = poolManager.getPool(params);
@@ -172,13 +189,43 @@ async function getClient(params: ConnectionParams): Promise<PoolClient> {
     // If the server requires SSL and we connected without it, retry with SSL
     if (!params.ssl && err.message?.includes('no encryption')) {
       logger.info(`Connection to ${params.database} failed without SSL, retrying with SSL...`);
-      // Remove the non-SSL pool from cache (no need to end() — it has zero open connections)
       poolManager.removePool(params);
-      // Create a new pool with SSL enabled under the same cache key
       const sslParams = { ...params, ssl: true };
       const sslPool = poolManager.getPool(sslParams);
       return await sslPool.connect();
     }
+
+    // On Linux, if Unix socket failed (e.g. /var/run/postgresql doesn't exist),
+    // try /tmp socket, then fall back to TCP with common passwords
+    const isLinux = process.platform === 'linux';
+    const isLocalHost = params.host === 'localhost' || params.host === '127.0.0.1';
+
+    if (isLinux && isLocalHost && !params.connectionString) {
+      logger.info(`Connection to ${params.database} via socket failed: ${err.message}, trying fallbacks...`);
+      poolManager.removePool(params);
+
+      // Try /tmp socket
+      try {
+        const tmpParams = { ...params, host: '/tmp' };
+        const tmpPool = poolManager.getPool(tmpParams);
+        return await tmpPool.connect();
+      } catch {
+        poolManager.removePool({ ...params, host: '/tmp' });
+      }
+
+      // Fall back to TCP with common passwords
+      const passwords = ['postgres', 'admin', 'password', ''];
+      for (const pwd of passwords) {
+        try {
+          const tcpParams = { ...params, host: 'localhost', password: pwd };
+          const tcpPool = poolManager.getPool(tcpParams);
+          return await tcpPool.connect();
+        } catch {
+          poolManager.removePool({ ...params, host: 'localhost', password: pwd });
+        }
+      }
+    }
+
     throw err;
   }
 }

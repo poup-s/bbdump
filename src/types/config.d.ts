@@ -40,6 +40,7 @@ export interface BackupResult {
   message?: string;
   error?: string;
   output?: string;
+  filePath?: string;
 }
 
 export interface LogEntry {

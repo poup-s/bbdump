@@ -1,6 +1,6 @@
 import { Client } from 'pg';
 import { logger } from './logger';
-import { checkPostgresInstalled, checkPostgresRunning } from './postgresManager';
+import { checkPostgresInstalled, checkPostgresRunning, tryPgConnect, getPgClient } from './postgresManager';
 
 export interface PostgresDatabase {
   name: string;
@@ -43,52 +43,75 @@ async function createPostgresConnection(port: number = 5432, database: string = 
   const os = await import('os');
   const currentUser = os.userInfo().username;
   const usersToTry = [currentUser, 'postgres', process.env.USER || '', process.env.USERNAME || ''];
+  const isLinux = os.platform() === 'linux';
 
+  // Helper to apply monkey-patch to a connected client
+  const patchClient = (client: Client, user: string): Client => {
+    logger.info(`Connected to PostgreSQL as ${user} on port ${port}`);
+    const originalQuery = client.query;
+    client.query = function (this: Client, queryTextOrConfig: any, values?: any, callback?: any) {
+      const tag = '/* bbdump-internal */ ';
+      if (typeof queryTextOrConfig === 'string') {
+        if (!queryTextOrConfig.includes(tag)) {
+          queryTextOrConfig = tag + queryTextOrConfig;
+        }
+      } else if (queryTextOrConfig && typeof queryTextOrConfig.text === 'string') {
+        if (!queryTextOrConfig.text.includes(tag)) {
+          queryTextOrConfig.text = tag + queryTextOrConfig.text;
+        }
+      }
+      return (originalQuery as any).apply(this, [queryTextOrConfig, values, callback]);
+    } as any;
+    return client;
+  };
+
+  // On Linux, try Unix socket first (peer auth)
+  if (isLinux) {
+    const socketPaths = ['/var/run/postgresql', '/tmp'];
+    for (const user of usersToTry) {
+      if (!user) continue;
+      for (const socketPath of socketPaths) {
+        const client = new Client({
+          host: socketPath,
+          port: port,
+          user: user,
+          password: '',
+          database: database,
+          connectionTimeoutMillis: 5000,
+          statement_timeout: 30000
+        });
+        try {
+          await client.connect();
+          return patchClient(client, user);
+        } catch {
+          try { await client.end(); } catch { /* Ignore */ }
+        }
+      }
+    }
+  }
+
+  // TCP connections with various passwords
   for (const user of usersToTry) {
     if (!user) continue;
 
-    const passwords = ['', 'postgres', 'admin', 'password'];
+    const passwords = isLinux ? ['postgres', 'admin', 'password'] : ['', 'postgres', 'admin', 'password'];
 
-    for (const password of passwords) {
+    for (const pwd of passwords) {
       const client = new Client({
         host: 'localhost',
         port: port,
         user: user,
-        password: password,
+        password: pwd,
         database: database,
         connectionTimeoutMillis: 5000,
-        statement_timeout: 30000 // 30s max per query
+        statement_timeout: 30000
       });
 
       try {
         await client.connect();
-        logger.info(`Connected to PostgreSQL as ${user} on port ${port}`);
-
-        // Monkey-patch query to add a comment tag if it's a string
-        const originalQuery = client.query;
-        client.query = function (this: Client, queryTextOrConfig: any, values?: any, callback?: any) {
-          const tag = '/* bbdump-internal */ ';
-
-          if (typeof queryTextOrConfig === 'string') {
-            if (!queryTextOrConfig.includes(tag)) {
-              queryTextOrConfig = tag + queryTextOrConfig;
-            }
-          } else if (queryTextOrConfig && typeof queryTextOrConfig.text === 'string') {
-            if (!queryTextOrConfig.text.includes(tag)) {
-              queryTextOrConfig.text = tag + queryTextOrConfig.text;
-            }
-          }
-
-          return (originalQuery as any).apply(this, [queryTextOrConfig, values, callback]);
-        } as any;
-
-        return client;
+        return patchClient(client, user);
       } catch {
-        try {
-          await client.end();
-        } catch {
-          // Ignore
-        }
+        try { await client.end(); } catch { /* Ignore */ }
       }
     }
   }
@@ -385,48 +408,92 @@ export async function testDatabaseConnection(
     return { success: false, error: 'Authentication failed with provided password' };
   }
 
-  // Essayer sans mot de passe d'abord
-  for (const user of usersToTry) {
-    if (!user) continue;
+  const isLinux = os.platform() === 'linux';
 
-    const client = new Client({
-      host: 'localhost',
-      port: port,
-      user: user,
-      password: '',
-      database: dbName,
-      connectionTimeoutMillis: 5000
-    });
-
-    try {
-      await client.connect();
-      await client.query('SELECT 1');
-      await client.end();
-      logger.info(`Successfully connected to database "${dbName}" as ${user} (no password)`);
-      return {
-        success: true,
-        connectionInfo: {
-          host: 'localhost',
+  // On Linux, try Unix socket first (peer auth)
+  if (isLinux) {
+    const socketPaths = ['/var/run/postgresql', '/tmp'];
+    for (const user of usersToTry) {
+      if (!user) continue;
+      for (const socketPath of socketPaths) {
+        const client = new Client({
+          host: socketPath,
           port: port,
           user: user,
           password: '',
-          database: dbName
+          database: dbName,
+          connectionTimeoutMillis: 5000
+        });
+        try {
+          await client.connect();
+          await client.query('SELECT 1');
+          await client.end();
+          logger.info(`Successfully connected to database "${dbName}" as ${user} via socket (no password)`);
+          return {
+            success: true,
+            connectionInfo: {
+              host: 'localhost',
+              port: port,
+              user: user,
+              password: '',
+              database: dbName
+            }
+          };
+        } catch (error: any) {
+          try { await client.end(); } catch { /* Ignore */ }
+          if (error.message.includes('does not exist') && !error.message.includes('role')) {
+            return { success: false, error: error.message };
+          }
         }
-      };
-    } catch (error: any) {
+      }
+    }
+  }
+
+  // Essayer sans mot de passe (macOS trust auth) ou avec des mots de passe courants
+  const passwordsToTry = isLinux ? ['postgres'] : [''];
+  for (const user of usersToTry) {
+    if (!user) continue;
+
+    for (const pwd of passwordsToTry) {
+      const client = new Client({
+        host: 'localhost',
+        port: port,
+        user: user,
+        password: pwd,
+        database: dbName,
+        connectionTimeoutMillis: 5000
+      });
+
       try {
+        await client.connect();
+        await client.query('SELECT 1');
         await client.end();
-      } catch {
-        // Ignore
-      }
+        logger.info(`Successfully connected to database "${dbName}" as ${user} (no password)`);
+        return {
+          success: true,
+          connectionInfo: {
+            host: 'localhost',
+            port: port,
+            user: user,
+            password: pwd,
+            database: dbName
+          }
+        };
+      } catch (error: any) {
+        try {
+          await client.end();
+        } catch {
+          // Ignore
+        }
 
-      // Si c'est une erreur d'authentification, on a besoin d'un mot de passe
-      if (error.message.includes('password') || error.message.includes('authentication')) {
-        return { success: false, needsPassword: true, error: 'Password required' };
-      }
+        // Si c'est une erreur d'authentification, on a besoin d'un mot de passe
+        if (error.message.includes('password') || error.message.includes('authentication') || error.message.includes('SCRAM')) {
+          return { success: false, needsPassword: true, error: 'Password required' };
+        }
 
-      // Autre erreur (base n'existe pas, etc.)
-      return { success: false, error: error.message };
+        // Autre erreur (base n'existe pas, etc.)
+        return { success: false, error: error.message };
+      }
     }
   }
 

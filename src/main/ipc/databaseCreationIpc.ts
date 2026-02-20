@@ -148,24 +148,30 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
 
             sendProgress('backup', 'Backup created successfully', 30);
 
-            // Find the created backup file (try id prefix first, then name for backwards compat)
-            const backupDir = sourceDbConfig.output || config.defaultBackupPath || pathManager.backupsPath;
-            const backupFiles = fs.readdirSync(backupDir)
-                .filter(f => (f.startsWith(`${sourceDbConfig.id}_`) || f.startsWith(`${sourceDbConfig.name}_`)) && f.endsWith('.backup'))
-                .map(f => ({
-                    name: f,
-                    path: path.join(backupDir, f),
-                    time: fs.statSync(path.join(backupDir, f)).mtime.getTime()
-                }))
-                .sort((a, b) => b.time - a.time);
+            // Use the backup file path returned directly by executeBackup
+            let backupFile = backupResult.filePath;
 
-            if (backupFiles.length === 0) {
-                return {
-                    success: false,
-                    error: 'Backup file not found after backup operation'
-                };
+            // Fallback: search filesystem if filePath not returned (backwards compat)
+            if (!backupFile || !fs.existsSync(backupFile)) {
+                logger.warn(`Backup filePath not available or missing (${backupFile}), searching filesystem...`);
+                const backupDir = sourceDbConfig.output || config.defaultBackupPath || pathManager.backupsPath;
+                const backupFiles = fs.readdirSync(backupDir)
+                    .filter(f => (f.startsWith(`${sourceDbConfig.id}_`) || f.startsWith(`${sourceDbConfig.name}_`)) && f.endsWith('.backup'))
+                    .map(f => ({
+                        name: f,
+                        path: path.join(backupDir, f),
+                        time: fs.statSync(path.join(backupDir, f)).mtime.getTime()
+                    }))
+                    .sort((a, b) => b.time - a.time);
+
+                if (backupFiles.length === 0) {
+                    return {
+                        success: false,
+                        error: 'Backup file not found after backup operation'
+                    };
+                }
+                backupFile = backupFiles[0].path;
             }
-            const backupFile = backupFiles[0].path;
             createdBackupFile = backupFile;
 
             // 3. Create Local Database
@@ -195,10 +201,8 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
 
             const newDbUser = createResult.database.user;
 
-            // We pass just the filename to restoreBackup, it looks in backups folder
-            const backupFileName = path.basename(backupFile);
-
-            const restoreResult = await backupManager.restoreBackup(backupFileName, {
+            // Pass full path directly — restoreBackup handles both absolute and relative paths
+            const restoreResult = await backupManager.restoreBackup(backupFile, {
                 name: params.targetName,
                 host: 'localhost',
                 port: params.targetPort,

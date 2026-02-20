@@ -2,13 +2,23 @@
 set -e
 
 # Usage:
-#   npm run deploy:release           → patch (1.0.10 → 1.0.11)
-#   npm run deploy:release minor     → minor (1.0.10 → 1.1.0)
-#   npm run deploy:release major     → major (1.0.10 → 2.0.0)
-#   npm run deploy:release 1.2.3     → exact version
+#   npm run deploy:release                → patch (1.0.10 → 1.0.11)
+#   npm run deploy:release minor          → minor (1.0.10 → 1.1.0)
+#   npm run deploy:release major          → major (1.0.10 → 2.0.0)
+#   npm run deploy:release 1.2.3          → exact version
+#   npm run deploy:release --skip-win     → skip Windows build
+#   npm run deploy:release minor --skip-win
 
 RELEASE_REPO="poup-s/bbDump-app"
-BUMP="${1:-patch}"
+BUMP="patch"
+SKIP_WIN=0
+
+for arg in "$@"; do
+  case "$arg" in
+    --skip-win) SKIP_WIN=1 ;;
+    *) BUMP="$arg" ;;
+  esac
+done
 
 # --- Get current version ---
 CURRENT=$(node -p "require('./package.json').version")
@@ -71,6 +81,11 @@ echo ""
 echo "==> Updating version to ${VERSION}..."
 npm version "$VERSION" --no-git-tag-version
 
+# --- Copy install script to .dist ---
+echo "==> Copying install script to .dist/bbdump.sh..."
+mkdir -p .dist
+cp scripts/install.sh .dist/bbdump.sh
+
 # --- Build MCP server ---
 echo "==> Building MCP server..."
 cd mcp-postgres && npm run build && cd ..
@@ -83,8 +98,12 @@ npm run build
 echo "==> Packaging for macOS..."
 npx electron-builder --mac
 
-echo "==> Packaging for Windows..."
-npx electron-builder --win
+if [ "$SKIP_WIN" -eq 0 ]; then
+  echo "==> Packaging for Windows..."
+  npx electron-builder --win
+else
+  echo "==> Skipping Windows build (--skip-win)"
+fi
 
 echo "==> Packaging for Linux..."
 npx electron-builder --linux
@@ -98,6 +117,7 @@ cp release/bbdump-${VERSION}* "$OUT_DIR/" 2>/dev/null || true
 cp release/latest-mac.yml "$OUT_DIR/" 2>/dev/null || true
 cp release/latest-linux.yml "$OUT_DIR/" 2>/dev/null || true
 cp release/latest.yml "$OUT_DIR/" 2>/dev/null || true
+cp logo.png "$OUT_DIR/" 2>/dev/null || true
 
 echo ""
 echo "==> Artifacts:"
@@ -106,7 +126,7 @@ ls -lh "$OUT_DIR/"
 # --- Create git tag ---
 echo ""
 echo "==> Creating git tag v${VERSION}..."
-git add package.json package-lock.json 2>/dev/null || true
+git add package.json package-lock.json .dist/bbdump.sh 2>/dev/null || true
 git commit -m "release: v${VERSION}" 2>/dev/null || true
 git tag "v${VERSION}"
 

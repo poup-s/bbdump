@@ -25,12 +25,18 @@ const isMcpConfirmLaunch = process.argv.includes('--mcp-confirm');
 
 // Créer la fenêtre principale
 function createWindow(): void {
+  const isMac = process.platform === 'darwin';
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     show: !isMcpConfirmLaunch,
-    titleBarStyle: 'hidden',
-    trafficLightPosition: { x: 20, y: 20 },
+    // macOS: hidden titlebar with custom traffic light position
+    // Linux/Windows: default system titlebar
+    ...(isMac ? {
+      titleBarStyle: 'hidden',
+      trafficLightPosition: { x: 20, y: 20 },
+    } : {}),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

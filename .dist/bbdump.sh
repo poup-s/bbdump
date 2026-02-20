@@ -400,6 +400,8 @@ create_desktop_entry() {
 
   # Extract icon from AppImage
   mkdir -p "$icon_dir"
+  local pixmaps_dir="$HOME/.local/share/pixmaps"
+  mkdir -p "$pixmaps_dir"
   local icon_extracted=0
   spinner "Extracting icon…"
 
@@ -419,6 +421,7 @@ create_desktop_entry() {
     done
     if [ -n "$extracted_icon" ] && [ -f "$extracted_icon" ]; then
       cp "$extracted_icon" "$icon_path"
+      cp "$extracted_icon" "${pixmaps_dir}/${APP_NAME}.png"
       icon_extracted=1
     fi
     rm -rf "$tmp_extract"
@@ -427,16 +430,20 @@ create_desktop_entry() {
   # Method 2: Download from GitHub release assets
   if [ "$icon_extracted" -eq 0 ]; then
     if curl -fsSL "https://github.com/${REPO}/releases/download/${VERSION}/logo.png" -o "$icon_path" 2>/dev/null; then
+      cp "$icon_path" "${pixmaps_dir}/${APP_NAME}.png"
       icon_extracted=1
     fi
   fi
 
   stop_spinner
+
+  # Use icon theme name (not absolute path) so GNOME launcher resolves it properly
+  local icon_name="${APP_NAME}"
   if [ "$icon_extracted" -eq 1 ]; then
     success "Icon installed"
   else
     warn "Could not extract icon — shortcut will use a generic icon"
-    icon_path="utilities-terminal"
+    icon_name="utilities-terminal"
   fi
 
   # Create .desktop file
@@ -446,7 +453,7 @@ create_desktop_entry() {
 Name=bbdump
 Comment=PostgreSQL Backup Manager
 Exec=${exec_path} %U
-Icon=${icon_path}
+Icon=${icon_name}
 Type=Application
 Terminal=false
 Categories=Development;Database;
@@ -929,6 +936,7 @@ uninstall_desktop_entry() {
   step "Removing desktop shortcut"
   local desktop_path="$HOME/.local/share/applications/${APP_NAME}.desktop"
   local icon_path="$HOME/.local/share/icons/hicolor/256x256/apps/${APP_NAME}.png"
+  local pixmaps_icon="$HOME/.local/share/pixmaps/${APP_NAME}.png"
   local removed=0
 
   if [ -f "$desktop_path" ]; then
@@ -938,11 +946,15 @@ uninstall_desktop_entry() {
   fi
   if [ -f "$icon_path" ]; then
     rm -f "$icon_path"
-    success "Removed icon"
+    removed=1
+  fi
+  if [ -f "$pixmaps_icon" ]; then
+    rm -f "$pixmaps_icon"
     removed=1
   fi
 
   if [ "$removed" -eq 1 ]; then
+    success "Removed icons"
     # Update caches
     if command -v update-desktop-database >/dev/null 2>&1; then
       update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true

@@ -22,6 +22,7 @@ interface Shell {
 interface ElectronAPI {
     ipcRenderer: IpcRenderer;
     shell: Shell;
+    platform: NodeJS.Platform;
 }
 
 declare global {

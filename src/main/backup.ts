@@ -410,9 +410,9 @@ export class BackupManager {
    */
   private async detectLinuxVersions(versions: PgDumpVersion[]): Promise<void> {
     const possiblePaths = [
-      '/usr/lib/postgresql',
-      '/usr/local/lib/postgresql',
-      '/opt/postgresql'
+      '/usr/lib/postgresql',       // Debian/Ubuntu
+      '/usr/local/lib/postgresql', // Custom installs
+      '/opt/postgresql',           // Custom installs
     ];
 
     for (const basePath of possiblePaths) {
@@ -437,6 +437,26 @@ export class BackupManager {
           // Ignore
         }
       }
+    }
+
+    // RHEL/Fedora: /usr/pgsql-<version>/bin/pg_dump
+    try {
+      const { stdout } = await execAsync('ls -d /usr/pgsql-*/bin/pg_dump 2>/dev/null || echo ""');
+      for (const pgDumpPath of stdout.trim().split('\n').filter(Boolean)) {
+        if (fs.existsSync(pgDumpPath)) {
+          const version = await this.getPgDumpVersion(pgDumpPath);
+          if (version) {
+            versions.push({
+              path: pgDumpPath,
+              version: version,
+              majorVersion: version.split('.')[0],
+              source: 'postgresql'
+            });
+          }
+        }
+      }
+    } catch {
+      // Ignore
     }
   }
 
@@ -546,6 +566,195 @@ export class BackupManager {
    * Détecte la version du serveur PostgreSQL et trouve le pg_dump correspondant
    * Utilise le cache des versions détectées pour une recherche rapide
    */
+  /**
+   * Connects to a database to detect the server version.
+   * On Linux, tries Unix socket first (peer auth) before TCP.
+   */
+  private async detectServerVersion(db: DatabaseConfig): Promise<{ version: string; majorVersion: string } | null> {
+    const { Client } = await import('pg');
+    const isLinux = process.platform === 'linux';
+    const isLocalHost = db.host === 'localhost' || db.host === '127.0.0.1';
+
+    // Build a list of connection configs to try
+    const configs: any[] = [];
+
+    // On Linux with local host, try Unix socket first (peer auth, no password needed)
+    if (isLinux && isLocalHost && !db.connectionString) {
+      const currentUser = require('os').userInfo().username;
+      const users = [db.user, currentUser, 'postgres'].filter(Boolean);
+      const socketPaths = ['/var/run/postgresql', '/tmp'];
+      for (const user of users) {
+        for (const socketPath of socketPaths) {
+          configs.push({
+            host: socketPath,
+            port: db.port,
+            user: user,
+            password: '',
+            database: 'postgres',
+            connectionTimeoutMillis: 5000
+          });
+        }
+      }
+    }
+
+    // TCP connection (with provided password or common defaults)
+    if (db.connectionString) {
+      configs.push({
+        connectionString: db.connectionString,
+        ssl: db.ssl,
+        connectionTimeoutMillis: 5000
+      });
+    } else {
+      const passwords = isLinux ? [db.password || '', 'postgres', ''] : [db.password || ''];
+      for (const pwd of passwords) {
+        configs.push({
+          host: db.host,
+          port: db.port,
+          user: db.user,
+          password: pwd,
+          database: db.name || 'postgres',
+          ssl: db.ssl,
+          connectionTimeoutMillis: 5000
+        });
+      }
+    }
+
+    for (const config of configs) {
+      try {
+        const client = new Client(config);
+        await client.connect();
+        try {
+          const result = await client.query('SELECT version()');
+          const versionMatch = result.rows[0]?.version?.match(/PostgreSQL (\d+\.\d+)/);
+          if (versionMatch && versionMatch[1]) {
+            return { version: versionMatch[1], majorVersion: versionMatch[1].split('.')[0] };
+          }
+        } finally {
+          await client.end();
+        }
+      } catch {
+        // Try next config
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * On Linux, try to auto-install the matching postgresql-client package.
+   * Uses a temporary shell script via pkexec for reliable graphical privilege escalation.
+   */
+  private async tryInstallPgDumpLinux(majorVersion: string, dbName: string): Promise<boolean> {
+    if (process.platform !== 'linux') return false;
+
+    logger.info(`Attempting to auto-install postgresql-client-${majorVersion} on Linux...`, dbName);
+
+    // Check if apt-get is available (Debian/Ubuntu)
+    let hasApt = false;
+    try {
+      await execAsync('which apt-get 2>/dev/null');
+      hasApt = true;
+    } catch {
+      logger.warn(`apt-get not found`, dbName);
+    }
+
+    // Helper to clear version caches after successful install
+    const clearCaches = () => {
+      this.versionsDetected = false;
+      this.pgDumpVersionsCache.clear();
+      this.allPgDumpVersions = [];
+      this.pgRestoreVersionsDetected = false;
+      this.pgRestoreVersionsCache.clear();
+      this.allPgRestoreVersions = [];
+    };
+
+    // Helper to check if installation succeeded
+    const verifyInstall = (): boolean => {
+      const pgDumpPath = `/usr/lib/postgresql/${majorVersion}/bin/pg_dump`;
+      if (fs.existsSync(pgDumpPath)) {
+        logger.info(`postgresql-client-${majorVersion} installed, pg_dump at: ${pgDumpPath}`, dbName);
+        clearCaches();
+        return true;
+      }
+      return false;
+    };
+
+    if (hasApt) {
+      // Strategy 1: Try simple apt-get install (works if user is root or package already in cache)
+      for (const prefix of ['', 'sudo -n']) {
+        try {
+          const cmd = `${prefix} apt-get install -y postgresql-client-${majorVersion}`.trim();
+          logger.info(`Trying: ${cmd}`, dbName);
+          await execAsync(cmd, { timeout: 120000 });
+          if (verifyInstall()) return true;
+        } catch {
+          // Continue to next strategy
+        }
+      }
+
+      // Strategy 2: Write a temp script and run it via pkexec (graphical password prompt)
+      // pkexec works better with a script file than inline commands
+      const tmpScript = `/tmp/bbdump-install-pgclient-${majorVersion}.sh`;
+      try {
+        const scriptContent = `#!/bin/bash
+set -e
+
+# Ensure PGDG repository is configured
+if ! apt-cache show "postgresql-client-${majorVersion}" >/dev/null 2>&1; then
+  CODENAME=$(lsb_release -cs 2>/dev/null || echo "jammy")
+  echo "deb http://apt.postgresql.org/pub/repos/apt $CODENAME-pgdg main" > /etc/apt/sources.list.d/pgdg.list
+  curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg 2>/dev/null || true
+  apt-get update -y
+fi
+
+apt-get install -y postgresql-client-${majorVersion}
+`;
+        fs.writeFileSync(tmpScript, scriptContent, { mode: 0o755 });
+        logger.info(`Running install script via pkexec...`, dbName);
+        await execAsync(`pkexec bash "${tmpScript}"`, { timeout: 180000 });
+        if (verifyInstall()) return true;
+      } catch (error: any) {
+        logger.info(`pkexec install failed: ${error.message}`, dbName);
+      } finally {
+        // Cleanup temp script
+        try { fs.unlinkSync(tmpScript); } catch { /* ignore */ }
+      }
+
+      // Strategy 3: Try sudo with full PGDG repo setup (for systems without pkexec)
+      try {
+        logger.info(`Trying sudo with PGDG repo setup...`, dbName);
+        const codename = (await execAsync('lsb_release -cs 2>/dev/null || echo "jammy"')).stdout.trim();
+        const commands = [
+          `sudo -n sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt ${codename}-pgdg main" > /etc/apt/sources.list.d/pgdg.list'`,
+          `curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo -n gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg`,
+          `sudo -n apt-get update -y`,
+          `sudo -n apt-get install -y postgresql-client-${majorVersion}`
+        ];
+        for (const cmd of commands) {
+          await execAsync(cmd, { timeout: 60000 });
+        }
+        if (verifyInstall()) return true;
+      } catch (error: any) {
+        logger.info(`sudo PGDG install failed: ${error.message}`, dbName);
+      }
+    }
+
+    // dnf/yum fallback
+    for (const pkgMgr of ['dnf', 'yum']) {
+      try {
+        await execAsync(`which ${pkgMgr} 2>/dev/null`);
+        const cmd = `pkexec ${pkgMgr} install -y postgresql${majorVersion}`;
+        logger.info(`Trying: ${cmd}`, dbName);
+        await execAsync(cmd, { timeout: 180000 });
+        if (verifyInstall()) return true;
+      } catch {
+        // Continue
+      }
+    }
+
+    return false;
+  }
+
   private async findCompatiblePgDump(db: DatabaseConfig): Promise<string> {
     logger.info(`Finding compatible pg_dump for database: ${db.name}`, db.name);
 
@@ -555,40 +764,15 @@ export class BackupManager {
     }
 
     try {
-      // Détecter la version du serveur PostgreSQL
-      let serverVersion: string | null = null;
-      let serverMajorVersion: string | null = null;
+      // Détecter la version du serveur PostgreSQL (with Linux socket support)
+      const serverInfo = await this.detectServerVersion(db);
+      const serverVersion = serverInfo?.version || null;
+      const serverMajorVersion = serverInfo?.majorVersion || null;
 
-      try {
-        const { Client } = await import('pg');
-        const client = new Client({
-          host: db.host,
-          port: db.port,
-          user: db.user,
-          password: db.password || '',
-          database: db.connectionString ? undefined : (db.name || 'postgres'),
-          connectionString: db.connectionString,
-          ssl: db.ssl,
-          connectionTimeoutMillis: 5000
-        });
-
-        await client.connect();
-        try {
-          const result = await client.query('SELECT version()');
-          const versionMatch = result.rows[0]?.version?.match(/PostgreSQL (\d+\.\d+)/);
-          if (versionMatch && versionMatch[1]) {
-            const detectedVersion = versionMatch[1];
-            serverVersion = detectedVersion;
-            serverMajorVersion = detectedVersion.split('.')[0];
-            logger.info(`Detected PostgreSQL server version: ${detectedVersion}`, db.name);
-          } else {
-            logger.warn(`Could not parse PostgreSQL version from: ${result.rows[0]?.version || 'unknown'}`, db.name);
-          }
-        } finally {
-          await client.end();
-        }
-      } catch (error: any) {
-        logger.warn(`Could not detect server version: ${error.message}`, db.name);
+      if (serverVersion) {
+        logger.info(`Detected PostgreSQL server version: ${serverVersion}`, db.name);
+      } else {
+        logger.warn(`Could not detect server version`, db.name);
       }
 
       // Si on a détecté une version, utiliser le cache pour trouver le pg_dump compatible
@@ -612,6 +796,7 @@ export class BackupManager {
       if (serverMajorVersion) {
         logger.warn(`No cached pg_dump found for PostgreSQL ${serverVersion}, performing dynamic search...`, db.name);
         // Re-détecter les versions au cas où de nouvelles versions auraient été installées
+        this.versionsDetected = false;
         await this.detectAllPgDumpVersions();
 
         if (this.pgDumpVersionsCache.has(serverMajorVersion)) {
@@ -621,9 +806,29 @@ export class BackupManager {
           return bestMatch.path;
         }
 
+        // On Linux, try to auto-install the matching client package
+        if (process.platform === 'linux') {
+          const installed = await this.tryInstallPgDumpLinux(serverMajorVersion, db.name);
+          if (installed) {
+            await this.detectAllPgDumpVersions();
+            await this.detectAllPgRestoreVersions();
+            if (this.pgDumpVersionsCache.has(serverMajorVersion)) {
+              const compatibleVersions = this.pgDumpVersionsCache.get(serverMajorVersion)!;
+              const bestMatch = compatibleVersions[0];
+              logger.info(`Found compatible pg_dump ${bestMatch.version} after auto-install: ${bestMatch.path}`, db.name);
+              return bestMatch.path;
+            }
+          }
+        }
+
         logger.warn(`Could not find pg_dump for PostgreSQL ${serverVersion} (major: ${serverMajorVersion})`, db.name);
         logger.warn(`Available versions: ${Array.from(this.pgDumpVersionsCache.keys()).join(', ') || 'none'}`, db.name);
-        logger.warn(`This may cause version mismatch errors. Please install pg_dump version ${serverMajorVersion}.x`, db.name);
+
+        // Throw a clear error with installation instructions
+        const installHint = process.platform === 'linux'
+          ? `Please install the matching client:\n  sudo apt install postgresql-client-${serverMajorVersion}\n  or: sudo dnf install postgresql${serverMajorVersion}`
+          : `Please install pg_dump version ${serverMajorVersion}.x`;
+        throw new Error(`pg_dump version mismatch: server is PostgreSQL ${serverVersion} but only pg_dump ${this.allPgDumpVersions.map(v => v.version).join(', ') || 'unknown'} is available.\n\n${installHint}`);
       } else {
         logger.warn(`Server version not detected, using default pg_dump: ${this.pgDumpPath}`, db.name);
         if (this.allPgDumpVersions.length > 0) {
@@ -631,6 +836,10 @@ export class BackupManager {
         }
       }
     } catch (error: any) {
+      // Re-throw version mismatch errors with clear messages
+      if (error.message?.includes('version mismatch')) {
+        throw error;
+      }
       logger.error(`Error finding compatible pg_dump: ${error.message}`, db.name);
     }
 
@@ -787,8 +996,16 @@ export class BackupManager {
         const cleanedConnectionString = this.cleanConnectionString(db.connectionString);
         args.unshift('-d', cleanedConnectionString);
       } else {
-        // Sinon, utiliser les paramètres individuels
-        args.unshift('-h', db.host);
+        const isLinux = process.platform === 'linux';
+        const isLocalHost = db.host === 'localhost' || db.host === '127.0.0.1';
+        const hasPassword = db.password && db.password.trim().length > 0;
+
+        // On Linux with local host and no password, use Unix socket (peer auth)
+        if (isLinux && isLocalHost && !hasPassword) {
+          args.unshift('-h', '/var/run/postgresql');
+        } else {
+          args.unshift('-h', db.host);
+        }
         args.unshift('-p', db.port.toString());
         args.unshift('-U', db.user);
         args.unshift('-d', db.name);
@@ -1110,17 +1327,20 @@ export class BackupManager {
       outputPath = path.join(pathManager.backupsPath, `${db.id}.backup`);
     } else if (path.isAbsolute(db.output)) {
       // Si c'est un chemin absolu, vérifier s'il pointe vers un dossier ou un fichier
-      if (db.output.endsWith('.backup') || db.output.includes('.')) {
-        // C'est un fichier
+      // Utiliser l'extension du dernier segment (pas includes('.') qui matche .config, .local, etc.)
+      const lastSegment = path.basename(db.output);
+      if (lastSegment.includes('.') && !lastSegment.startsWith('.')) {
+        // Le dernier segment a une extension (ex: backup.backup) — c'est un fichier
         outputPath = db.output;
       } else {
-        // C'est un dossier, ajouter le nom du fichier
+        // C'est un dossier (ou un dossier caché comme .config), ajouter le nom du fichier
         outputPath = path.join(db.output, `${db.id}.backup`);
       }
     } else {
       // Chemin relatif
       const fullPath = path.join(pathManager.appDataPath, db.output);
-      if (db.output.endsWith('.backup') || db.output.includes('.')) {
+      const lastSegment = path.basename(db.output);
+      if (lastSegment.includes('.') && !lastSegment.startsWith('.')) {
         // C'est un fichier
         outputPath = fullPath;
       } else {
@@ -1191,8 +1411,17 @@ export class BackupManager {
         const cleanedConnectionString = this.cleanConnectionString(db.connectionString);
         args.push('-d', cleanedConnectionString);
       } else {
-        // Sinon, utiliser les paramètres individuels
-        args.push('-h', db.host);
+        const isLinux = process.platform === 'linux';
+        const isLocalHost = db.host === 'localhost' || db.host === '127.0.0.1';
+        const hasPassword = db.password && db.password.trim().length > 0;
+
+        // On Linux with local host and no password, use Unix socket (peer auth)
+        // pg_dump -h /var/run/postgresql uses peer auth, avoiding SCRAM password issues
+        if (isLinux && isLocalHost && !hasPassword) {
+          args.push('-h', '/var/run/postgresql');
+        } else {
+          args.push('-h', db.host);
+        }
         args.push('-p', db.port.toString());
         args.push('-U', db.user);
         args.push(db.name);
@@ -1381,7 +1610,8 @@ export class BackupManager {
                 success: true,
                 database: db.name,
                 timestamp,
-                message: successMsg
+                message: successMsg,
+                filePath: timestampedPath
               });
             } catch (encryptError) {
               const errorMsg = `Error during encryption: ${encryptError}`;
@@ -1418,7 +1648,8 @@ export class BackupManager {
               success: true,
               database: db.name,
               timestamp,
-              message: successMsg
+              message: successMsg,
+              filePath: timestampedPath
             });
           }
         } else {
@@ -1454,11 +1685,12 @@ export class BackupManager {
     const timestamp = new Date().toISOString();
     logger.info(`Starting restore of ${backupFile} to ${target.name}`, target.name);
 
-    const backupPath = path.join(pathManager.backupsPath, backupFile);
+    // Accept both absolute paths and filenames (relative to backupsPath)
+    const backupPath = path.isAbsolute(backupFile) ? backupFile : path.join(pathManager.backupsPath, backupFile);
 
     // Vérifier que le fichier existe
     if (!fs.existsSync(backupPath)) {
-      const errorMsg = `Backup file not found: ${backupFile}`;
+      const errorMsg = `Backup file not found: ${backupPath}`;
       logger.error(errorMsg, target.name);
       return {
         success: false,
@@ -1527,8 +1759,16 @@ export class BackupManager {
         const cleanedConnectionString = this.cleanConnectionString(target.connectionString);
         args.push('-d', cleanedConnectionString);
       } else {
-        // Sinon, utiliser les paramètres individuels
-        args.push('-h', target.host);
+        const isLinux = process.platform === 'linux';
+        const isLocalHost = target.host === 'localhost' || target.host === '127.0.0.1';
+        const hasPassword = target.password && target.password.trim().length > 0;
+
+        // On Linux with local host and no password, use Unix socket (peer auth)
+        if (isLinux && isLocalHost && !hasPassword) {
+          args.push('-h', '/var/run/postgresql');
+        } else {
+          args.push('-h', target.host);
+        }
         args.push('-p', target.port.toString());
         args.push('-U', target.user);
         args.push('-d', target.name);

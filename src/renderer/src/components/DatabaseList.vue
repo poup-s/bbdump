@@ -187,7 +187,16 @@ const openViewer = (db: Database) => {
 };
 
 const copyConnectionUrl = async (db: Database) => {
-  const url = `postgresql://${db.user}@${db.host}:${db.port}/${db.name}`;
+  let url: string;
+  if (db.connectionString) {
+    // Use the existing connection string if available
+    url = db.connectionString;
+  } else if (db.isLocalBbdump && window.electron?.platform === 'linux') {
+    // On Linux, local databases use peer auth via Unix socket
+    url = `postgresql://${db.user}@/${db.name}?host=/var/run/postgresql&port=${db.port}`;
+  } else {
+    url = `postgresql://${db.user}@${db.host}:${db.port}/${db.name}`;
+  }
   try {
     await navigator.clipboard.writeText(url);
     addToast(t('databases.urlCopied'), 'success');

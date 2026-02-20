@@ -88,7 +88,12 @@ export async function downloadUpdate(): Promise<void> {
 
 export function quitAndInstall(): void {
   logger.info('Quitting and installing update...');
-  // On macOS, force the app to quit and relaunch after install
+  // Remove listeners that prevent the app from quitting
+  app.removeAllListeners('window-all-closed');
+  // Force-close all windows so the app can actually quit
+  const windows = BrowserWindow.getAllWindows();
+  windows.forEach(w => w.removeAllListeners('close'));
+  windows.forEach(w => w.close());
   // isSilent=false (show installer), isForceRunAfter=true (relaunch app after install)
   autoUpdater.quitAndInstall(false, true);
 }

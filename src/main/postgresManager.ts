@@ -31,6 +31,112 @@ function getOS(): 'macos' | 'linux' | 'windows' {
 }
 
 /**
+ * Try to connect to PostgreSQL, handling Linux peer auth via Unix socket.
+ * On Linux, SCRAM auth rejects empty passwords over TCP, so we try Unix socket first (peer auth).
+ * On macOS, trust auth works fine with password: '' over TCP.
+ */
+export async function tryPgConnect(port: number, user: string): Promise<void> {
+  const { Client } = await import('pg');
+  const osType = getOS();
+
+  if (osType === 'linux') {
+    // On Linux, try Unix socket paths first (peer auth, no password needed)
+    const socketPaths = ['/var/run/postgresql', '/tmp'];
+    for (const socketPath of socketPaths) {
+      try {
+        const client = new Client({
+          host: socketPath,
+          port: port,
+          user: user,
+          password: '',
+          database: 'postgres',
+          connectionTimeoutMillis: 5000
+        });
+        await client.connect();
+        await client.end();
+        return;
+      } catch {
+        // Try next socket path
+      }
+    }
+    // Fallback: TCP with empty password (must be a string to avoid SCRAM crash)
+    const client = new Client({
+      host: 'localhost',
+      port: port,
+      user: user,
+      password: '',
+      database: 'postgres',
+      connectionTimeoutMillis: 5000
+    });
+    await client.connect();
+    await client.end();
+  } else {
+    // macOS: trust auth works with empty password over TCP
+    const client = new Client({
+      host: 'localhost',
+      port: port,
+      user: user,
+      password: '',
+      database: 'postgres',
+      connectionTimeoutMillis: 5000
+    });
+    await client.connect();
+    await client.end();
+  }
+}
+
+/**
+ * Connect to PostgreSQL and return a connected Client instance.
+ * Same logic as tryPgConnect but returns the client for query use.
+ */
+export async function getPgClient(port: number, user: string): Promise<import('pg').Client> {
+  const { Client } = await import('pg');
+  const osType = getOS();
+
+  if (osType === 'linux') {
+    const socketPaths = ['/var/run/postgresql', '/tmp'];
+    for (const socketPath of socketPaths) {
+      try {
+        const client = new Client({
+          host: socketPath,
+          port: port,
+          user: user,
+          password: '',
+          database: 'postgres',
+          connectionTimeoutMillis: 5000
+        });
+        await client.connect();
+        return client;
+      } catch {
+        // Try next socket path
+      }
+    }
+    // Fallback: TCP with empty password (must be a string to avoid SCRAM crash)
+    const client = new Client({
+      host: 'localhost',
+      port: port,
+      user: user,
+      password: '',
+      database: 'postgres',
+      connectionTimeoutMillis: 5000
+    });
+    await client.connect();
+    return client;
+  } else {
+    const client = new Client({
+      host: 'localhost',
+      port: port,
+      user: user,
+      password: '',
+      database: 'postgres',
+      connectionTimeoutMillis: 5000
+    });
+    await client.connect();
+    return client;
+  }
+}
+
+/**
  * Trouve le chemin de Homebrew de manière robuste
  */
 async function findBrewPath(): Promise<string | null> {
@@ -257,14 +363,31 @@ export async function checkPostgresRunning(port: number = 5432): Promise<{ runni
           return { running: true, port, details: 'detected via lsof' };
         }
       } catch {
-        // Port libre
+        // lsof may not be installed
       }
 
-      // Vérifier avec systemctl
+      // Fallback: ss (available on all modern Linux)
       try {
-        const { stdout } = await execAsync('systemctl is-active postgresql 2>/dev/null');
-        if (stdout.trim() === 'active') {
-          return { running: true, port, details: 'detected via systemctl' };
+        const { stdout } = await execAsync(`ss -tlnp 2>/dev/null | grep ':${port} '`);
+        if (stdout.includes('postgres')) {
+          return { running: true, port, details: 'detected via ss' };
+        }
+      } catch {
+        // Ignore
+      }
+
+      // Vérifier avec systemctl (try versioned service names too)
+      try {
+        const serviceNames = await detectLinuxServiceName();
+        for (const svc of serviceNames) {
+          try {
+            const { stdout } = await execAsync(`systemctl is-active ${svc} 2>/dev/null`);
+            if (stdout.trim() === 'active') {
+              return { running: true, port, details: `detected via systemctl (${svc})` };
+            }
+          } catch {
+            // Try next
+          }
         }
       } catch {
         // Ignore
@@ -480,17 +603,88 @@ export async function installPostgreSQL(
 }
 
 /**
- * Trouve le répertoire de données PostgreSQL sur macOS
+ * Finds the PostgreSQL data directory
  */
 async function findPostgresDataDir(): Promise<string | null> {
-  // D'abord, essayer de trouver via pg_config si disponible
+  const osType = getOS();
+
+  // On Linux (Debian/Ubuntu), try pg_lsclusters first (most reliable)
+  if (osType === 'linux') {
+    try {
+      const { stdout } = await execAsync('pg_lsclusters -h 2>/dev/null | head -1 || echo ""');
+      if (stdout.trim()) {
+        // Format: version cluster port status owner data_directory log_file
+        const parts = stdout.trim().split(/\s+/);
+        if (parts.length >= 6) {
+          const dataDir = parts[5];
+          try {
+            await execAsync(`test -d "${dataDir}"`);
+            logger.info(`Found PostgreSQL data directory via pg_lsclusters: ${dataDir}`);
+            return dataDir;
+          } catch {
+            // Ignore
+          }
+        }
+      }
+    } catch {
+      // Ignore - pg_lsclusters may not exist (RHEL/CentOS)
+    }
+
+    // Linux-specific data directory paths
+    const linuxDataDirs = [
+      '/var/lib/postgresql/17/main',
+      '/var/lib/postgresql/16/main',
+      '/var/lib/postgresql/15/main',
+      '/var/lib/postgresql/14/main',
+      '/var/lib/pgsql/17/data',
+      '/var/lib/pgsql/16/data',
+      '/var/lib/pgsql/15/data',
+      '/var/lib/pgsql/14/data',
+      '/var/lib/pgsql/data',
+      '/usr/local/pgsql/data'
+    ];
+
+    for (const dataDir of linuxDataDirs) {
+      try {
+        // On Debian/Ubuntu, postgresql.conf may be in /etc/postgresql/<ver>/main/
+        // so just check that the data directory exists and has PG_VERSION
+        await execAsync(`test -d "${dataDir}" && (test -f "${dataDir}/postgresql.conf" || test -f "${dataDir}/PG_VERSION")`);
+        logger.info(`Found PostgreSQL data directory on Linux: ${dataDir}`);
+        return dataDir;
+      } catch {
+        continue;
+      }
+    }
+
+    // Glob fallback for versioned paths
+    try {
+      const { stdout: found } = await execAsync('ls -d /var/lib/postgresql/*/main 2>/dev/null | sort -rV | head -1 || echo ""');
+      if (found.trim()) {
+        logger.info(`Found PostgreSQL data directory via glob: ${found.trim()}`);
+        return found.trim();
+      }
+    } catch {
+      // Ignore
+    }
+    try {
+      const { stdout: found } = await execAsync('ls -d /var/lib/pgsql/*/data 2>/dev/null | sort -rV | head -1 || echo ""');
+      if (found.trim()) {
+        logger.info(`Found PostgreSQL data directory via glob: ${found.trim()}`);
+        return found.trim();
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  // macOS: try pg_config
   try {
     const { stdout: pgConfigData } = await execAsync('pg_config --sysconfdir 2>/dev/null || echo ""');
     if (pgConfigData.trim()) {
       const sysconfdir = pgConfigData.trim();
-      // Le répertoire de données est généralement dans ../var/postgres ou ../var/postgresql@version
       const possibleDirs = [
         sysconfdir.replace('/etc', '/var/postgres'),
+        sysconfdir.replace('/etc', '/var/postgresql@17'),
         sysconfdir.replace('/etc', '/var/postgresql@16'),
         sysconfdir.replace('/etc', '/var/postgresql@15'),
         sysconfdir.replace('/etc', '/var/postgresql@14')
@@ -510,7 +704,7 @@ async function findPostgresDataDir(): Promise<string | null> {
     // Ignore
   }
 
-  // Ensuite, essayer les chemins standards (inclure PostgreSQL 17)
+  // macOS Homebrew paths
   const possibleDataDirs = [
     '/usr/local/var/postgresql@17',
     '/opt/homebrew/var/postgresql@17',
@@ -522,15 +716,12 @@ async function findPostgresDataDir(): Promise<string | null> {
     '/opt/homebrew/var/postgresql@15',
     '/usr/local/var/postgresql@14',
     '/opt/homebrew/var/postgresql@14',
-    // Chemins système standards
     '/usr/local/pgsql/data',
-    '/var/lib/postgresql',
     '/Library/PostgreSQL/*/data'
   ];
 
   for (const dataDir of possibleDataDirs) {
     try {
-      // Vérifier si le répertoire existe et contient les fichiers PostgreSQL
       await execAsync(`test -d "${dataDir}" && test -f "${dataDir}/postgresql.conf"`);
       logger.info(`Found PostgreSQL data directory: ${dataDir}`);
       return dataDir;
@@ -539,13 +730,13 @@ async function findPostgresDataDir(): Promise<string | null> {
     }
   }
 
-  // Essayer de trouver via ps aux
+  // Fallback: find via running process
   try {
     const { stdout: psOutput } = await execAsync('ps aux | grep "[p]ostgres" | grep -o "\\-D [^ ]*" | head -1 || echo ""');
     if (psOutput.trim()) {
       const dataDir = psOutput.trim().replace('-D ', '').trim();
       try {
-        await execAsync(`test -d "${dataDir}" && test -f "${dataDir}/postgresql.conf"`);
+        await execAsync(`test -d "${dataDir}"`);
         logger.info(`Found PostgreSQL data directory via process: ${dataDir}`);
         return dataDir;
       } catch {
@@ -560,52 +751,68 @@ async function findPostgresDataDir(): Promise<string | null> {
 }
 
 /**
- * Trouve le répertoire de données PostgreSQL à créer (même s'il n'existe pas encore)
+ * Finds a PostgreSQL data directory to create (even if it doesn't exist yet)
  */
 async function findPostgresDataDirToCreate(): Promise<string | null> {
-  // D'abord vérifier les répertoires existants
+  // First check existing directories
   const existing = await findPostgresDataDir();
   if (existing) {
     return existing;
   }
 
-  // Sinon, essayer de trouver où Homebrew installe PostgreSQL
+  const osType = getOS();
+
   try {
-    // Vérifier quelle version de PostgreSQL est installée
     const installed = await checkPostgresInstalled();
-    let majorVersion = '16';
-    let fullVersion = '';
+    let majorVersion = '17';
 
     if (installed.version) {
-      fullVersion = installed.version;
       const versionMatch = installed.version.match(/(\d+)\./);
-      majorVersion = versionMatch ? versionMatch[1] : '16';
+      majorVersion = versionMatch ? versionMatch[1] : '17';
     }
 
-    // Trouver le service PostgreSQL installé via brew
+    logger.info(`Detected PostgreSQL major version ${majorVersion}`);
+
+    if (osType === 'linux') {
+      // Linux: Debian/Ubuntu layout
+      const linuxDirs = [
+        `/var/lib/postgresql/${majorVersion}/main`,
+        `/var/lib/pgsql/${majorVersion}/data`,
+        `/var/lib/pgsql/data`
+      ];
+
+      for (const dir of linuxDirs) {
+        try {
+          const parentDir = dir.substring(0, dir.lastIndexOf('/'));
+          await execAsync(`test -d "${parentDir}"`);
+          logger.info(`Will create PostgreSQL data directory at: ${dir}`);
+          return dir;
+        } catch {
+          continue;
+        }
+      }
+
+      return `/var/lib/postgresql/${majorVersion}/main`;
+    }
+
+    // macOS: Homebrew paths
     const brewService = await findBrewPostgresService();
     if (brewService) {
-      // Extraire la version du nom du service
       const serviceVersionMatch = brewService.match(/postgresql@?(\d+)/);
       if (serviceVersionMatch) {
         majorVersion = serviceVersionMatch[1];
       }
     }
 
-    logger.info(`Detected PostgreSQL version ${fullVersion || majorVersion}, using major version ${majorVersion}`);
-
-    // Essayer les chemins possibles selon l'architecture et la version
     const possibleDirs = [
-      `/opt/homebrew/var/postgresql@${majorVersion}`, // Apple Silicon avec version
-      `/usr/local/var/postgresql@${majorVersion}`, // Intel avec version
-      `/opt/homebrew/var/postgres`, // Apple Silicon (version générique)
-      `/usr/local/var/postgres`, // Intel (version générique)
-      // Essayer aussi sans @ pour les versions récentes
+      `/opt/homebrew/var/postgresql@${majorVersion}`,
+      `/usr/local/var/postgresql@${majorVersion}`,
+      `/opt/homebrew/var/postgres`,
+      `/usr/local/var/postgres`,
       `/opt/homebrew/var/postgresql`,
       `/usr/local/var/postgresql`
     ];
 
-    // Retourner le premier répertoire parent qui existe
     for (const dir of possibleDirs) {
       try {
         const parentDir = dir.substring(0, dir.lastIndexOf('/'));
@@ -617,7 +824,6 @@ async function findPostgresDataDirToCreate(): Promise<string | null> {
       }
     }
 
-    // Si aucun parent n'existe, retourner le chemin le plus probable selon l'architecture
     const defaultDir = `/opt/homebrew/var/postgresql@${majorVersion}`;
     logger.info(`Using default PostgreSQL data directory: ${defaultDir}`);
     return defaultDir;
@@ -625,22 +831,25 @@ async function findPostgresDataDirToCreate(): Promise<string | null> {
     logger.warn(`Failed to determine PostgreSQL data directory: ${error.message}`);
   }
 
-  // Par défaut, essayer les chemins les plus courants
+  if (osType === 'linux') {
+    return '/var/lib/postgresql/17/main';
+  }
   return '/opt/homebrew/var/postgresql@17';
 }
 
 /**
- * Initialise le répertoire de données PostgreSQL
+ * Initializes the PostgreSQL data directory
  */
 async function initPostgresDatabase(
   dataDir: string,
   onProgress: (progress: InstallationProgress) => void
 ): Promise<{ success: boolean; error?: string }> {
   try {
+    const osType = getOS();
     onProgress({ step: 'initdb', message: `Initializing PostgreSQL database at ${dataDir}...`, progress: 80 });
     logger.info(`Initializing PostgreSQL database at ${dataDir}`);
 
-    // Créer le répertoire parent si nécessaire
+    // Create parent directory if needed
     const parentDir = dataDir.substring(0, dataDir.lastIndexOf('/'));
     try {
       await execAsync(`mkdir -p "${parentDir}"`);
@@ -648,10 +857,10 @@ async function initPostgresDatabase(
       logger.warn(`Failed to create parent directory: ${error.message}`);
     }
 
-    // Trouver initdb en fonction de la version installée
+    // Find initdb
     let initdbPath = '';
     const installed = await checkPostgresInstalled();
-    let majorVersion = '17'; // Par défaut PostgreSQL 17
+    let majorVersion = '17';
     if (installed.version) {
       const versionMatch = installed.version.match(/(\d+)\./);
       majorVersion = versionMatch ? versionMatch[1] : '17';
@@ -659,123 +868,143 @@ async function initPostgresDatabase(
 
     logger.info(`Looking for initdb for PostgreSQL ${majorVersion}`);
 
-    // Fonction pour vérifier si c'est le bon initdb (celui de PostgreSQL, pas libpq)
+    // Validate that initdb is real (not from libpq)
     const isValidInitdb = async (path: string): Promise<boolean> => {
       try {
-        // Vérifier que le répertoire parent contient aussi "postgres"
         const dir = path.substring(0, path.lastIndexOf('/'));
         const postgresPath = `${dir}/postgres`;
         await execAsync(`test -x "${postgresPath}"`);
         logger.info(`Verified initdb at ${path} is valid (postgres found in same directory)`);
         return true;
       } catch {
-        // Si postgres n'est pas dans le même répertoire, c'est probablement libpq
         logger.warn(`initdb at ${path} may be from libpq (postgres not found in same directory)`);
         return false;
       }
     };
 
-    // D'abord, essayer de trouver PostgreSQL via brew list
-    try {
-      const { stdout: brewList } = await execAsync('brew list 2>/dev/null | grep "^postgresql@" || echo ""');
-      if (brewList.trim()) {
-        const packages = brewList.trim().split('\n');
-        for (const pkg of packages) {
-          const versionMatch = pkg.match(/postgresql@(\d+)/);
-          if (versionMatch) {
-            const pkgVersion = versionMatch[1];
-            const possiblePath = `/opt/homebrew/opt/postgresql@${pkgVersion}/bin/initdb`;
-            try {
-              await execAsync(`test -x "${possiblePath}"`);
-              if (await isValidInitdb(possiblePath)) {
-                initdbPath = possiblePath;
-                logger.info(`Found initdb via brew list: ${initdbPath}`);
-                break;
+    if (osType === 'linux') {
+      // Linux: check standard paths first
+      const linuxInitdbPaths = [
+        `/usr/lib/postgresql/${majorVersion}/bin/initdb`,
+        '/usr/lib/postgresql/17/bin/initdb',
+        '/usr/lib/postgresql/16/bin/initdb',
+        '/usr/lib/postgresql/15/bin/initdb',
+        '/usr/lib/postgresql/14/bin/initdb',
+        '/usr/bin/initdb',
+        '/usr/local/bin/initdb'
+      ];
+
+      // Also try which
+      try {
+        const { stdout } = await execAsync('which initdb 2>/dev/null');
+        if (stdout.trim()) {
+          linuxInitdbPaths.unshift(stdout.trim());
+        }
+      } catch {
+        // Ignore
+      }
+
+      // Glob fallback
+      try {
+        const { stdout: found } = await execAsync('ls /usr/lib/postgresql/*/bin/initdb 2>/dev/null | sort -rV | head -1 || echo ""');
+        if (found.trim()) {
+          linuxInitdbPaths.unshift(found.trim());
+        }
+      } catch {
+        // Ignore
+      }
+
+      for (const p of linuxInitdbPaths) {
+        try {
+          await execAsync(`test -x "${p}"`);
+          initdbPath = p;
+          logger.info(`Found initdb on Linux at: ${initdbPath}`);
+          break;
+        } catch {
+          continue;
+        }
+      }
+
+      if (!initdbPath) {
+        logger.error('Could not find initdb on Linux');
+        return {
+          success: false,
+          error: `Could not find initdb on this system.\n\nPlease install PostgreSQL server:\n  sudo apt install postgresql\n  or: sudo dnf install postgresql-server\n\nThen retry.`
+        };
+      }
+    } else {
+      // macOS: Homebrew-based search
+      try {
+        const { stdout: brewList } = await execAsync('brew list 2>/dev/null | grep "^postgresql@" || echo ""');
+        if (brewList.trim()) {
+          const packages = brewList.trim().split('\n');
+          for (const pkg of packages) {
+            const versionMatch = pkg.match(/postgresql@(\d+)/);
+            if (versionMatch) {
+              const pkgVersion = versionMatch[1];
+              const possiblePath = `/opt/homebrew/opt/postgresql@${pkgVersion}/bin/initdb`;
+              try {
+                await execAsync(`test -x "${possiblePath}"`);
+                if (await isValidInitdb(possiblePath)) {
+                  initdbPath = possiblePath;
+                  logger.info(`Found initdb via brew list: ${initdbPath}`);
+                  break;
+                }
+              } catch {
+                continue;
               }
-            } catch {
-              continue;
             }
           }
         }
+      } catch {
+        // Ignore
       }
-    } catch {
-      // Ignore
-    }
 
-    // Chercher d'abord dans les chemins spécifiques à PostgreSQL (pas libpq)
-    // L'ordre est important : on veut éviter libpq qui est dans /opt/homebrew/bin
-    const possibleInitdbPaths = [
-      `/opt/homebrew/opt/postgresql@${majorVersion}/bin/initdb`,
-      `/usr/local/opt/postgresql@${majorVersion}/bin/initdb`,
-      '/opt/homebrew/opt/postgresql@17/bin/initdb',
-      '/usr/local/opt/postgresql@17/bin/initdb',
-      '/opt/homebrew/opt/postgresql@16/bin/initdb',
-      '/usr/local/opt/postgresql@16/bin/initdb',
-      '/opt/homebrew/opt/postgresql/bin/initdb',
-      '/usr/local/opt/postgresql/bin/initdb'
-    ];
+      if (!initdbPath) {
+        const possibleInitdbPaths = [
+          `/opt/homebrew/opt/postgresql@${majorVersion}/bin/initdb`,
+          `/usr/local/opt/postgresql@${majorVersion}/bin/initdb`,
+          '/opt/homebrew/opt/postgresql@17/bin/initdb',
+          '/usr/local/opt/postgresql@17/bin/initdb',
+          '/opt/homebrew/opt/postgresql@16/bin/initdb',
+          '/usr/local/opt/postgresql@16/bin/initdb',
+          '/opt/homebrew/opt/postgresql/bin/initdb',
+          '/usr/local/opt/postgresql/bin/initdb'
+        ];
 
-    for (const path of possibleInitdbPaths) {
-      try {
-        let foundPath = '';
-
-        // Essayer de vérifier si le fichier existe et est exécutable
-        try {
-          await execAsync(`test -x "${path}"`);
-          foundPath = path;
-        } catch {
-          // Essayer which
+        for (const path of possibleInitdbPaths) {
           try {
-            const { stdout } = await execAsync(`which ${path} 2>/dev/null`);
-            if (stdout.trim()) {
-              foundPath = stdout.trim();
+            await execAsync(`test -x "${path}"`);
+            if (await isValidInitdb(path)) {
+              initdbPath = path;
+              logger.info(`Found valid PostgreSQL initdb at: ${initdbPath}`);
+              break;
+            } else if (!initdbPath) {
+              initdbPath = path;
+              logger.warn(`Found initdb at ${path} but may be from libpq, continuing search...`);
             }
           } catch {
             continue;
           }
         }
-
-        if (foundPath) {
-          // Vérifier que c'est le bon initdb (pas celui de libpq)
-          if (await isValidInitdb(foundPath)) {
-            initdbPath = foundPath;
-            logger.info(`Found valid PostgreSQL initdb at: ${initdbPath}`);
-            break;
-          } else if (!initdbPath) {
-            // Garder en mémoire au cas où on ne trouve rien d'autre
-            initdbPath = foundPath;
-            logger.warn(`Found initdb at ${foundPath} but may be from libpq, continuing search...`);
-          }
-        }
-      } catch {
-        continue;
       }
-    }
 
-    // Si on n'a trouvé que celui de libpq, rejeter immédiatement
-    if (initdbPath && (initdbPath.includes('libpq') || initdbPath.includes('Cellar/libpq'))) {
-      logger.error(`Found initdb from libpq at ${initdbPath}, this won't work. Need full PostgreSQL installation.`);
-      return {
-        success: false,
-        error: `Found initdb from libpq (client library) at ${initdbPath}, but need full PostgreSQL server installation.\n\nThe libpq package only provides client tools, not the server.\n\nPlease install PostgreSQL server:\nbrew install postgresql@${majorVersion}\n\nThis will install both the server and client tools including the correct initdb.`
-      };
-    }
+      // Reject libpq initdb
+      if (initdbPath && (initdbPath.includes('libpq') || initdbPath.includes('Cellar/libpq'))) {
+        logger.error(`Found initdb from libpq at ${initdbPath}, this won't work.`);
+        return {
+          success: false,
+          error: `Found initdb from libpq (client library) at ${initdbPath}, but need full PostgreSQL server.\n\nPlease install PostgreSQL server:\nbrew install postgresql@${majorVersion}`
+        };
+      }
 
-    if (!initdbPath) {
-      logger.error('Could not find valid PostgreSQL initdb command');
-      return {
-        success: false,
-        error: `Could not find initdb from PostgreSQL server installation.\n\nYou may have libpq (client library) installed but not the full PostgreSQL server.\n\nPlease install PostgreSQL server:\nbrew install postgresql@${majorVersion}\n\nOr find initdb manually:\nfind /opt/homebrew/opt/postgresql* /usr/local/opt/postgresql* -name initdb 2>/dev/null`
-      };
-    }
-
-    // Vérification finale : s'assurer que ce n'est pas libpq (double vérification)
-    if (initdbPath && (initdbPath.includes('libpq') || initdbPath.includes('Cellar/libpq'))) {
-      logger.error(`Found initdb from libpq at ${initdbPath}, this won't work`);
-      return {
-        success: false,
-        error: `Found initdb from libpq (client library) at ${initdbPath}, but need full PostgreSQL server installation.\n\nThe libpq package only provides client tools, not the server.\n\nPlease install PostgreSQL server:\nbrew install postgresql@${majorVersion}\n\nThis will install both the server and client tools including the correct initdb.`
-      };
+      if (!initdbPath) {
+        logger.error('Could not find valid PostgreSQL initdb command');
+        return {
+          success: false,
+          error: `Could not find initdb from PostgreSQL server installation.\n\nPlease install PostgreSQL server:\nbrew install postgresql@${majorVersion}`
+        };
+      }
     }
 
     // Initialiser la base de données
@@ -865,6 +1094,48 @@ async function findBrewPostgresService(): Promise<string | null> {
   }
 
   return null;
+}
+
+/**
+ * Detects the actual PostgreSQL systemd service name on Linux.
+ * Varies by distro: "postgresql" (Arch), "postgresql@14-main" (Debian), etc.
+ */
+async function detectLinuxServiceName(): Promise<string[]> {
+  const names: string[] = [];
+
+  try {
+    // List all postgresql service unit files
+    const { stdout } = await execAsync('systemctl list-unit-files "postgresql*" --no-legend 2>/dev/null || echo ""');
+    for (const line of stdout.trim().split('\n')) {
+      const match = line.trim().match(/^(postgresql\S*\.service)/);
+      if (match) {
+        names.push(match[1]);
+      }
+    }
+  } catch {
+    // Ignore
+  }
+
+  // Also try listing active/inactive units (catches enabled but masked units)
+  try {
+    const { stdout } = await execAsync('systemctl list-units "postgresql*" --all --no-legend 2>/dev/null || echo ""');
+    for (const line of stdout.trim().split('\n')) {
+      const match = line.trim().match(/^(postgresql\S*\.service)/);
+      if (match && !names.includes(match[1])) {
+        names.push(match[1]);
+      }
+    }
+  } catch {
+    // Ignore
+  }
+
+  if (names.length === 0) {
+    // Fallback: try common names
+    names.push('postgresql', 'postgresql.service');
+  }
+
+  logger.info(`Detected Linux PostgreSQL service names: ${names.join(', ')}`);
+  return names;
 }
 
 /**
@@ -1007,17 +1278,8 @@ export async function startPostgreSQL(
 
               // Vérifier aussi avec une connexion directe
               try {
-                const { Client } = await import('pg');
-                const testClient = new Client({
-                  host: 'localhost',
-                  port: port,
-                  user: 'postgres',
-                  password: '',
-                  database: 'postgres',
-                  connectionTimeoutMillis: 5000
-                });
-                await testClient.connect();
-                await testClient.end();
+                const currentUser = os.userInfo().username;
+                await tryPgConnect(port, currentUser);
                 logger.info('PostgreSQL connection test successful');
                 return { success: true };
               } catch (connError: any) {
@@ -1146,18 +1408,71 @@ export async function startPostgreSQL(
         error: errorMsg
       };
     } else if (osType === 'linux') {
+      // Check if already running
+      const alreadyRunning = await checkPostgresRunning(port);
+      if (alreadyRunning.running) {
+        logger.info('PostgreSQL is already running on Linux');
+        return { success: true };
+      }
+
       onProgress({ step: 'starting', message: 'Starting PostgreSQL service...', progress: 50 });
 
-      try {
-        await execAsync('sudo systemctl start postgresql || sudo service postgresql start');
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        return { success: true };
-      } catch (error: any) {
-        return {
-          success: false,
-          error: `Failed to start PostgreSQL: ${error.message}. You may need to run with sudo.`
-        };
+      // Detect the actual service name (varies by distro: postgresql, postgresql@14-main, etc.)
+      const serviceNames = await detectLinuxServiceName();
+
+      // Build start commands for each detected service name
+      const startCommands: string[] = [];
+      for (const svc of serviceNames) {
+        startCommands.push(
+          `systemctl start ${svc}`,
+          `pkexec systemctl start ${svc}`,
+          `sudo -n systemctl start ${svc}`,
+        );
       }
+      // Fallback: try generic service command
+      startCommands.push('pkexec service postgresql start');
+
+      let started = false;
+      let lastError = '';
+
+      for (const cmd of startCommands) {
+        try {
+          logger.info(`Trying to start PostgreSQL on Linux: ${cmd}`);
+          await execAsync(cmd, { timeout: 30000 });
+          await new Promise(resolve => setTimeout(resolve, 2000));
+
+          const running = await checkPostgresRunning(port);
+          if (running.running) {
+            logger.info(`PostgreSQL started on Linux via: ${cmd}`);
+            started = true;
+            break;
+          }
+        } catch (error: any) {
+          lastError = error.message;
+          logger.info(`Start command failed: ${cmd} — ${error.message}`);
+          continue;
+        }
+      }
+
+      if (!started) {
+        // Final check — maybe it started but detection was slow
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        const finalCheck = await checkPostgresRunning(port);
+        if (finalCheck.running) {
+          started = true;
+        }
+      }
+
+      if (started) {
+        // After starting, create a role for the current OS user if it doesn't exist
+        await createLinuxUserRole(onProgress);
+        return { success: true };
+      }
+
+      return {
+        success: false,
+        error: `Failed to start PostgreSQL on Linux.\n\nLast error: ${lastError}\n\nPlease start it manually:\n  sudo systemctl start postgresql\n  sudo systemctl enable postgresql`
+      };
     } else {
       return {
         success: false,
@@ -1170,6 +1485,62 @@ export async function startPostgreSQL(
       error: `Failed to start PostgreSQL: ${error.message}`
     };
   }
+}
+
+/**
+ * Creates a PostgreSQL role for the current OS user on Linux.
+ * On a fresh Linux install, only the 'postgres' role exists.
+ * Peer auth requires the OS user to match the PG role, so we need to create one.
+ */
+async function createLinuxUserRole(
+  onProgress?: (progress: InstallationProgress) => void
+): Promise<void> {
+  const currentUser = os.userInfo().username;
+  if (!currentUser || currentUser === 'postgres') return;
+
+  // Check if role already exists by trying to connect via socket
+  try {
+    await tryPgConnect(5432, currentUser);
+    logger.info(`PostgreSQL role "${currentUser}" already exists`);
+    return;
+  } catch {
+    // Role doesn't exist, proceed to create it
+  }
+
+  if (onProgress) {
+    onProgress({ step: 'creating_user', message: `Creating PostgreSQL role for "${currentUser}"...`, progress: 55 });
+  }
+
+  // Try multiple methods to create the role
+  const createCommands = [
+    // 1. sudo -n -u postgres: works when user has NOPASSWD sudo or active sudo session
+    `sudo -n -u postgres createuser -s "${currentUser}"`,
+    // 2. pkexec runs as root, then su to postgres (pkexec shows graphical auth dialog)
+    `pkexec su - postgres -c 'createuser -s "${currentUser}"'`,
+    // 3. sudo with password prompt (works if user has sudo access and TTY)
+    `sudo -u postgres createuser -s "${currentUser}"`,
+    // 4. Fallback: try psql directly via sudo
+    `sudo -n -u postgres psql -c "CREATE ROLE \\"${currentUser}\\" WITH SUPERUSER LOGIN;"`,
+  ];
+
+  for (const cmd of createCommands) {
+    try {
+      logger.info(`Trying to create PG role: ${cmd}`);
+      await execAsync(cmd, { timeout: 30000 });
+      logger.info(`Successfully created PostgreSQL role "${currentUser}"`);
+      return;
+    } catch (error: any) {
+      // "already exists" is fine
+      if (error.message?.includes('already exists') || error.stderr?.includes('already exists')) {
+        logger.info(`PostgreSQL role "${currentUser}" already exists`);
+        return;
+      }
+      logger.info(`Create role command failed: ${cmd} — ${error.message}`);
+      continue;
+    }
+  }
+
+  logger.warn(`Could not create PostgreSQL role "${currentUser}" automatically. User may need to run: sudo -u postgres createuser -s ${currentUser}`);
 }
 
 /**
@@ -1199,9 +1570,12 @@ export async function ensurePostgreSQL(
         onProgress({ step: 'installing', message: 'Installing PostgreSQL server (only client found)...', progress: 10 });
         const installResult = await installPostgreSQL(onProgress);
         if (!installResult.success) {
+          const installHint = getOS() === 'linux'
+            ? 'sudo apt install postgresql\nor: sudo dnf install postgresql-server'
+            : 'brew install postgresql@17';
           return {
             success: false,
-            error: `Only PostgreSQL client (libpq) is installed, but server is required.\n\n${installResult.error}\n\nPlease install PostgreSQL server manually:\nbrew install postgresql@17`
+            error: `Only PostgreSQL client (libpq) is installed, but server is required.\n\n${installResult.error}\n\nPlease install PostgreSQL server manually:\n${installHint}`
           };
         }
         // Re-vérifier après installation
@@ -1250,14 +1624,16 @@ export async function ensurePostgreSQL(
           // Retourner l'erreur d'initialisation plutôt que de continuer
           return {
             success: false,
-            error: `Failed to initialize PostgreSQL database: ${initResult.error}\n\nPlease try manually:\n1. initdb ${dataDirToCreate}\n2. brew services start postgresql@17`
+            error: `Failed to initialize PostgreSQL database: ${initResult.error}\n\nPlease try manually:\n1. initdb ${dataDirToCreate}\n2. ${getOS() === 'linux' ? 'sudo systemctl start postgresql' : 'brew services start postgresql@17'}`
           };
         }
       } else {
         logger.error('Could not determine where to create PostgreSQL data directory');
         return {
           success: false,
-          error: 'Could not determine where to create PostgreSQL data directory. Please initialize manually:\n1. initdb /opt/homebrew/var/postgresql@17\n2. brew services start postgresql@17'
+          error: getOS() === 'linux'
+            ? 'Could not determine where to create PostgreSQL data directory. Please install PostgreSQL:\nsudo apt install postgresql\nor: sudo dnf install postgresql-server'
+            : 'Could not determine where to create PostgreSQL data directory. Please initialize manually:\n1. initdb /opt/homebrew/var/postgresql@17\n2. brew services start postgresql@17'
         };
       }
     } else {
@@ -1298,18 +1674,7 @@ export async function ensurePostgreSQL(
           if (!user) continue;
 
           try {
-            const { Client } = await import('pg');
-            const testClient = new Client({
-              host: 'localhost',
-              port: port,
-              user: user,
-              password: '',
-              database: 'postgres',
-              connectionTimeoutMillis: 5000
-            });
-
-            await testClient.connect();
-            await testClient.end();
+            await tryPgConnect(port, user);
 
             logger.info(`PostgreSQL is actually accessible with user ${user}`);
             running = { running: true, port };
@@ -1325,7 +1690,9 @@ export async function ensurePostgreSQL(
           logger.error(`PostgreSQL connection test failed with all users`);
           return {
             success: false,
-            error: startResult.error || `PostgreSQL is not running on port ${port} and could not be started automatically.\n\nPlease try manually:\n1. brew services start postgresql@17\n2. Or: pg_ctl -D /opt/homebrew/var/postgresql@17 start`
+            error: startResult.error || (getOS() === 'linux'
+              ? `PostgreSQL is not running on port ${port} and could not be started automatically.\n\nPlease try manually:\nsudo systemctl start postgresql`
+              : `PostgreSQL is not running on port ${port} and could not be started automatically.\n\nPlease try manually:\n1. brew services start postgresql@17\n2. Or: pg_ctl -D /opt/homebrew/var/postgresql@17 start`)
           };
         }
       }
@@ -1336,12 +1703,19 @@ export async function ensurePostgreSQL(
     } else {
       return {
         success: false,
-        error: `PostgreSQL is not running on port ${port}.\n\nPlease start it manually:\n1. brew services start postgresql@17\n2. Or: pg_ctl -D /opt/homebrew/var/postgresql@17 start`
+        error: getOS() === 'linux'
+          ? `PostgreSQL is not running on port ${port}.\n\nPlease start it manually:\nsudo systemctl start postgresql`
+          : `PostgreSQL is not running on port ${port}.\n\nPlease start it manually:\n1. brew services start postgresql@17\n2. Or: pg_ctl -D /opt/homebrew/var/postgresql@17 start`
       };
     }
 
     // Vérification finale : s'assurer que PostgreSQL est vraiment accessible
     onProgress({ step: 'verifying', message: 'Verifying PostgreSQL connection...', progress: 98 });
+
+    // On Linux, ensure the current OS user has a PostgreSQL role (peer auth requires it)
+    if (getOS() === 'linux') {
+      await createLinuxUserRole(onProgress);
+    }
 
     // Détecter l'utilisateur PostgreSQL à utiliser
     let postgresUser = 'postgres';
@@ -1358,18 +1732,7 @@ export async function ensurePostgreSQL(
       if (!user) continue;
 
       try {
-        const { Client } = await import('pg');
-        const verifyClient = new Client({
-          host: 'localhost',
-          port: port,
-          user: user,
-          password: '',
-          database: 'postgres',
-          connectionTimeoutMillis: 5000
-        });
-
-        await verifyClient.connect();
-        await verifyClient.end();
+        await tryPgConnect(port, user);
         postgresUser = user;
         connected = true;
         logger.info(`PostgreSQL connection verified successfully on port ${port} with user: ${user}`);
@@ -1388,17 +1751,7 @@ export async function ensurePostgreSQL(
 
       // Essayer de se connecter avec l'utilisateur système pour créer postgres
       try {
-        const { Client } = await import('pg');
-        const adminClient = new Client({
-          host: 'localhost',
-          port: port,
-          user: currentUser,
-          password: '',
-          database: 'postgres',
-          connectionTimeoutMillis: 5000
-        });
-
-        await adminClient.connect();
+        const adminClient = await getPgClient(port, currentUser);
         logger.info(`Connected as ${currentUser}, creating postgres user...`);
 
         // Créer l'utilisateur postgres s'il n'existe pas
@@ -1409,38 +1762,23 @@ export async function ensurePostgreSQL(
           // Tester la connexion avec postgres
           await adminClient.end();
 
-          const { Client: PostgresClient } = await import('pg');
-          const testClient = new PostgresClient({
-            host: 'localhost',
-            port: port,
-            user: 'postgres',
-            password: '',
-            database: 'postgres',
-            connectionTimeoutMillis: 5000
-          });
-          await testClient.connect();
-          await testClient.end();
-          postgresUser = 'postgres';
-          connected = true;
-          logger.info('PostgreSQL connection verified with newly created postgres user');
+          try {
+            await tryPgConnect(port, 'postgres');
+            postgresUser = 'postgres';
+            connected = true;
+            logger.info('PostgreSQL connection verified with newly created postgres user');
+          } catch {
+            postgresUser = currentUser;
+            connected = true;
+            logger.info(`Will use system user ${currentUser} for PostgreSQL connections`);
+          }
         } catch (createError: any) {
           // L'utilisateur existe peut-être déjà ou erreur de permissions
           if (createError.message.includes('already exists')) {
             logger.info('PostgreSQL user "postgres" already exists');
-            // Réessayer la connexion avec postgres
             await adminClient.end();
             try {
-              const { Client: PostgresClient } = await import('pg');
-              const testClient = new PostgresClient({
-                host: 'localhost',
-                port: port,
-                user: 'postgres',
-                password: '',
-                database: 'postgres',
-                connectionTimeoutMillis: 5000
-              });
-              await testClient.connect();
-              await testClient.end();
+              await tryPgConnect(port, 'postgres');
               postgresUser = 'postgres';
               connected = true;
               logger.info('PostgreSQL connection verified with existing postgres user');
@@ -1468,9 +1806,15 @@ export async function ensurePostgreSQL(
 
     if (!connected) {
       logger.error(`PostgreSQL connection verification failed: ${connectionError}`);
+
+      const isLinux = getOS() === 'linux';
+      const hint = isLinux
+        ? `\n\nPlease try:\n  sudo -u postgres createuser -s ${currentUser}\n  sudo systemctl restart postgresql`
+        : `\n\nThe system will try to use your system user (${currentUser}) for connections.`;
+
       return {
         success: false,
-        error: `PostgreSQL appears to be running but is not accessible.\n\nError: ${connectionError}\n\nThe system will try to use your system user (${currentUser}) for connections.`
+        error: `PostgreSQL appears to be running but is not accessible.\n\nError: ${connectionError}${hint}`
       };
     }
 
@@ -1518,12 +1862,16 @@ export async function restartPostgresService(): Promise<{ success: boolean; erro
         return { success: false, error: 'Could not find a PostgreSQL service to restart' };
       }
     } else if (osType === 'linux') {
-      try {
-        await execAsync('systemctl restart postgresql');
-        return { success: true };
-      } catch (error: any) {
-        return { success: false, error: `Failed to restart via systemctl: ${error.message}` };
+      const serviceNames = await detectLinuxServiceName();
+      for (const svc of serviceNames) {
+        try {
+          await execAsync(`systemctl restart ${svc} 2>/dev/null || pkexec systemctl restart ${svc} 2>/dev/null || sudo -n systemctl restart ${svc}`);
+          return { success: true };
+        } catch {
+          continue;
+        }
       }
+      return { success: false, error: 'Failed to restart PostgreSQL. Try: sudo systemctl restart postgresql' };
     } else if (osType === 'windows') {
       try {
         // Tenter de trouver le nom du service

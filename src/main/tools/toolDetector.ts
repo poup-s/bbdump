@@ -23,17 +23,24 @@ async function resolveWildcardPath(wildcardPath: string): Promise<string[]> {
   if (!wildcardPath.includes('*')) {
     return [wildcardPath];
   }
-  
+
   const resolved: string[] = [];
-  
+
   try {
     // Extraire le répertoire parent et le pattern
     const parts = wildcardPath.split('*');
     const baseDir = parts[0].substring(0, parts[0].lastIndexOf('/'));
     const suffix = parts[parts.length - 1];
-    
+
     if (fs.existsSync(baseDir)) {
       const entries = fs.readdirSync(baseDir);
+      // Sort entries by version number descending (e.g., 17 before 16 before 14)
+      // so that the highest version is found first
+      entries.sort((a, b) => {
+        const numA = parseInt(a.replace(/\D/g, '')) || 0;
+        const numB = parseInt(b.replace(/\D/g, '')) || 0;
+        return numB - numA;
+      });
       for (const entry of entries) {
         const fullPath = path.join(baseDir, entry, suffix);
         if (fs.existsSync(fullPath)) {
@@ -44,7 +51,7 @@ async function resolveWildcardPath(wildcardPath: string): Promise<string[]> {
   } catch (error) {
     // Ignore les erreurs de résolution
   }
-  
+
   return resolved;
 }
 
@@ -55,34 +62,41 @@ export async function detectTool(
   toolName: string,
   possiblePaths?: string[]
 ): Promise<ToolDetectionResult> {
-  // Étape 1 : Essayer which
-  try {
-    const { stdout } = await execAsync(`which ${toolName} 2>/dev/null || echo ""`);
-    const whichPath = stdout.trim();
-    
-    if (whichPath && !whichPath.includes('not found') && fs.existsSync(whichPath)) {
-      // Vérifier la version si possible
-      let version: string | undefined;
-      try {
-        const { stdout: versionOutput } = await execAsync(`${whichPath} --version 2>/dev/null || echo ""`);
-        const versionMatch = versionOutput.match(/(\d+\.\d+)/);
-        version = versionMatch ? versionMatch[1] : undefined;
-      } catch {
-        // Ignore les erreurs de version
+  const isLinux = getOSType() === 'linux';
+
+  // On Linux, check version-specific paths FIRST (before `which`) because `which`
+  // returns the system package version (e.g. pg_dump v14 from apt) while a newer
+  // version (v17) may be installed at /usr/lib/postgresql/17/bin/pg_dump.
+  // On macOS, `which` is fine because Homebrew manages PATH correctly.
+  if (!isLinux) {
+    // Étape 1 (macOS/Windows) : Essayer which
+    try {
+      const { stdout } = await execAsync(`which ${toolName} 2>/dev/null || echo ""`);
+      const whichPath = stdout.trim();
+
+      if (whichPath && !whichPath.includes('not found') && fs.existsSync(whichPath)) {
+        let version: string | undefined;
+        try {
+          const { stdout: versionOutput } = await execAsync(`${whichPath} --version 2>/dev/null || echo ""`);
+          const versionMatch = versionOutput.match(/(\d+\.\d+)/);
+          version = versionMatch ? versionMatch[1] : undefined;
+        } catch {
+          // Ignore
+        }
+
+        return {
+          installed: true,
+          path: whichPath,
+          method: 'which',
+          version
+        };
       }
-      
-      return {
-        installed: true,
-        path: whichPath,
-        method: 'which',
-        version
-      };
+    } catch {
+      // Continue avec les chemins standards
     }
-  } catch {
-    // Continue avec les chemins standards
   }
-  
-  // Étape 2 : Vérifier les chemins standards fournis
+
+  // Étape 2 : Vérifier les chemins standards fournis (version-specific first on Linux)
   if (possiblePaths && possiblePaths.length > 0) {
     for (const testPath of possiblePaths) {
       // Résoudre les wildcards
@@ -119,6 +133,34 @@ export async function detectTool(
     }
   }
   
+  // On Linux, try `which` as last resort (after version-specific paths)
+  if (isLinux) {
+    try {
+      const { stdout } = await execAsync(`which ${toolName} 2>/dev/null || echo ""`);
+      const whichPath = stdout.trim();
+
+      if (whichPath && !whichPath.includes('not found') && fs.existsSync(whichPath)) {
+        let version: string | undefined;
+        try {
+          const { stdout: versionOutput } = await execAsync(`${whichPath} --version 2>/dev/null || echo ""`);
+          const versionMatch = versionOutput.match(/(\d+\.\d+)/);
+          version = versionMatch ? versionMatch[1] : undefined;
+        } catch {
+          // Ignore
+        }
+
+        return {
+          installed: true,
+          path: whichPath,
+          method: 'which',
+          version
+        };
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
   // Si rien n'est trouvé
   return {
     installed: false,

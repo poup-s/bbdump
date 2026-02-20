@@ -4,6 +4,7 @@ import { logger } from './logger';
 import * as net from 'net';
 import * as os from 'os';
 import * as postgresManager from './postgresManager';
+import { tryPgConnect, getPgClient } from './postgresManager';
 
 interface CreateDatabaseParams {
   name: string;
@@ -42,9 +43,25 @@ async function checkPostgresServer(port: number, password?: string): Promise<{ a
   const currentUser = os.userInfo().username;
   const usersToTry = [currentUser, 'postgres', process.env.USER || '', process.env.USERNAME || ''];
 
+  const isLinux = os.platform() === 'linux';
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    // Essayer avec différents utilisateurs et mots de passe
-    const passwords = ['', 'postgres', 'admin', 'password'];
+    // On Linux, try Unix socket first (peer auth, no password needed)
+    if (isLinux) {
+      for (const user of usersToTry) {
+        if (!user) continue;
+        try {
+          await tryPgConnect(port, user);
+          logger.info(`PostgreSQL server is accessible on port ${port} with user ${user} via socket (attempt ${attempt}/${maxAttempts})`);
+          return { available: true };
+        } catch (error: any) {
+          lastError = error.message;
+        }
+      }
+    }
+
+    // TCP connections with various passwords
+    const passwords = isLinux ? ['postgres', 'admin', 'password'] : ['', 'postgres', 'admin', 'password'];
     if (password) {
       passwords.unshift(password);
     }
@@ -52,14 +69,14 @@ async function checkPostgresServer(port: number, password?: string): Promise<{ a
     for (const user of usersToTry) {
       if (!user) continue;
 
-      for (const password of passwords) {
+      for (const pwd of passwords) {
         const testClient = new Client({
           host: 'localhost',
           port: port,
           user: user,
-          password: password,
+          password: pwd,
           database: 'postgres',
-          connectionTimeoutMillis: 5000 // Timeout de 5 secondes
+          connectionTimeoutMillis: 5000
         });
 
         try {
@@ -95,16 +112,23 @@ async function checkPostgresServer(port: number, password?: string): Promise<{ a
     server.on('error', () => resolve(false));
   });
 
+  const startHint = isLinux
+    ? 'sudo systemctl start postgresql'
+    : 'brew services start postgresql@17';
+  const checkHint = isLinux
+    ? 'systemctl status postgresql'
+    : 'brew services list | grep postgresql';
+
   if (portAvailable) {
     return {
       available: false,
-      error: `No PostgreSQL server found on port ${port}. The port is free, which means PostgreSQL is not running on this port.\n\nPlease:\n1. Start PostgreSQL: brew services start postgresql@17\n2. Or manually: pg_ctl -D /opt/homebrew/var/postgresql@17 start\n3. Verify PostgreSQL is running: brew services list | grep postgresql`
+      error: `No PostgreSQL server found on port ${port}. The port is free, which means PostgreSQL is not running on this port.\n\nPlease:\n1. Start PostgreSQL: ${startHint}\n2. Verify PostgreSQL is running: ${checkHint}`
     };
   }
 
   return {
     available: false,
-    error: `Cannot connect to PostgreSQL server on port ${port} after ${maxAttempts} attempts.\n\nLast error: ${lastError}\n\nPossible solutions:\n- Make sure PostgreSQL is installed and running\n- Start PostgreSQL: brew services start postgresql@17\n- Or manually: pg_ctl -D /opt/homebrew/var/postgresql@17 start\n- Check if PostgreSQL is running: brew services list | grep postgresql`
+    error: `Cannot connect to PostgreSQL server on port ${port} after ${maxAttempts} attempts.\n\nLast error: ${lastError}\n\nPossible solutions:\n- Make sure PostgreSQL is installed and running\n- Start PostgreSQL: ${startHint}\n- Check if PostgreSQL is running: ${checkHint}`
   };
 }
 
@@ -112,19 +136,31 @@ async function checkPostgresServer(port: number, password?: string): Promise<{ a
  * Détecte l'utilisateur PostgreSQL à utiliser
  */
 async function detectPostgresUser(port: number, password?: string): Promise<string> {
-  const os = await import('os');
   const currentUser = os.userInfo().username;
   const usersToTry = [currentUser, 'postgres', process.env.USER || '', process.env.USERNAME || ''];
+  const isLinux = os.platform() === 'linux';
 
   for (const user of usersToTry) {
     if (!user) continue;
 
+    // On Linux, try Unix socket first (peer auth)
+    if (isLinux) {
+      try {
+        await tryPgConnect(port, user);
+        logger.info(`Detected PostgreSQL user: ${user} (via socket)`);
+        return user;
+      } catch {
+        // Fall through to TCP
+      }
+    }
+
+    // TCP with provided password or empty (macOS trust auth)
     try {
       const testClient = new Client({
         host: 'localhost',
         port: port,
         user: user,
-        password: password || '',
+        password: password || (isLinux ? 'postgres' : ''),
         database: 'postgres',
         connectionTimeoutMillis: 3000
       });
@@ -155,19 +191,30 @@ async function connectToPostgresServer(port: number, password?: string): Promise
 
   // Détecter l'utilisateur PostgreSQL à utiliser
   const postgresUser = await detectPostgresUser(port, password);
+  const isLinux = os.platform() === 'linux';
+
+  // On Linux, try Unix socket first (peer auth)
+  if (isLinux) {
+    try {
+      const client = await getPgClient(port, postgresUser);
+      return client;
+    } catch {
+      // Fall through to TCP attempts
+    }
+  }
 
   // Essayer de se connecter avec différents mots de passe
-  const passwords = ['', 'postgres', 'admin', 'password'];
+  const passwords = isLinux ? ['postgres', 'admin', 'password'] : ['', 'postgres', 'admin', 'password'];
   if (password) {
     passwords.unshift(password);
   }
 
-  for (const password of passwords) {
+  for (const pwd of passwords) {
     const client = new Client({
       host: 'localhost',
       port: port,
       user: postgresUser,
-      password: password,
+      password: pwd,
       database: 'postgres',
       connectionTimeoutMillis: 5000
     });

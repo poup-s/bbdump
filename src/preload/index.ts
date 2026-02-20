@@ -17,7 +17,9 @@ const api = {
     shell: {
         openExternal: (url: string) => import('electron').then(({ shell }) => shell.openExternal(url)),
         showItemInFolder: (path: string) => import('electron').then(({ shell }) => shell.showItemInFolder(path))
-    }
+    },
+    // Platform info
+    platform: process.platform
 };
 
 // Use `contextBridge` APIs to expose Electron APIs to

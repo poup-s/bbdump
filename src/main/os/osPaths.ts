@@ -80,46 +80,29 @@ export function getToolPaths(os: OSType, arch?: Architecture): ToolPaths {
       ]
     };
   } else if (os === 'linux') {
-    // Chemins standards Linux
+    // Linux: version-specific paths FIRST (higher version preferred),
+    // then generic paths as fallback. This avoids using an old system
+    // pg_dump (e.g. v14 from apt) when a newer version is available.
+    const buildLinuxPaths = (tool: string): string[] => [
+      // Version-specific paths (wildcard resolves to highest version)
+      `/usr/lib/postgresql/*/bin/${tool}`,
+      `/opt/postgresql/*/bin/${tool}`,
+      `/usr/local/lib/postgresql/*/bin/${tool}`,
+      // RHEL/Fedora paths
+      `/usr/pgsql-*/bin/${tool}`,
+      // Generic system paths (may be older version from apt/dnf)
+      `/usr/local/bin/${tool}`,
+      `/usr/bin/${tool}`,
+    ];
+
     return {
-      pgDump: [
-        '/usr/bin/pg_dump',
-        '/usr/local/bin/pg_dump',
-        '/usr/lib/postgresql/*/bin/pg_dump',
-        '/opt/postgresql/*/bin/pg_dump'
-      ],
-      psql: [
-        '/usr/bin/psql',
-        '/usr/local/bin/psql',
-        '/usr/lib/postgresql/*/bin/psql',
-        '/opt/postgresql/*/bin/psql'
-      ],
-      pgRestore: [
-        '/usr/bin/pg_restore',
-        '/usr/local/bin/pg_restore',
-        '/usr/lib/postgresql/*/bin/pg_restore',
-        '/opt/postgresql/*/bin/pg_restore'
-      ],
-      pgConfig: [
-        '/usr/bin/pg_config',
-        '/usr/local/bin/pg_config',
-        '/usr/lib/postgresql/*/bin/pg_config'
-      ],
-      initdb: [
-        '/usr/bin/initdb',
-        '/usr/local/bin/initdb',
-        '/usr/lib/postgresql/*/bin/initdb'
-      ],
-      postgres: [
-        '/usr/bin/postgres',
-        '/usr/local/bin/postgres',
-        '/usr/lib/postgresql/*/bin/postgres'
-      ],
-      pg_ctl: [
-        '/usr/bin/pg_ctl',
-        '/usr/local/bin/pg_ctl',
-        '/usr/lib/postgresql/*/bin/pg_ctl'
-      ]
+      pgDump: buildLinuxPaths('pg_dump'),
+      psql: buildLinuxPaths('psql'),
+      pgRestore: buildLinuxPaths('pg_restore'),
+      pgConfig: buildLinuxPaths('pg_config'),
+      initdb: buildLinuxPaths('initdb'),
+      postgres: buildLinuxPaths('postgres'),
+      pg_ctl: buildLinuxPaths('pg_ctl'),
     };
   } else {
     // Windows
