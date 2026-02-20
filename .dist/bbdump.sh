@@ -398,15 +398,44 @@ create_desktop_entry() {
 
   step "Creating application shortcut"
 
-  # Download icon from GitHub
+  # Extract icon from AppImage
   mkdir -p "$icon_dir"
-  spinner "Downloading icon…"
-  if curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/logo.png" -o "$icon_path" 2>/dev/null; then
-    stop_spinner
+  local icon_extracted=0
+  spinner "Extracting icon…"
+
+  # Method 1: Extract from AppImage using --appimage-extract
+  if [ -f "$exec_path" ]; then
+    local tmp_extract="/tmp/bbdump-icon-extract-$$"
+    rm -rf "$tmp_extract"
+    mkdir -p "$tmp_extract"
+    (cd "$tmp_extract" && "$exec_path" --appimage-extract "*.png" >/dev/null 2>&1) || true
+    # Look for the app icon in extracted files
+    local extracted_icon=""
+    for f in "$tmp_extract/squashfs-root/${APP_NAME}.png" "$tmp_extract/squashfs-root/"*.png; do
+      if [ -f "$f" ]; then
+        extracted_icon="$f"
+        break
+      fi
+    done
+    if [ -n "$extracted_icon" ] && [ -f "$extracted_icon" ]; then
+      cp "$extracted_icon" "$icon_path"
+      icon_extracted=1
+    fi
+    rm -rf "$tmp_extract"
+  fi
+
+  # Method 2: Download from GitHub release assets
+  if [ "$icon_extracted" -eq 0 ]; then
+    if curl -fsSL "https://github.com/${REPO}/releases/download/${VERSION}/logo.png" -o "$icon_path" 2>/dev/null; then
+      icon_extracted=1
+    fi
+  fi
+
+  stop_spinner
+  if [ "$icon_extracted" -eq 1 ]; then
     success "Icon installed"
   else
-    stop_spinner
-    warn "Could not download icon — shortcut will use a generic icon"
+    warn "Could not extract icon — shortcut will use a generic icon"
     icon_path="utilities-terminal"
   fi
 
@@ -420,7 +449,7 @@ Exec=${exec_path} %U
 Icon=${icon_path}
 Type=Application
 Terminal=false
-Categories=Development;Database;Utility;
+Categories=Development;Database;
 Keywords=postgresql;backup;database;dump;
 StartupWMClass=bbdump
 DESKTOP
@@ -631,7 +660,7 @@ ensure_matching_client_tools() {
   warn "pg_dump v${pgdump_version:-unknown} does not match server v${server_version}"
   info "Installing postgresql-client-${server_version}…"
   ensure_sudo
-  export DEBIAN_FRONTEND=noninteractive
+
 
   case "$PKG_MGR" in
     apt)
@@ -642,11 +671,11 @@ ensure_matching_client_tools() {
         spinner "Adding PGDG repository…"
         sudo sh -c "echo 'deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main' > /etc/apt/sources.list.d/pgdg.list" 2>/dev/null || true
         curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg 2>/dev/null || true
-        sudo apt-get update -y >/dev/null 2>&1 || true
+        sudo DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
         stop_spinner
       fi
       spinner "Installing postgresql-client-${server_version}…"
-      if sudo apt-get install -y "postgresql-client-${server_version}" >/dev/null 2>&1; then
+      if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "postgresql-client-${server_version}" >/dev/null 2>&1; then
         stop_spinner
         success "postgresql-client-${server_version} installed"
       else
@@ -678,7 +707,7 @@ install_deps_linux() {
 
   detect_pkg_manager
   ensure_sudo
-  export DEBIAN_FRONTEND=noninteractive
+
 
   # Check if already installed
   if command -v pg_dump >/dev/null 2>&1 && command -v psql >/dev/null 2>&1 && command -v postgres >/dev/null 2>&1; then
@@ -724,10 +753,10 @@ install_deps_linux() {
   case "$PKG_MGR" in
     apt)
       spinner "apt-get update…"
-      sudo apt-get update -y >/dev/null 2>&1 || true
+      sudo DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
       stop_spinner
       spinner "Installing postgresql…"
-      if sudo apt-get install -y postgresql postgresql-contrib >/dev/null 2>&1; then
+      if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql postgresql-contrib >/dev/null 2>&1; then
         stop_spinner
         success "PostgreSQL installed"
       else
@@ -974,7 +1003,7 @@ uninstall_postgresql_linux() {
   step "Uninstalling PostgreSQL"
   detect_pkg_manager
   ensure_sudo
-  export DEBIAN_FRONTEND=noninteractive
+
 
   # Stop services
   for svc in $(systemctl list-unit-files 'postgresql*' --no-legend 2>/dev/null | awk '{print $1}'); do
@@ -989,9 +1018,9 @@ uninstall_postgresql_linux() {
       local pg_pkgs
       pg_pkgs=$(dpkg -l 2>/dev/null | grep -oP 'postgresql[-\w]*' | sort -u | tr '\n' ' ' || true)
       if [ -n "$pg_pkgs" ]; then
-        sudo apt-get remove -y $pg_pkgs 2>/dev/null || true
+        sudo DEBIAN_FRONTEND=noninteractive apt-get remove -y $pg_pkgs 2>/dev/null || true
       fi
-      sudo apt-get autoremove -y 2>/dev/null || true
+      sudo DEBIAN_FRONTEND=noninteractive apt-get autoremove -y 2>/dev/null || true
       stop_spinner
       success "PostgreSQL packages removed"
       ;;
