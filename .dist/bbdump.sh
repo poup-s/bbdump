@@ -558,6 +558,18 @@ install_deps_macos() {
 }
 
 # --- Detect Linux package manager ---
+# --- Pre-cache sudo credentials (needed for curl | bash where stdin is the pipe) ---
+ensure_sudo() {
+  if [ "$(id -u)" -eq 0 ]; then
+    return 0  # Already root
+  fi
+  if sudo -n true 2>/dev/null; then
+    return 0  # Already cached / NOPASSWD
+  fi
+  info "Root privileges required — please enter your password"
+  sudo -v < /dev/tty
+}
+
 detect_pkg_manager() {
   if command -v apt-get >/dev/null 2>&1; then
     PKG_MGR="apt"
@@ -618,6 +630,8 @@ ensure_matching_client_tools() {
   # Version mismatch — install matching client tools
   warn "pg_dump v${pgdump_version:-unknown} does not match server v${server_version}"
   info "Installing postgresql-client-${server_version}…"
+  ensure_sudo
+  export DEBIAN_FRONTEND=noninteractive
 
   case "$PKG_MGR" in
     apt)
@@ -663,6 +677,8 @@ install_deps_linux() {
   step "Installing dependencies (Linux)"
 
   detect_pkg_manager
+  ensure_sudo
+  export DEBIAN_FRONTEND=noninteractive
 
   # Check if already installed
   if command -v pg_dump >/dev/null 2>&1 && command -v psql >/dev/null 2>&1 && command -v postgres >/dev/null 2>&1; then
@@ -957,6 +973,8 @@ uninstall_postgresql_macos() {
 uninstall_postgresql_linux() {
   step "Uninstalling PostgreSQL"
   detect_pkg_manager
+  ensure_sudo
+  export DEBIAN_FRONTEND=noninteractive
 
   # Stop services
   for svc in $(systemctl list-unit-files 'postgresql*' --no-legend 2>/dev/null | awk '{print $1}'); do
