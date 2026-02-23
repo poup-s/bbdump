@@ -69,7 +69,9 @@ function createWindow(): void {
   mainWindow.on('close', (e) => {
     if (!isQuitting) {
       e.preventDefault();
-      mainWindow?.hide();
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.hide();
+      }
     } else {
       mainWindow = null;
       backupManager.setMainWindow(null);
@@ -80,7 +82,9 @@ function createWindow(): void {
 
   mainWindow.on('minimize', (e: Electron.Event) => {
     e.preventDefault();
-    mainWindow?.hide();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.hide();
+    }
   });
 
   // Passer la référence de la fenêtre au cron manager pour les notifications
@@ -120,10 +124,11 @@ function createWindow(): void {
 }
 
 function showWindow(): void {
-  if (mainWindow) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();
     mainWindow.focus();
   } else {
+    mainWindow = null;
     createWindow();
   }
 }
@@ -207,14 +212,18 @@ function createTray(): void {
   ipcMain.on('tray-open-dbviewer', (_, dbId: string) => {
     trayPopup?.hide();
     showWindow();
-    mainWindow?.webContents.send('open-dbviewer', dbId);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('open-dbviewer', dbId);
+    }
   });
 
   // IPC: edit database from tray popup
   ipcMain.on('tray-edit-db', (_, dbId: string) => {
     trayPopup?.hide();
     showWindow();
-    mainWindow?.webContents.send('edit-db', dbId);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('edit-db', dbId);
+    }
   });
 }
 

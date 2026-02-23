@@ -20,34 +20,44 @@ export function initAutoUpdater(win: BrowserWindow): void {
 
   autoUpdater.on('update-available', (info: ElectronUpdateInfo) => {
     logger.info(`Update available: ${info.version}`);
-    mainWindow?.webContents.send('update-available', {
-      version: info.version,
-      releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
-    });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-available', {
+        version: info.version,
+        releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
+      });
+    }
   });
 
   autoUpdater.on('update-not-available', () => {
     logger.info('No update available');
-    mainWindow?.webContents.send('update-not-available');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-not-available');
+    }
   });
 
   autoUpdater.on('download-progress', (progress) => {
-    mainWindow?.webContents.send('update-download-progress', {
-      percent: Math.round(progress.percent),
-      bytesPerSecond: progress.bytesPerSecond,
-      transferred: progress.transferred,
-      total: progress.total,
-    });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-download-progress', {
+        percent: Math.round(progress.percent),
+        bytesPerSecond: progress.bytesPerSecond,
+        transferred: progress.transferred,
+        total: progress.total,
+      });
+    }
   });
 
   autoUpdater.on('update-downloaded', () => {
     logger.info('Update downloaded, ready to install');
-    mainWindow?.webContents.send('update-downloaded');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-downloaded');
+    }
   });
 
   autoUpdater.on('error', (error) => {
     logger.error(`Auto-updater error: ${error.message}`);
-    mainWindow?.webContents.send('update-error', error.message);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update-error', error.message);
+    }
   });
 }
 
@@ -88,12 +98,15 @@ export async function downloadUpdate(): Promise<void> {
 
 export function quitAndInstall(): void {
   logger.info('Quitting and installing update...');
+  // Nullify the window reference before closing to prevent destroyed-object errors
+  // in any autoUpdater callbacks that may fire during shutdown
+  mainWindow = null;
   // Remove listeners that prevent the app from quitting
   app.removeAllListeners('window-all-closed');
   // Force-close all windows so the app can actually quit
   const windows = BrowserWindow.getAllWindows();
   windows.forEach(w => w.removeAllListeners('close'));
-  windows.forEach(w => w.close());
+  windows.forEach(w => w.destroy());
   // isSilent=false (show installer), isForceRunAfter=true (relaunch app after install)
   autoUpdater.quitAndInstall(false, true);
 }
