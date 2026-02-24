@@ -329,21 +329,6 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
         }
     });
 
-    // Aliases
-    ipcMain.handle('export-key', async () => {
-        // Re-use logic or call handler? Since we are in same file, we can't easily call 'handle' via ipcMain. 
-        // We'll just register the same function logic.
-        // Ideally refactor to a shared function.
-        // For now, I'll direct to the same implementation in next Refactoring pass if needed.
-        // Just minimal implementation here to satisfy type checker if I copied code. 
-        // Actually, I can just not register aliases if frontend updates, but to be safe:
-        return { success: false, error: "Use export-encryption-key" };
-    });
-
-    ipcMain.handle('import-key', async () => {
-        return { success: false, error: "Use import-encryption-key" };
-    });
-
     // MCP Server Handlers
     ipcMain.handle('get-mcp-status', async () => {
         try {

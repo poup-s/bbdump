@@ -78,7 +78,7 @@ const saveLanguage = async () => {
 
 const exportKey = async () => {
   try {
-    const result = await ipcRenderer.invoke('export-key');
+    const result = await ipcRenderer.invoke('export-encryption-key');
     if (result.success) {
       addToast(t('settings.keyExportSuccess'), 'success');
     } else if (result.error) {
@@ -91,7 +91,7 @@ const exportKey = async () => {
 
 const importKey = async () => {
   try {
-    const result = await ipcRenderer.invoke('import-key');
+    const result = await ipcRenderer.invoke('import-encryption-key');
     if (result.success) {
       addToast(t('settings.keyImportSuccess'), 'success');
     } else if (result.error) {
