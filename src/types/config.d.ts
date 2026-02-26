@@ -24,8 +24,18 @@ export interface DatabaseConfig {
   masked?: boolean; // Si true, le nom de la DB est masqué dans l'UI (screen sharing)
 }
 
+export interface ProjectConfig {
+  id: string;
+  name: string;
+  color: string;
+  databaseIds: string[];
+  masked?: boolean;
+}
+
 export interface AppConfig {
   databases: DatabaseConfig[];
+  projects?: ProjectConfig[];
+  viewMode?: 'list' | 'project';
   onboardingCompleted?: boolean;
   language?: 'en' | 'fr';
   defaultBackupPath?: string;

@@ -376,4 +376,23 @@ export function registerDbViewerHandlers() {
             throw error;
         }
     });
+
+    ipcMain.handle('get-database-size', async (_, dbId: string): Promise<number | null> => {
+        try {
+            const dbConfig = getDbConfig(dbId);
+            const result = await dbViewer.executeQuery({
+                ...dbConfig,
+                sql: 'SELECT pg_database_size(current_database()) as size',
+                maxRows: 1,
+                timeoutMs: 5000
+            });
+            if (result.rows && result.rows.length > 0) {
+                return parseInt(result.rows[0].size, 10);
+            }
+            return null;
+        } catch (error: any) {
+            logger.error(`Error getting database size for ${dbId}: ${error.message}`);
+            return null;
+        }
+    });
 }

@@ -40,6 +40,15 @@ export interface ScheduledTask {
     schedule: string;
 }
 
+export interface Project {
+    id: string;
+    name: string;
+    color: string; // Tailwind class, ex: "bg-blue-500"
+    databaseIds: string[]; // IDs des DB liées
+    collapsed?: boolean; // État replié dans l'UI
+    masked?: boolean; // True if name should be hidden in UI
+}
+
 export interface Toast {
     id: number;
     message: string;

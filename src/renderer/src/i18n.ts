@@ -955,6 +955,26 @@ export const translations = {
             noDatabases: 'No databases configured',
             viewDb: 'View database',
             editDb: 'Edit database'
+        },
+        project: {
+            modeList: 'List',
+            modeProject: 'Projects',
+            newProject: 'New Project',
+            editProject: 'Edit Project',
+            deleteProject: 'Delete Project',
+            name: 'Project Name',
+            namePlaceholder: 'My project',
+            color: 'Color',
+            selectDatabases: 'Select databases',
+            ungrouped: 'Ungrouped',
+            noDatabases: 'No databases in this project',
+            deleteConfirm: 'Are you sure you want to delete the project "{name}"? The databases will not be deleted.',
+            save: 'Save',
+            cancel: 'Cancel',
+            created: 'Project "{name}" created',
+            updated: 'Project "{name}" updated',
+            deleted: 'Project "{name}" deleted',
+            databaseMoved: 'Database moved successfully'
         }
     },
     fr: {
@@ -1912,6 +1932,26 @@ export const translations = {
             noDatabases: 'Aucune base de données configurée',
             viewDb: 'Voir la base',
             editDb: 'Modifier la base'
+        },
+        project: {
+            modeList: 'Liste',
+            modeProject: 'Projets',
+            newProject: 'Nouveau projet',
+            editProject: 'Modifier le projet',
+            deleteProject: 'Supprimer le projet',
+            name: 'Nom du projet',
+            namePlaceholder: 'Mon projet',
+            color: 'Couleur',
+            selectDatabases: 'Sélectionner les bases de données',
+            ungrouped: 'Non groupées',
+            noDatabases: 'Aucune base de données dans ce projet',
+            deleteConfirm: 'Êtes-vous sûr de vouloir supprimer le projet "{name}" ? Les bases de données ne seront pas supprimées.',
+            save: 'Enregistrer',
+            cancel: 'Annuler',
+            created: 'Projet "{name}" créé',
+            updated: 'Projet "{name}" mis à jour',
+            deleted: 'Projet "{name}" supprimé',
+            databaseMoved: 'Base de données déplacée'
         }
     }
 };

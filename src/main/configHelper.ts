@@ -1,4 +1,4 @@
-import { AppConfig, DatabaseConfig } from '../types/config';
+import { AppConfig, DatabaseConfig, ProjectConfig } from '../types/config';
 import * as crypto from 'crypto';
 
 /**
@@ -27,6 +27,19 @@ export function sanitizeDatabaseConfig(db: any): DatabaseConfig {
 }
 
 /**
+ * Sanitizes and normalizes a project configuration object.
+ */
+export function sanitizeProjectConfig(project: any): ProjectConfig {
+    return {
+        id: project.id || crypto.randomUUID(),
+        name: project.name || '',
+        color: project.color || 'bg-blue-500',
+        databaseIds: Array.isArray(project.databaseIds) ? project.databaseIds : [],
+        masked: project.masked === true,
+    };
+}
+
+/**
  * Sanitizes the entire application configuration.
  */
 export function sanitizeAppConfig(config: any): AppConfig {
@@ -34,9 +47,15 @@ export function sanitizeAppConfig(config: any): AppConfig {
         ? config.databases.map(sanitizeDatabaseConfig)
         : [];
 
+    const projects = Array.isArray(config.projects)
+        ? config.projects.map(sanitizeProjectConfig)
+        : [];
+
     return {
         ...config,
         databases,
+        projects,
+        viewMode: config.viewMode === 'project' ? 'project' : 'list',
         // Ensure onboardingCompleted is preserved or defaulted
         onboardingCompleted: config.onboardingCompleted === true,
         // Ensure language is valid

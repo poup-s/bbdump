@@ -50,10 +50,12 @@ const loadConfig = async () => {
   try {
     const config = await ipcRenderer.invoke('get-config');
     store.databases = config.databases;
-    
+    store.projects = config.projects || [];
+    store.viewMode = config.viewMode || 'list';
+
     // Handle onboarding state
     store.onboardingCompleted = config.onboardingCompleted || false;
-    
+
     // Handle language
     if (config.language) {
       store.language = config.language;

@@ -1,5 +1,5 @@
 import { reactive } from 'vue';
-import { Database, Backup, Log, ScheduledTask } from './types';
+import { Database, Backup, Log, ScheduledTask, Project } from './types';
 
 export const store = reactive({
     databases: [] as Database[],
@@ -41,6 +41,12 @@ export const store = reactive({
         error: string | null;
     } | null,
     newlyAddedDbId: null as string | null,
+    // Project mode
+    projects: [] as Project[],
+    viewMode: 'list' as 'list' | 'project',
+    showProjectModal: false,
+    editingProject: null as Project | null,
+
     onboardingCompleted: false,
     language: 'en' as 'en' | 'fr',
     activeTab: 'dashboard' as string,

@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron';
-import { AppConfig, DatabaseConfig } from '../../types/config';
+import { AppConfig, DatabaseConfig, ProjectConfig } from '../../types/config';
 import { encryptionManager } from '../encryption';
-import { sanitizeAppConfig, sanitizeDatabaseConfig } from '../configHelper';
+import { sanitizeAppConfig, sanitizeDatabaseConfig, sanitizeProjectConfig } from '../configHelper';
 import { cronManager } from '../cron';
 import { logger } from '../logger';
 import { pathManager } from '../paths';
@@ -253,6 +253,108 @@ export function registerConfigHandlers() {
             saveConfig(config);
         }
         return config;
+    });
+
+    // Project management handlers
+    ipcMain.handle('add-project', async (_, project: ProjectConfig): Promise<AppConfig> => {
+        const sanitized = sanitizeProjectConfig({
+            ...project,
+            id: project.id || crypto.randomUUID(),
+        });
+        if (!config.projects) config.projects = [];
+        config.projects.push(sanitized);
+        saveConfig(config);
+        return config;
+    });
+
+    ipcMain.handle('update-project', async (_, id: string, updatedProject: ProjectConfig): Promise<AppConfig> => {
+        if (!config.projects) config.projects = [];
+        const index = config.projects.findIndex(p => p.id === id);
+        if (index !== -1) {
+            config.projects[index] = sanitizeProjectConfig({
+                ...updatedProject,
+                id,
+            });
+            saveConfig(config);
+        }
+        return config;
+    });
+
+    ipcMain.handle('remove-project', async (_, id: string): Promise<AppConfig> => {
+        if (!config.projects) config.projects = [];
+        config.projects = config.projects.filter(p => p.id !== id);
+        saveConfig(config);
+        return config;
+    });
+
+    ipcMain.handle('toggle-project-mask', async (_, id: string, masked: boolean): Promise<AppConfig> => {
+        if (!config.projects) config.projects = [];
+        const project = config.projects.find(p => p.id === id);
+        if (project) {
+            project.masked = masked;
+            saveConfig(config);
+        }
+        return config;
+    });
+
+    ipcMain.handle('reorder-projects', async (_, orderedIds: string[]): Promise<AppConfig> => {
+        if (!config.projects) config.projects = [];
+        const projectMap = new Map(config.projects.map(p => [p.id, p]));
+        const reordered: ProjectConfig[] = [];
+        for (const id of orderedIds) {
+            const project = projectMap.get(id);
+            if (project) reordered.push(project);
+        }
+        // Append any projects not in orderedIds (safety net)
+        for (const p of config.projects) {
+            if (!orderedIds.includes(p.id)) reordered.push(p);
+        }
+        config.projects = reordered;
+        saveConfig(config);
+        return config;
+    });
+
+    ipcMain.handle('move-database-to-project', async (
+        _,
+        databaseId: string,
+        targetProjectId: string | null
+    ): Promise<AppConfig> => {
+        if (!config.projects) config.projects = [];
+        // Remove databaseId from all projects
+        for (const project of config.projects) {
+            project.databaseIds = project.databaseIds.filter(id => id !== databaseId);
+        }
+        // Add to target project if specified
+        if (targetProjectId) {
+            const target = config.projects.find(p => p.id === targetProjectId);
+            if (target) {
+                target.databaseIds.push(databaseId);
+            }
+        }
+        config.projects = config.projects.map(sanitizeProjectConfig);
+        saveConfig(config);
+        return config;
+    });
+
+    ipcMain.handle('reorder-databases', async (_, orderedIds: string[]): Promise<AppConfig> => {
+        const dbMap = new Map(config.databases.map(d => [d.id, d]));
+        const reordered: DatabaseConfig[] = [];
+        for (const id of orderedIds) {
+            const db = dbMap.get(id);
+            if (db) reordered.push(db);
+        }
+        // Append any databases not in orderedIds (safety net)
+        for (const d of config.databases) {
+            if (!orderedIds.includes(d.id)) reordered.push(d);
+        }
+        config.databases = reordered;
+        saveConfig(config);
+        return config;
+    });
+
+    ipcMain.handle('save-view-mode', async (_, viewMode: 'list' | 'project'): Promise<void> => {
+        config.viewMode = viewMode;
+        saveConfig(config);
     });
 }
 

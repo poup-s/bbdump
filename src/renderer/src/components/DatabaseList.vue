@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { ipcRenderer } from '../electron';
-import { Database } from '../types';
+import { Database, Project } from '../types';
 import DatabaseCard from './DatabaseCard.vue';
+import DatabaseCardCompact from './DatabaseCardCompact.vue';
 import DuplicateDatabaseModal from './DuplicateDatabaseModal.vue';
+import ProjectSection from './ProjectSection.vue';
+import ProjectModal from './ProjectModal.vue';
 
 const { t } = useI18n();
 const { addToast } = useToast();
@@ -46,10 +49,6 @@ const loadHiddenDatabasesCount = async () => {
 
 // Recharger le compteur quand les bases changent
 watch(() => store.databases.length, () => {
-  loadHiddenDatabasesCount();
-});
-
-onMounted(() => {
   loadHiddenDatabasesCount();
 });
 
@@ -258,11 +257,241 @@ const openExtensions = (db: Database) => {
   store.extensionsModalDb = db;
   store.showExtensionsModal = true;
 };
+
+// --- Database sizes ---
+const dbSizes = ref<Record<string, number | null>>({});
+
+const fetchDatabaseSizes = async () => {
+  for (const db of store.databases) {
+    try {
+      const size = await ipcRenderer.invoke('get-database-size', db.id);
+      dbSizes.value[db.id] = size;
+    } catch {
+      dbSizes.value[db.id] = null;
+    }
+  }
+};
+
+// --- Project mode ---
+
+const setViewMode = async (mode: 'list' | 'project') => {
+  store.viewMode = mode;
+  try {
+    await ipcRenderer.invoke('save-view-mode', mode);
+  } catch (error) {
+    console.error('Error saving view mode:', error);
+  }
+};
+
+const getProjectDatabases = (project: Project): Database[] => {
+  const idSet = new Set(project.databaseIds);
+  return store.databases.filter(db => idSet.has(db.id));
+};
+
+const ungroupedDatabases = computed(() => {
+  const allProjectDbIds = new Set<string>();
+  for (const p of store.projects) {
+    for (const id of p.databaseIds) {
+      allProjectDbIds.add(id);
+    }
+  }
+  return store.databases.filter(db => !allProjectDbIds.has(db.id));
+});
+
+const openProjectModal = () => {
+  store.editingProject = null;
+  store.showProjectModal = true;
+};
+
+const editProject = (project: Project) => {
+  store.editingProject = JSON.parse(JSON.stringify(project));
+  store.showProjectModal = true;
+};
+
+const toggleProjectMask = async (project: Project) => {
+  try {
+    await ipcRenderer.invoke('toggle-project-mask', project.id, !project.masked);
+    const config = await ipcRenderer.invoke('get-config');
+    store.projects = config.projects || [];
+  } catch (error: any) {
+    addToast('Error toggling project mask: ' + error.message, 'error');
+  }
+};
+
+// --- Ungrouped collapse ---
+const ungroupedCollapsed = ref(false);
+const toggleUngrouped = () => {
+  ungroupedCollapsed.value = !ungroupedCollapsed.value;
+};
+
+// --- Drag & Drop ---
+const isDraggingDb = ref(false);
+const dragOverProjectId = ref<string | null>(null);
+const dragOverPosition = ref<'above' | 'below' | null>(null);
+const ungroupedDragOver = ref(false);
+
+// List mode DnD reorder
+const listDragOverDbId = ref<string | null>(null);
+
+onMounted(() => {
+  loadHiddenDatabasesCount();
+  fetchDatabaseSizes();
+
+  const onDragStartGlobal = (e: DragEvent) => {
+    if (e.dataTransfer?.types.includes('application/x-bbdump-db')) {
+      isDraggingDb.value = true;
+    }
+  };
+  const onDragEndGlobal = () => {
+    isDraggingDb.value = false;
+    dragOverProjectId.value = null;
+    dragOverPosition.value = null;
+    ungroupedDragOver.value = false;
+    listDragOverDbId.value = null;
+  };
+  document.addEventListener('dragstart', onDragStartGlobal);
+  document.addEventListener('dragend', onDragEndGlobal);
+});
+
+// List mode reorder handlers
+const onListCardDragOver = (event: DragEvent, dbId: string) => {
+  if (!event.dataTransfer?.types.includes('application/x-bbdump-db-reorder')) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  listDragOverDbId.value = dbId;
+};
+
+const onListCardDragLeave = (event: DragEvent) => {
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const { clientX, clientY } = event;
+  if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+    listDragOverDbId.value = null;
+  }
+};
+
+const onListCardDrop = async (event: DragEvent, targetDbId: string) => {
+  event.preventDefault();
+  const draggedDbId = event.dataTransfer?.getData('application/x-bbdump-db-reorder');
+  listDragOverDbId.value = null;
+  if (!draggedDbId || draggedDbId === targetDbId) return;
+
+  const ids = store.databases.map(d => d.id);
+  const fromIndex = ids.indexOf(draggedDbId);
+  const toIndex = ids.indexOf(targetDbId);
+  if (fromIndex === -1 || toIndex === -1) return;
+  ids.splice(fromIndex, 1);
+  const insertAt = ids.indexOf(targetDbId);
+  ids.splice(insertAt, 0, draggedDbId);
+
+  try {
+    const config = await ipcRenderer.invoke('reorder-databases', ids);
+    store.databases = config.databases;
+  } catch (error: any) {
+    addToast('Error reordering databases: ' + error.message, 'error');
+  }
+};
+
+const moveDatabaseToProject = async (databaseId: string, targetProjectId: string | null) => {
+  try {
+    const config = await ipcRenderer.invoke('move-database-to-project', databaseId, targetProjectId);
+    store.projects = config.projects || [];
+    addToast(t('project.databaseMoved'), 'success');
+  } catch (error: any) {
+    addToast('Error moving database: ' + error.message, 'error');
+  }
+};
+
+const onProjectDragOver = (event: DragEvent, projectId: string) => {
+  if (!event.dataTransfer?.types.includes('application/x-bbdump-project')) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const midY = rect.top + rect.height / 2;
+  dragOverProjectId.value = projectId;
+  dragOverPosition.value = event.clientY < midY ? 'above' : 'below';
+};
+
+const onProjectDragLeave = () => {
+  dragOverProjectId.value = null;
+  dragOverPosition.value = null;
+};
+
+const onProjectDrop = async (event: DragEvent, targetProjectId: string) => {
+  event.preventDefault();
+  const draggedProjectId = event.dataTransfer?.getData('application/x-bbdump-project');
+  if (!draggedProjectId || draggedProjectId === targetProjectId) {
+    dragOverProjectId.value = null;
+    dragOverPosition.value = null;
+    return;
+  }
+  const ids = store.projects.map(p => p.id);
+  const fromIndex = ids.indexOf(draggedProjectId);
+  if (fromIndex === -1) return;
+  ids.splice(fromIndex, 1);
+  const toIndex = ids.indexOf(targetProjectId);
+  const insertAt = dragOverPosition.value === 'above' ? toIndex : toIndex + 1;
+  ids.splice(insertAt, 0, draggedProjectId);
+
+  dragOverProjectId.value = null;
+  dragOverPosition.value = null;
+
+  try {
+    const config = await ipcRenderer.invoke('reorder-projects', ids);
+    store.projects = config.projects || [];
+  } catch (error: any) {
+    addToast('Error reordering projects: ' + error.message, 'error');
+  }
+};
+
+const onUngroupedDragOver = (event: DragEvent) => {
+  if (!event.dataTransfer?.types.includes('application/x-bbdump-db')) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  ungroupedDragOver.value = true;
+};
+
+const onUngroupedDragLeave = (event: DragEvent) => {
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const { clientX, clientY } = event;
+  if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+    ungroupedDragOver.value = false;
+  }
+};
+
+const onUngroupedDrop = (event: DragEvent) => {
+  event.preventDefault();
+  ungroupedDragOver.value = false;
+  const data = event.dataTransfer?.getData('application/x-bbdump-db');
+  if (!data) return;
+  const { databaseId, sourceProjectId } = JSON.parse(data);
+  if (!sourceProjectId) return; // Already ungrouped
+  moveDatabaseToProject(databaseId, null);
+};
+
+const deleteProject = (project: Project) => {
+  showConfirm({
+    title: t('project.deleteProject'),
+    message: t('project.deleteConfirm', { name: project.name }),
+    confirmText: t('common.delete'),
+    type: 'danger',
+    onConfirm: async () => {
+      try {
+        await ipcRenderer.invoke('remove-project', project.id);
+        const config = await ipcRenderer.invoke('get-config');
+        store.projects = config.projects || [];
+        addToast(t('project.deleted', { name: project.name }), 'success');
+      } catch (error: any) {
+        addToast('Error deleting project: ' + error.message, 'error');
+      }
+    }
+  });
+};
 </script>
 
 <template>
   <div class="h-full flex flex-col">
-    <div class="flex justify-between items-center mb-8">
+    <!-- Header row: title + action buttons -->
+    <div class="flex justify-between items-center mb-4">
       <div>
         <h2 class="text-3xl font-bold tracking-tight">{{ t('nav.databases') }}</h2>
         <p class="text-gray-500 mt-1">{{ store.databases.length }} configured connections</p>
@@ -282,7 +511,7 @@ const openExtensions = (db: Database) => {
           <span class="relative z-10">{{ t('modal.createDatabase') }}</span>
           <div class="absolute inset-0 rounded-xl bg-gradient-to-r from-blue-400/0 via-blue-400/50 to-blue-400/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 blur-sm"></div>
         </button>
-        
+
         <!-- Bouton Ajouter une connexion -->
         <button
           @click="openAddModal"
@@ -300,6 +529,52 @@ const openExtensions = (db: Database) => {
       </div>
     </div>
 
+    <!-- View mode switch + New project button (own row) -->
+    <div class="flex items-center gap-3 mb-6">
+      <div class="flex items-center bg-gray-100 dark:bg-zinc-800 rounded-xl p-1">
+        <button
+          @click="setViewMode('list')"
+          class="px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200"
+          :class="store.viewMode === 'list'
+            ? 'bg-white dark:bg-zinc-700 text-foreground shadow-sm'
+            : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'"
+        >
+          <div class="flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+            {{ t('project.modeList') }}
+          </div>
+        </button>
+        <button
+          @click="setViewMode('project')"
+          class="px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200"
+          :class="store.viewMode === 'project'
+            ? 'bg-white dark:bg-zinc-700 text-foreground shadow-sm'
+            : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'"
+        >
+          <div class="flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+            </svg>
+            {{ t('project.modeProject') }}
+          </div>
+        </button>
+      </div>
+
+      <!-- Bouton Nouveau projet (only in project mode) -->
+      <button
+        v-if="store.viewMode === 'project'"
+        @click="openProjectModal"
+        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-zinc-800 hover:bg-gray-200 dark:hover:bg-zinc-700 rounded-lg transition-colors"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m6-6H6" />
+        </svg>
+        {{ t('project.newProject') }}
+      </button>
+    </div>
+
     <div v-if="store.databases.length === 0" class="flex-1 flex flex-col items-center justify-center text-center opacity-60">
       <div class="w-24 h-24 bg-surface rounded-full flex items-center justify-center mb-4">
         <svg class="w-12 h-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -310,12 +585,13 @@ const openExtensions = (db: Database) => {
       <p class="text-gray-500 max-w-sm">{{ t('db.noDatabasesDesc') }}</p>
     </div>
 
-    <div v-else class="space-y-8 pb-8">
+    <!-- ========== LIST MODE ========== -->
+    <div v-else-if="store.viewMode === 'list'" class="space-y-8 pb-8">
       <!-- Bases de données locales Bbdump -->
       <div v-if="store.databases.filter(db => db.isLocalBbdump).length > 0">
         <!-- Lien vers connexions externes si > 3 bases locales -->
         <div v-if="store.databases.filter(db => db.isLocalBbdump).length > 3 && store.databases.filter(db => !db.isLocalBbdump).length > 0" class="flex justify-start mb-4">
-          <button 
+          <button
             @click="scrollToExternal"
             class="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1.5 group transition-colors px-1"
           >
@@ -325,7 +601,7 @@ const openExtensions = (db: Database) => {
             </svg>
           </button>
         </div>
-        
+
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-3">
             <div class="flex items-center gap-2">
@@ -367,20 +643,28 @@ const openExtensions = (db: Database) => {
           </div>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <DatabaseCard 
+          <div
             v-for="db in store.databases.filter(db => db.isLocalBbdump)"
             :key="db.id"
-            :db="db"
-            @backup="backupNow"
-            @view="openViewer"
-            @duplicate="openDuplicateModal"
-            @edit="editDatabase"
-            @delete="deleteDatabase"
-            @disconnect="disconnectDatabase"
-            @copy-url="copyConnectionUrl"
-            @addons="openExtensions"
-            @toggle-mask="toggleMask"
-          />
+            @dragover="onListCardDragOver($event, db.id)"
+            @dragleave="onListCardDragLeave"
+            @drop="onListCardDrop($event, db.id)"
+            class="rounded-2xl transition-all duration-200"
+            :class="{ 'ring-2 ring-blue-400 ring-offset-2 ring-offset-white dark:ring-offset-zinc-900': listDragOverDbId === db.id }"
+          >
+            <DatabaseCard
+              :db="db"
+              @backup="backupNow"
+              @view="openViewer"
+              @duplicate="openDuplicateModal"
+              @edit="editDatabase"
+              @delete="deleteDatabase"
+              @disconnect="disconnectDatabase"
+              @copy-url="copyConnectionUrl"
+              @addons="openExtensions"
+              @toggle-mask="toggleMask"
+            />
+          </div>
         </div>
       </div>
 
@@ -398,30 +682,150 @@ const openExtensions = (db: Database) => {
           </span>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <DatabaseCard 
+          <div
             v-for="db in store.databases.filter(db => !db.isLocalBbdump)"
             :key="db.id"
-            :db="db"
+            @dragover="onListCardDragOver($event, db.id)"
+            @dragleave="onListCardDragLeave"
+            @drop="onListCardDrop($event, db.id)"
+            class="rounded-2xl transition-all duration-200"
+            :class="{ 'ring-2 ring-blue-400 ring-offset-2 ring-offset-white dark:ring-offset-zinc-900': listDragOverDbId === db.id }"
+          >
+            <DatabaseCard
+              :db="db"
+              @backup="backupNow"
+              @view="openViewer"
+              @duplicate="openDuplicateModal"
+              @edit="editDatabase"
+              @delete="deleteDatabase"
+              @disconnect="disconnectDatabase"
+              @copy-url="copyConnectionUrl"
+              @addons="openExtensions"
+              @toggle-mask="toggleMask"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== PROJECT MODE ========== -->
+    <div v-else class="space-y-0 pb-8">
+      <!-- Projects -->
+      <template v-for="(project, index) in store.projects" :key="project.id">
+        <!-- Separator between projects -->
+        <div v-if="index > 0" class="border-t border-gray-200 dark:border-zinc-700 mx-4 my-2"></div>
+        <div
+          @dragover="onProjectDragOver($event, project.id)"
+          @dragleave="onProjectDragLeave"
+          @drop="onProjectDrop($event, project.id)"
+          class="transition-all duration-200"
+          :class="{
+            'border-t-2 border-blue-400': dragOverProjectId === project.id && dragOverPosition === 'above',
+            'border-b-2 border-blue-400': dragOverProjectId === project.id && dragOverPosition === 'below',
+          }"
+        >
+          <ProjectSection
+            :project="project"
+            :databases="getProjectDatabases(project)"
+            :db-sizes="dbSizes"
+            @edit="editProject"
+            @delete="deleteProject"
+            @toggle-project-mask="toggleProjectMask"
+            @move-db-to-project="moveDatabaseToProject"
             @backup="backupNow"
             @view="openViewer"
             @duplicate="openDuplicateModal"
-            @edit="editDatabase"
-            @delete="deleteDatabase"
+            @edit-db="editDatabase"
+            @delete-db="deleteDatabase"
             @disconnect="disconnectDatabase"
             @copy-url="copyConnectionUrl"
             @addons="openExtensions"
             @toggle-mask="toggleMask"
           />
         </div>
+      </template>
+
+      <!-- Ungrouped databases -->
+      <div
+        v-if="ungroupedDatabases.length > 0 || isDraggingDb"
+        @dragover="onUngroupedDragOver"
+        @dragleave="onUngroupedDragLeave"
+        @drop="onUngroupedDrop"
+        class="rounded-xl transition-all duration-200"
+        :class="{ 'ring-2 ring-blue-400 ring-offset-2 ring-offset-white dark:ring-offset-zinc-900 bg-blue-50/50 dark:bg-blue-900/10': ungroupedDragOver }"
+      >
+        <!-- Separator before ungrouped -->
+        <div v-if="store.projects.length > 0" class="border-t border-gray-200 dark:border-zinc-700 mx-4 my-2"></div>
+        <!-- Clickable header -->
+        <div
+          class="flex items-center justify-between px-4 py-3 rounded-xl cursor-pointer select-none transition-colors hover:bg-gray-50 dark:hover:bg-zinc-800/50"
+          @click="toggleUngrouped"
+        >
+          <div class="flex items-center gap-3">
+            <div class="w-3 h-3 rounded-full bg-gray-400 shrink-0" />
+            <h3 class="text-lg font-semibold text-gray-500 dark:text-gray-400">{{ t('project.ungrouped') }}</h3>
+            <span class="text-xs font-medium text-gray-500 bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">
+              {{ ungroupedDatabases.length }}
+            </span>
+          </div>
+          <svg
+            class="w-5 h-5 text-gray-400 transition-transform duration-200"
+            :class="{ '-rotate-90': ungroupedCollapsed }"
+            fill="none" viewBox="0 0 24 24" stroke="currentColor"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
+        <!-- Collapsible body -->
+        <div
+          class="overflow-hidden transition-all duration-300 ease-in-out"
+          :style="{ maxHeight: ungroupedCollapsed ? '0px' : '2000px', opacity: ungroupedCollapsed ? 0 : 1 }"
+        >
+          <div v-if="ungroupedDatabases.length > 0" class="flex flex-col gap-1.5 mt-3 px-1">
+            <DatabaseCardCompact
+              v-for="db in ungroupedDatabases"
+              :key="db.id"
+              :db="db"
+              :project-id="null"
+              :size="dbSizes[db.id]"
+              @backup="backupNow"
+              @view="openViewer"
+              @duplicate="openDuplicateModal"
+              @edit="editDatabase"
+              @delete="deleteDatabase"
+              @disconnect="disconnectDatabase"
+              @copy-url="copyConnectionUrl"
+              @addons="openExtensions"
+              @toggle-mask="toggleMask"
+            />
+          </div>
+          <div v-else class="text-center py-6 text-sm text-gray-400">
+            {{ t('project.noDatabases') }}
+          </div>
+        </div>
+      </div>
+
+      <!-- Empty project mode state -->
+      <div v-if="store.projects.length === 0 && ungroupedDatabases.length === 0" class="flex-1 flex flex-col items-center justify-center text-center py-16 opacity-60">
+        <div class="w-24 h-24 bg-surface rounded-full flex items-center justify-center mb-4">
+          <svg class="w-12 h-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+          </svg>
+        </div>
+        <h3 class="text-xl font-medium mb-2">{{ t('project.newProject') }}</h3>
+        <p class="text-gray-500 max-w-sm">{{ t('project.noDatabases') }}</p>
       </div>
     </div>
 
     <!-- Duplicate to Local Modal -->
-    <DuplicateDatabaseModal 
+    <DuplicateDatabaseModal
         v-if="showDuplicateModal"
         v-model="showDuplicateModal"
         :sourceDb="duplicateSourceDb"
         @success="onDuplicateSuccess"
     />
+
+    <!-- Project Modal -->
+    <ProjectModal />
   </div>
 </template>

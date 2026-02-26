@@ -17,6 +17,14 @@ interface TrayDatabase {
   masked?: boolean;
 }
 
+interface TrayProject {
+  id: string;
+  name: string;
+  color: string;
+  databaseIds: string[];
+  masked?: boolean;
+}
+
 interface TrayBackupStats {
   total: number;
   totalSize: number;
@@ -33,6 +41,9 @@ interface McpConfirmRequest {
 }
 
 const databases = ref<TrayDatabase[]>([]);
+const projects = ref<TrayProject[]>([]);
+const viewMode = ref<'list' | 'project'>('list');
+const collapsedProjects = ref<Set<string>>(new Set());
 const backupStats = ref<TrayBackupStats>({ total: 0, totalSize: 0 });
 const loading = ref(true);
 
@@ -106,6 +117,34 @@ const denyConfirm = () => {
   ipcRenderer.send('mcp-confirm-done');
 };
 
+const toggleViewMode = async () => {
+  viewMode.value = viewMode.value === 'list' ? 'project' : 'list';
+  try {
+    await ipcRenderer.invoke('save-view-mode', viewMode.value);
+  } catch { /* ignore */ }
+};
+
+const toggleProject = (projectId: string) => {
+  if (collapsedProjects.value.has(projectId)) {
+    collapsedProjects.value.delete(projectId);
+  } else {
+    collapsedProjects.value.add(projectId);
+  }
+};
+
+const getProjectDatabases = (project: TrayProject): TrayDatabase[] => {
+  const idSet = new Set(project.databaseIds);
+  return databases.value.filter(db => idSet.has(db.id));
+};
+
+const ungroupedDatabases = computed(() => {
+  const allProjectDbIds = new Set<string>();
+  for (const p of projects.value) {
+    for (const id of p.databaseIds) allProjectDbIds.add(id);
+  }
+  return databases.value.filter(db => !allProjectDbIds.has(db.id));
+});
+
 const loadData = async () => {
   try {
     const config = await ipcRenderer.invoke('get-config');
@@ -121,6 +160,14 @@ const loadData = async () => {
       cron: db.cron,
       masked: db.masked
     }));
+    projects.value = (config?.projects || []).map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color || 'bg-blue-500',
+      databaseIds: Array.isArray(p.databaseIds) ? p.databaseIds : [],
+      masked: p.masked
+    }));
+    viewMode.value = config?.viewMode === 'project' ? 'project' : 'list';
 
     const backupsResult = await ipcRenderer.invoke('get-backups');
     if (backupsResult?.stats) {
@@ -299,6 +346,30 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <!-- View mode toggle -->
+        <div v-if="!loading && databases.length > 0" class="px-3 py-1.5 flex items-center gap-1 border-b border-zinc-800">
+          <button
+            @click="toggleViewMode"
+            class="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium transition-colors"
+            :class="viewMode === 'list' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'"
+          >
+            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+            {{ t('project.modeList') }}
+          </button>
+          <button
+            @click="toggleViewMode"
+            class="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium transition-colors"
+            :class="viewMode === 'project' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'"
+          >
+            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+            </svg>
+            {{ t('project.modeProject') }}
+          </button>
+        </div>
+
         <!-- Loading -->
         <div v-if="loading" class="px-4 py-8 flex items-center justify-center">
           <svg class="w-5 h-5 text-violet-400 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -307,8 +378,8 @@ onUnmounted(() => {
           </svg>
         </div>
 
-        <!-- Database list -->
-        <div v-else class="max-h-[260px] overflow-y-auto">
+        <!-- ===== LIST MODE ===== -->
+        <div v-else-if="viewMode === 'list'" class="max-h-[260px] overflow-y-auto">
           <div v-if="databases.length === 0" class="px-4 py-6 text-center text-xs text-zinc-500">
             {{ t('tray.noDatabases') }}
           </div>
@@ -317,17 +388,12 @@ onUnmounted(() => {
             :key="db.id"
             class="px-4 py-2.5 flex items-center gap-3 hover:bg-zinc-800/50 transition-colors border-b border-zinc-800/50 last:border-b-0"
           >
-            <!-- Status dot -->
             <div class="shrink-0">
               <div class="w-2 h-2 rounded-full" :class="statusColor(db.status)"></div>
             </div>
-
-            <!-- Info -->
             <div class="flex-1 min-w-0">
               <div class="text-[12px] font-semibold text-white truncate">{{ db.masked ? '••••••••' : (db.displayName || db.name) }}</div>
             </div>
-
-            <!-- DB Viewer button -->
             <button
               @click.stop="openDbViewer(db.id)"
               class="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center transition-all bg-zinc-800 text-zinc-400 hover:bg-violet-500/20 hover:text-violet-400"
@@ -337,6 +403,104 @@ onUnmounted(() => {
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
               </svg>
             </button>
+          </div>
+        </div>
+
+        <!-- ===== PROJECT MODE ===== -->
+        <div v-else class="max-h-[260px] overflow-y-auto">
+          <div v-if="projects.length === 0 && ungroupedDatabases.length === 0" class="px-4 py-6 text-center text-xs text-zinc-500">
+            {{ t('tray.noDatabases') }}
+          </div>
+
+          <!-- Projects -->
+          <div v-for="project in projects" :key="project.id">
+            <!-- Project header -->
+            <div
+              class="px-4 py-2 flex items-center gap-2 cursor-pointer hover:bg-zinc-800/50 transition-colors"
+              @click="toggleProject(project.id)"
+            >
+              <div class="w-2 h-2 rounded-full shrink-0" :class="project.color"></div>
+              <span class="text-[11px] font-bold text-zinc-300 flex-1 truncate">
+                {{ project.masked ? '••••••••' : project.name }}
+              </span>
+              <span class="text-[9px] text-zinc-600 font-medium">{{ getProjectDatabases(project).length }}</span>
+              <svg
+                class="w-3 h-3 text-zinc-600 transition-transform duration-200"
+                :class="{ '-rotate-90': collapsedProjects.has(project.id) }"
+                fill="none" viewBox="0 0 24 24" stroke="currentColor"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+            <!-- Project databases -->
+            <template v-if="!collapsedProjects.has(project.id)">
+              <div
+                v-for="db in getProjectDatabases(project)"
+                :key="db.id"
+                class="pl-8 pr-4 py-2 flex items-center gap-3 hover:bg-zinc-800/50 transition-colors border-b border-zinc-800/30 last:border-b-0"
+              >
+                <div class="shrink-0">
+                  <div class="w-1.5 h-1.5 rounded-full" :class="statusColor(db.status)"></div>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-[11px] font-medium text-zinc-300 truncate">{{ db.masked ? '••••••••' : (db.displayName || db.name) }}</div>
+                </div>
+                <button
+                  @click.stop="openDbViewer(db.id)"
+                  class="shrink-0 w-6 h-6 rounded-md flex items-center justify-center transition-all bg-zinc-800 text-zinc-500 hover:bg-violet-500/20 hover:text-violet-400"
+                  :title="t('tray.viewDb')"
+                >
+                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                  </svg>
+                </button>
+              </div>
+            </template>
+            <div class="border-b border-zinc-800/50"></div>
+          </div>
+
+          <!-- Ungrouped databases -->
+          <div v-if="ungroupedDatabases.length > 0">
+            <div
+              v-if="projects.length > 0"
+              class="px-4 py-2 flex items-center gap-2 cursor-pointer hover:bg-zinc-800/50 transition-colors"
+              @click="toggleProject('__ungrouped__')"
+            >
+              <div class="w-2 h-2 rounded-full bg-zinc-500 shrink-0"></div>
+              <span class="text-[11px] font-bold text-zinc-500 flex-1">{{ t('project.ungrouped') }}</span>
+              <span class="text-[9px] text-zinc-600 font-medium">{{ ungroupedDatabases.length }}</span>
+              <svg
+                class="w-3 h-3 text-zinc-600 transition-transform duration-200"
+                :class="{ '-rotate-90': collapsedProjects.has('__ungrouped__') }"
+                fill="none" viewBox="0 0 24 24" stroke="currentColor"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+            <template v-if="!collapsedProjects.has('__ungrouped__')">
+              <div
+                v-for="db in ungroupedDatabases"
+                :key="db.id"
+                class="px-4 py-2.5 flex items-center gap-3 hover:bg-zinc-800/50 transition-colors border-b border-zinc-800/30 last:border-b-0"
+                :class="{ 'pl-8': projects.length > 0 }"
+              >
+                <div class="shrink-0">
+                  <div class="w-1.5 h-1.5 rounded-full" :class="statusColor(db.status)"></div>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-[11px] font-medium text-zinc-300 truncate">{{ db.masked ? '••••••••' : (db.displayName || db.name) }}</div>
+                </div>
+                <button
+                  @click.stop="openDbViewer(db.id)"
+                  class="shrink-0 w-6 h-6 rounded-md flex items-center justify-center transition-all bg-zinc-800 text-zinc-500 hover:bg-violet-500/20 hover:text-violet-400"
+                  :title="t('tray.viewDb')"
+                >
+                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                  </svg>
+                </button>
+              </div>
+            </template>
           </div>
         </div>
 
