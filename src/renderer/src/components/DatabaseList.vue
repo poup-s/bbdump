@@ -503,7 +503,7 @@ const deleteProject = (project: Project) => {
     <div class="flex justify-between items-center mb-4">
       <div>
         <h2 class="text-3xl font-bold tracking-tight">{{ t('nav.databases') }}</h2>
-        <p class="text-gray-500 mt-1">{{ store.databases.length }} configured connections</p>
+        <p class="text-gray-500 mt-1">{{ t('databases.configuredConnections', { count: store.databases.length }) }}</p>
       </div>
       <div class="flex gap-3">
         <!-- Bouton Créer une base -->

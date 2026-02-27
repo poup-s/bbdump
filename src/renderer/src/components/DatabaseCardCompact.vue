@@ -75,6 +75,9 @@ const onDragStart = (event: DragEvent) => {
       <span v-if="db.isLocalBbdump" class="text-[9px] px-1 py-0.5 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded font-medium shrink-0">
         local
       </span>
+      <span v-else class="text-[9px] px-1 py-0.5 bg-gray-100 dark:bg-zinc-700 text-gray-500 dark:text-gray-400 rounded font-medium shrink-0">
+        external
+      </span>
       <span v-if="formatSize(size)" class="text-[10px] text-gray-400 dark:text-gray-500 shrink-0">
         {{ formatSize(size) }}
       </span>
@@ -144,15 +147,24 @@ const onDragStart = (event: DragEvent) => {
         </svg>
         <span class="text-[9px] font-medium">{{ t('cardAction.edit') }}</span>
       </button>
+      <!-- Delete (local) / Disconnect (external) -->
       <button
-        @click.stop="emit('delete', db)"
-        class="px-1.5 py-1 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500 transition-colors flex items-center gap-1"
-        :title="t('cardAction.delete')"
+        @click.stop="db.isLocalBbdump ? emit('delete', db) : emit('disconnect', db)"
+        class="min-w-[4.5rem] px-1.5 py-1 rounded-lg transition-colors flex items-center justify-center gap-1"
+        :class="db.isLocalBbdump
+          ? 'hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500'
+          : 'hover:bg-orange-50 dark:hover:bg-orange-900/20 text-gray-400 hover:text-orange-500'"
+        :title="db.isLocalBbdump ? t('cardAction.delete') : t('databases.disconnect')"
       >
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <!-- Delete icon -->
+        <svg v-if="db.isLocalBbdump" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
         </svg>
-        <span class="text-[9px] font-medium">{{ t('cardAction.delete') }}</span>
+        <!-- Disconnect icon -->
+        <svg v-else class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+        </svg>
+        <span class="text-[9px] font-medium">{{ db.isLocalBbdump ? t('cardAction.delete') : t('databases.disconnect') }}</span>
       </button>
     </div>
   </div>
