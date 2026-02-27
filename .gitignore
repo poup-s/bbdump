@@ -77,6 +77,9 @@ coverage/
 # TypeScript
 *.tsbuildinfo
 
+# MCP confirm port (runtime file, changes on every dev launch)
+.mcp-confirm-port
+
 # Environment variables
 .env
 .env.local

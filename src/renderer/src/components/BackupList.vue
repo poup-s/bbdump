@@ -115,6 +115,17 @@ const restoreBackup = (backup: Backup) => {
   store.showRestoreModal = true;
 };
 
+const downloadBackup = async (backup: Backup) => {
+  try {
+    const result = await ipcRenderer.invoke('download-backup', backup.filename);
+    if (result?.success) {
+      addToast(t('backup.downloaded'), 'success');
+    }
+  } catch (error: any) {
+    addToast('Error downloading backup: ' + error.message, 'error');
+  }
+};
+
 const formatSize = (bytes: number) => {
   const sizes = ['B', 'KB', 'MB', 'GB'];
   if (!bytes || bytes <= 0) return '0 B';
@@ -284,6 +295,15 @@ onMounted(() => {
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                     </svg>
                     {{ t('backup.restore') }}
+                  </button>
+                  <button
+                    @click="downloadBackup(backup)"
+                    class="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-gray-400 dark:text-gray-500 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 rounded-md transition-colors"
+                  >
+                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    {{ t('backup.download') }}
                   </button>
                   <button
                     @click="deleteBackup(backup)"

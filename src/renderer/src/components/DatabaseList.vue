@@ -24,6 +24,7 @@ const isImportingHidden = ref(false);
 // Duplicate Modal State
 const showDuplicateModal = ref(false);
 const duplicateSourceDb = ref<Database | null>(null);
+const duplicateSourceProjectId = ref<string | null>(null);
 
 const loadHiddenDatabasesCount = async () => {
   try {
@@ -67,8 +68,9 @@ const isSystemDatabase = (dbName: string) => {
   return systemDatabases.includes(dbName);
 };
 
-const openDuplicateModal = (db: Database) => {
+const openDuplicateModal = (db: Database, projectId?: string | null) => {
   duplicateSourceDb.value = db;
+  duplicateSourceProjectId.value = projectId ?? null;
   showDuplicateModal.value = true;
 };
 
@@ -84,7 +86,14 @@ const onDuplicateSuccess = async (newDbName: string) => {
       setTimeout(() => {
         store.newlyAddedDbId = null;
       }, 2000);
+
+      // If duplicated from a project, add the new DB to the same project
+      if (duplicateSourceProjectId.value) {
+        await moveDatabaseToProject(newDb.id, duplicateSourceProjectId.value);
+      }
     }
+
+    duplicateSourceProjectId.value = null;
 }
 
 const importAllHidden = async () => {
@@ -734,7 +743,7 @@ const deleteProject = (project: Project) => {
             @move-db-to-project="moveDatabaseToProject"
             @backup="backupNow"
             @view="openViewer"
-            @duplicate="openDuplicateModal"
+            @duplicate="(db: Database) => openDuplicateModal(db, project.id)"
             @edit-db="editDatabase"
             @delete-db="deleteDatabase"
             @disconnect="disconnectDatabase"

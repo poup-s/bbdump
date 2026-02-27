@@ -125,6 +125,16 @@ const onDragStart = (event: DragEvent) => {
         <span class="text-[9px] font-medium">{{ t('cardAction.view') }}</span>
       </button>
       <button
+        @click.stop="emit('duplicate', db)"
+        class="px-1.5 py-1 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors flex items-center gap-1"
+        :title="t('cardAction.duplicate')"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+        </svg>
+        <span class="text-[9px] font-medium">{{ t('cardAction.duplicate') }}</span>
+      </button>
+      <button
         @click.stop="emit('edit', db)"
         class="px-1.5 py-1 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-400 hover:text-foreground transition-colors flex items-center gap-1"
         :title="t('cardAction.edit')"

@@ -220,6 +220,37 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
         }
     });
 
+    ipcMain.handle('download-backup', async (_, filename: string) => {
+        try {
+            const { dialog } = require('electron');
+            const backupDir = pathManager.backupsPath;
+            const filePath = path.resolve(backupDir, filename);
+            const normalizedDir = path.resolve(backupDir) + path.sep;
+
+            if (!filePath.startsWith(normalizedDir)) throw new Error('Invalid path');
+            if (!fs.existsSync(filePath)) throw new Error('File not found');
+            if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Window not available');
+
+            const result = await dialog.showSaveDialog(mainWindow, {
+                title: 'Download backup',
+                defaultPath: filename,
+                filters: [
+                    { name: 'Backup files', extensions: ['backup'] },
+                    { name: 'All files', extensions: ['*'] }
+                ]
+            });
+
+            if (result.canceled || !result.filePath) return { success: false, cancelled: true };
+
+            fs.copyFileSync(filePath, result.filePath);
+            logger.info(`Backup downloaded to: ${result.filePath}`);
+            return { success: true, path: result.filePath };
+        } catch (error) {
+            logger.error(`Error downloading backup ${filename}: ${error}`);
+            throw error;
+        }
+    });
+
     // Logs Handlers
     ipcMain.handle('get-logs', async (_, limit?: number) => {
         return logger.getLogs(limit);
