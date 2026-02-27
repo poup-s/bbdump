@@ -30,6 +30,12 @@ export interface ProjectConfig {
   color: string;
   databaseIds: string[];
   masked?: boolean;
+  proxyEnabled?: boolean;
+  proxyPort?: number;
+  proxyTargetDbId?: string;
+  proxyUser?: string;       // Custom proxy URL user (default: slugified project name)
+  proxyPassword?: string;   // Custom proxy URL password (default: slugified project name)
+  proxyDbName?: string;     // Custom proxy URL database name (default: slugified project name)
 }
 
 export interface AppConfig {

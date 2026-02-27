@@ -1,5 +1,5 @@
 import { reactive } from 'vue';
-import { Database, Backup, Log, ScheduledTask, Project } from './types';
+import { Database, Backup, Log, ScheduledTask, Project, ProxyActivityEvent } from './types';
 
 export const store = reactive({
     databases: [] as Database[],
@@ -46,6 +46,11 @@ export const store = reactive({
     viewMode: 'list' as 'list' | 'project',
     showProjectModal: false,
     editingProject: null as Project | null,
+    // Proxy statuses per project
+    proxyStatuses: {} as Record<string, { running: boolean; port: number; activeConnections: number }>,
+    // Proxy activity logs
+    proxyActivityLogs: {} as Record<string, ProxyActivityEvent[]>,
+    proxyActivityProjectId: null as string | null, // Project whose logs are currently displayed
 
     onboardingCompleted: false,
     language: 'en' as 'en' | 'fr',

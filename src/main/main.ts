@@ -14,6 +14,8 @@ import { registerDatabaseCreationHandlers } from './ipc/databaseCreationIpc';
 import { encryptionManager } from './encryption';
 import { initAutoUpdater, setUpdaterWindow } from './updateChecker';
 import { startConfirmServer, onConfirmRequest, stopConfirmServer } from './mcpConfirmServer';
+import { registerProxyHandlers } from './ipc/proxyIpc';
+import { tcpProxyManager } from './tcpProxy';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -267,6 +269,42 @@ app.whenReady().then(async () => {
   // Register IPC handlers
   registerConfigHandlers(); // Config handlers don't need window
   registerDbViewerHandlers(); // DbViewer handlers don't need window
+  registerProxyHandlers(); // Proxy handlers don't need window
+
+  // Restore TCP proxies that were enabled before shutdown
+  for (const project of config.projects || []) {
+    if (project.proxyEnabled && project.proxyPort && project.proxyTargetDbId) {
+      const db = config.databases.find(d => d.id === project.proxyTargetDbId);
+      if (db) {
+        // Decrypt password for proxy target
+        let password = db.password || '';
+        if (password && db.encrypted) {
+          try { password = encryptionManager.decrypt(password); } catch { /* use raw */ }
+        }
+
+        let target = { host: db.host || 'localhost', port: db.port || 5432, user: db.user || 'postgres', password, database: db.name || 'postgres', ssl: db.ssl };
+        if (db.connectionString) {
+          try {
+            const url = new URL(db.connectionString);
+            target = {
+              host: url.hostname || 'localhost',
+              port: parseInt(url.port) || 5432,
+              user: decodeURIComponent(url.username) || 'postgres',
+              password: decodeURIComponent(url.password) || password,
+              database: url.pathname.replace(/^\//, '') || db.name || 'postgres',
+              ssl: db.ssl || url.searchParams.get('sslmode') === 'require',
+            };
+          } catch { /* fallback to individual fields */ }
+        }
+        const dbName = db.displayName || db.name;
+        tcpProxyManager.startProxy(project.id, project.proxyPort, target, dbName).catch(err => {
+          logger.error(`Failed to restore proxy for project ${project.name}: ${err.message}`);
+          project.proxyEnabled = false;
+          saveConfig(config);
+        });
+      }
+    }
+  }
 
   createWindow();
   createTrayPopup();
@@ -332,6 +370,7 @@ app.on('before-quit', async () => {
   isQuitting = true;
   logger.info('Application shutting down, cleaning up...');
   stopConfirmServer();
+  tcpProxyManager.stopAll();
   cronManager.cancelAllBackups();
   try {
     await closeAllPools();

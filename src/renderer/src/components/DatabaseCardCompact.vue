@@ -8,6 +8,8 @@ const props = defineProps<{
   db: Database;
   projectId?: string | null;
   size?: number | null;
+  proxyEnabled?: boolean;
+  isProxyTarget?: boolean;
 }>();
 
 const formatSize = (bytes: number | null | undefined): string => {
@@ -27,6 +29,7 @@ const emit = defineEmits<{
   (e: 'copy-url', db: Database): void;
   (e: 'addons', db: Database): void;
   (e: 'toggle-mask', db: Database): void;
+  (e: 'set-proxy-target'): void;
 }>();
 
 const { t } = useI18n();
@@ -58,8 +61,24 @@ const onDragStart = (event: DragEvent) => {
   <div
     draggable="true"
     @dragstart="onDragStart"
-    class="flex items-center gap-3 px-4 py-2.5 bg-white dark:bg-zinc-900 rounded-xl border border-gray-100 dark:border-zinc-800 hover:border-gray-300 dark:hover:border-zinc-600 transition-all duration-200 hover:shadow-md cursor-grab active:cursor-grabbing"
+    class="flex items-center gap-3 px-4 py-2.5 bg-white dark:bg-zinc-900 rounded-xl border transition-all duration-200 hover:shadow-md cursor-grab active:cursor-grabbing"
+    :class="isProxyTarget
+      ? 'border-emerald-300 dark:border-emerald-700 bg-emerald-50/30 dark:bg-emerald-950/20 hover:border-emerald-400 dark:hover:border-emerald-600'
+      : 'border-gray-100 dark:border-zinc-800 hover:border-gray-300 dark:hover:border-zinc-600'"
   >
+    <!-- Proxy target radio (only when proxy is enabled on parent project) -->
+    <button
+      v-if="proxyEnabled"
+      @click.stop="emit('set-proxy-target')"
+      class="w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center transition-colors"
+      :class="isProxyTarget
+        ? 'border-emerald-500 bg-emerald-500'
+        : 'border-gray-300 dark:border-zinc-600 hover:border-emerald-400 dark:hover:border-emerald-500'"
+      :title="isProxyTarget ? t('proxy.activeTarget') : t('proxy.setTarget')"
+    >
+      <div v-if="isProxyTarget" class="w-1.5 h-1.5 rounded-full bg-white" />
+    </button>
+
     <!-- Backup status dot -->
     <div
       class="w-2 h-2 rounded-full shrink-0"

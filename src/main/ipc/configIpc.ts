@@ -5,6 +5,7 @@ import { sanitizeAppConfig, sanitizeDatabaseConfig, sanitizeProjectConfig } from
 import { cronManager } from '../cron';
 import { logger } from '../logger';
 import { pathManager } from '../paths';
+import { tcpProxyManager } from '../tcpProxy';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 
@@ -211,6 +212,16 @@ export function registerConfigHandlers() {
 
     ipcMain.handle('remove-database', async (_, id: string): Promise<AppConfig> => {
         config.databases = config.databases.filter(db => db.id !== id);
+
+        // If this DB was the proxy target of any project, stop the proxy
+        for (const project of config.projects || []) {
+            if (project.proxyTargetDbId === id) {
+                tcpProxyManager.stopProxy(project.id);
+                project.proxyEnabled = false;
+                project.proxyTargetDbId = undefined;
+            }
+        }
+
         saveConfig(config);
         cronManager.cancelBackup(id);
         return config;
@@ -282,6 +293,8 @@ export function registerConfigHandlers() {
 
     ipcMain.handle('remove-project', async (_, id: string): Promise<AppConfig> => {
         if (!config.projects) config.projects = [];
+        // Stop proxy if running for this project
+        tcpProxyManager.stopProxy(id);
         config.projects = config.projects.filter(p => p.id !== id);
         saveConfig(config);
         return config;
@@ -292,6 +305,19 @@ export function registerConfigHandlers() {
         const project = config.projects.find(p => p.id === id);
         if (project) {
             project.masked = masked;
+            // Cascade: also mask/unmask all databases in this project
+            if (project.databaseIds && project.databaseIds.length > 0) {
+                for (const dbId of project.databaseIds) {
+                    const db = config.databases.find(d => d.id === dbId);
+                    if (db) {
+                        db.masked = masked;
+                        const index = config.databases.findIndex(d => d.id === dbId);
+                        if (index !== -1) {
+                            config.databases[index] = sanitizeDatabaseConfig(db);
+                        }
+                    }
+                }
+            }
             saveConfig(config);
         }
         return config;
@@ -322,7 +348,14 @@ export function registerConfigHandlers() {
         if (!config.projects) config.projects = [];
         // Remove databaseId from all projects
         for (const project of config.projects) {
+            const wasInProject = project.databaseIds.includes(databaseId);
             project.databaseIds = project.databaseIds.filter(id => id !== databaseId);
+            // If this DB was the proxy target and it's being moved out, stop the proxy
+            if (wasInProject && project.proxyTargetDbId === databaseId && project.id !== targetProjectId) {
+                tcpProxyManager.stopProxy(project.id);
+                project.proxyEnabled = false;
+                project.proxyTargetDbId = undefined;
+            }
         }
         // Add to target project if specified
         if (targetProjectId) {

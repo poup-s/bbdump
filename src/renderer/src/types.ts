@@ -47,6 +47,25 @@ export interface Project {
     databaseIds: string[]; // IDs des DB liées
     collapsed?: boolean; // État replié dans l'UI
     masked?: boolean; // True if name should be hidden in UI
+    proxyEnabled?: boolean; // Proxy TCP activé
+    proxyPort?: number; // Port local du proxy
+    proxyTargetDbId?: string; // ID de la DB cible du proxy
+    proxyUser?: string; // Custom proxy URL user (default: slugified project name)
+    proxyPassword?: string; // Custom proxy URL password (default: slugified project name)
+    proxyDbName?: string; // Custom proxy URL database name (default: slugified project name)
+}
+
+export interface ProxyActivityEvent {
+    id: number;
+    timestamp: string;
+    projectId: string;
+    type: 'started' | 'stopped' | 'connected' | 'disconnected' | 'target-switched';
+    port?: number;
+    targetDbId?: string;
+    targetHost?: string;
+    targetPort?: number;
+    remoteAddress?: string;
+    message: string;
 }
 
 export interface Toast {

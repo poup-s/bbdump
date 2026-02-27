@@ -30,12 +30,41 @@ export function sanitizeDatabaseConfig(db: any): DatabaseConfig {
  * Sanitizes and normalizes a project configuration object.
  */
 export function sanitizeProjectConfig(project: any): ProjectConfig {
+    // Validate proxy port: must be a number between 1024 and 65535
+    const proxyPort = typeof project.proxyPort === 'number'
+        && project.proxyPort >= 1024
+        && project.proxyPort <= 65535
+        ? project.proxyPort
+        : undefined;
+
+    // Validate proxyTargetDbId: must be a non-empty string
+    const proxyTargetDbId = typeof project.proxyTargetDbId === 'string' && project.proxyTargetDbId.length > 0
+        ? project.proxyTargetDbId
+        : undefined;
+
+    // Validate proxy URL credentials: non-empty trimmed strings or undefined
+    const proxyUser = typeof project.proxyUser === 'string' && project.proxyUser.trim().length > 0
+        ? project.proxyUser.trim()
+        : undefined;
+    const proxyPassword = typeof project.proxyPassword === 'string' && project.proxyPassword.trim().length > 0
+        ? project.proxyPassword.trim()
+        : undefined;
+    const proxyDbName = typeof project.proxyDbName === 'string' && project.proxyDbName.trim().length > 0
+        ? project.proxyDbName.trim()
+        : undefined;
+
     return {
         id: project.id || crypto.randomUUID(),
         name: project.name || '',
         color: project.color || 'bg-blue-500',
         databaseIds: Array.isArray(project.databaseIds) ? project.databaseIds : [],
         masked: project.masked === true,
+        proxyEnabled: project.proxyEnabled === true,
+        proxyPort,
+        proxyTargetDbId,
+        proxyUser,
+        proxyPassword,
+        proxyDbName,
     };
 }
 
