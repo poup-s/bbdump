@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
@@ -35,62 +35,64 @@ const form = ref<Database>({
 
 const passwordVisible = ref(false);
 
-watch(() => store.showDatabaseModal, async (show) => {
-  if (show) {
-    if (store.editingDatabase) {
-      // Edit mode - skip wizard, show all fields
-      form.value = { ...store.editingDatabase };
-      
-      // If output path is missing (e.g. auto-imported), fallback to global default
-      if (!form.value.output) {
-        try {
-          const defaultPath = await ipcRenderer.invoke('get-default-path');
-          if (defaultPath) {
-            form.value.output = defaultPath;
-          }
-        } catch (e) {
-          console.error('Failed to get default path during edit', e);
-        }
-      }
+onMounted(async () => {
+  if (store.editingDatabase) {
+    // Edit mode - skip wizard, show all fields
+    form.value = { ...store.editingDatabase };
 
-      if (form.value.connectionString) {
-        connectionMode.value = 'url';
-        connectionUrl.value = form.value.connectionString;
-      } else {
-        connectionMode.value = 'manual';
-        connectionUrl.value = '';
-      }
-      currentStep.value = 1; // Will be bypassed in edit mode
-    } else {
-      // New database - start wizard
-      currentStep.value = 1;
-      connectionMode.value = null;
-      connectionUrl.value = '';
-      
-      // Get default path from settings
-      let defaultPath = '';
+    // If output path is missing (e.g. auto-imported), fallback to global default
+    if (!form.value.output) {
       try {
-        defaultPath = await ipcRenderer.invoke('get-default-path');
+        const defaultPath = await ipcRenderer.invoke('get-default-path');
+        if (defaultPath) {
+          form.value.output = defaultPath;
+        }
       } catch (e) {
-        console.error('Failed to get default path', e);
+        console.error('Failed to get default path during edit', e);
       }
-
-      form.value = {
-        id: '',
-        name: '',
-        displayName: '',
-        host: 'localhost',
-        port: 5432,
-        user: 'postgres',
-        password: '',
-        output: defaultPath,
-        cron: '0 0 * * *',
-        enabled: false,
-        encryptBackups: false,
-        connectionString: '',
-        ssl: false
-      };
     }
+
+    if (form.value.connectionString) {
+      connectionMode.value = 'url';
+      connectionUrl.value = form.value.connectionString;
+    } else {
+      connectionMode.value = 'manual';
+      connectionUrl.value = '';
+    }
+    currentStep.value = 1; // Will be bypassed in edit mode
+  } else {
+    // New database - start wizard
+    currentStep.value = 1;
+    connectionMode.value = null;
+    connectionUrl.value = '';
+
+    // Get default path from settings
+    let defaultPath = '';
+    try {
+      defaultPath = await ipcRenderer.invoke('get-default-path');
+    } catch (e) {
+      console.error('Failed to get default path', e);
+    }
+
+    form.value = {
+      id: '',
+      name: '',
+      displayName: '',
+      host: 'localhost',
+      port: 5432,
+      user: 'postgres',
+      password: '',
+      output: defaultPath,
+      cron: '0 0 * * *',
+      enabled: false,
+      encryptBackups: false,
+      connectionString: '',
+      ssl: false
+    };
+  }
+
+  if (store.modalTargetSection) {
+    scrollToSection(store.modalTargetSection);
   }
 });
 
@@ -265,23 +267,10 @@ const scrollToSection = async (section: 'schedule') => {
   }
 };
 
-watch(() => store.showDatabaseModal, (show) => {
-  if (show && store.modalTargetSection) {
-    scrollToSection(store.modalTargetSection);
-  }
-});
 </script>
 
 <template>
-  <Transition
-    enter-active-class="transition duration-300 ease-out"
-    enter-from-class="opacity-0"
-    enter-to-class="opacity-100"
-    leave-active-class="transition duration-200 ease-in"
-    leave-from-class="opacity-100"
-    leave-to-class="opacity-0"
-  >
-    <div v-if="store.showDatabaseModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div 
         class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-3xl w-full border border-border overflow-hidden flex flex-col max-h-[90vh]"
         @click.stop
@@ -924,5 +913,4 @@ watch(() => store.showDatabaseModal, (show) => {
         </div>
       </div>
     </div>
-  </Transition>
 </template>

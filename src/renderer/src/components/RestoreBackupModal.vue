@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
@@ -39,19 +39,11 @@ const canProceed = computed(() => {
   }
 });
 
-// Start countdown when modal opens
-watch(() => store.showRestoreModal, (show) => {
-  if (show) {
-    restoreMode.value = 'existing';
-    newDbName.value = '';
-    newDbPort.value = 5432;
-    if (databases.value.length > 0) {
-      selectedDb.value = databases.value[0].id;
-    }
-    startCountdown();
-  } else {
-    stopCountdown();
+onMounted(() => {
+  if (databases.value.length > 0) {
+    selectedDb.value = databases.value[0].id;
   }
+  startCountdown();
 });
 
 const startCountdown = () => {
@@ -135,15 +127,7 @@ const close = () => {
 </script>
 
 <template>
-  <Transition
-    enter-active-class="transition duration-200 ease-out"
-    enter-from-class="opacity-0"
-    enter-to-class="opacity-100"
-    leave-active-class="transition duration-150 ease-in"
-    leave-from-class="opacity-100"
-    leave-to-class="opacity-0"
-  >
-    <div v-if="store.showRestoreModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div 
         class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-2xl w-full border border-border overflow-hidden flex flex-col max-h-[92vh]"
         @click.stop
@@ -346,5 +330,4 @@ const close = () => {
         </div>
       </div>
     </div>
-  </Transition>
 </template>

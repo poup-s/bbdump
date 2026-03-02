@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed } from 'vue';
 import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
@@ -22,12 +22,6 @@ const isConfirmValid = computed(() => {
   return confirmInput.value.trim() === targetDbName.value;
 });
 
-watch(() => store.showRestoreConfirmModal, (show) => {
-  if (show) {
-    confirmInput.value = '';
-    error.value = '';
-  }
-});
 
 const restore = async () => {
   if (!isConfirmValid.value) {
@@ -107,15 +101,7 @@ const handleInput = () => {
 </script>
 
 <template>
-  <Transition
-    enter-active-class="transition duration-200 ease-out"
-    enter-from-class="opacity-0 scale-95"
-    enter-to-class="opacity-100 scale-100"
-    leave-active-class="transition duration-150 ease-in"
-    leave-from-class="opacity-100 scale-100"
-    leave-to-class="opacity-0 scale-95"
-  >
-    <div v-if="store.showRestoreConfirmModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
       <div
         class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-md w-full border border-border overflow-hidden flex flex-col max-h-[92vh]"
         @click.stop
@@ -216,6 +202,5 @@ const handleInput = () => {
         </div>
       </div>
     </div>
-  </Transition>
 </template>
 

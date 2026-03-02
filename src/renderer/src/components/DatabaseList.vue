@@ -1122,7 +1122,7 @@ onUnmounted(() => {
     />
 
     <!-- Project Modal -->
-    <ProjectModal />
+    <ProjectModal v-if="store.showProjectModal" />
 
     <!-- ProxyPortModal removed — config is now inline in ProjectSection -->
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
@@ -28,29 +28,8 @@ const errors = ref({
 
 const availableProjects = computed(() => store.projects || []);
 
-watch(() => store.showCreateDatabaseModal, (show) => {
-  if (show) {
-    // Reset form
-    form.value = {
-      name: '',
-      displayName: '',
-      port: 5432,
-      password: ''
-    };
-    errors.value = {
-      name: '',
-      port: ''
-    };
-    progress.value = null;
-    isPortEditable.value = false;
-    showAdvanced.value = false;
-    // Pre-fill project from context
-    selectedProjectId.value = store.createDatabaseForProjectId || null;
-  }
-});
-
-// Écouter les événements de progression depuis le main process
 onMounted(() => {
+  selectedProjectId.value = store.createDatabaseForProjectId || null;
   ipcRenderer.on('create-database-progress', (_, prog: { step: string; message: string; progress: number }) => {
     progress.value = prog;
   });
@@ -140,28 +119,11 @@ const close = () => {
 </script>
 
 <template>
-  <Transition
-    enter-active-class="transition duration-300 ease-out"
-    enter-from-class="opacity-0"
-    enter-to-class="opacity-100"
-    leave-active-class="transition duration-200 ease-in"
-    leave-from-class="opacity-100"
-    leave-to-class="opacity-0"
-  >
-    <div v-if="store.showCreateDatabaseModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <Transition
-        enter-active-class="transition duration-300 ease-out"
-        enter-from-class="opacity-0 scale-95 translate-y-4"
-        enter-to-class="opacity-100 scale-100 translate-y-0"
-        leave-active-class="transition duration-200 ease-in"
-        leave-from-class="opacity-100 scale-100 translate-y-0"
-        leave-to-class="opacity-0 scale-95 translate-y-4"
-      >
-        <div
-          v-if="store.showCreateDatabaseModal"
-          class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-lg w-full border border-border overflow-hidden flex flex-col"
-          @click.stop
-        >
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+    <div
+      class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-lg w-full border border-border overflow-hidden flex flex-col"
+      @click.stop
+    >
           <!-- Header with gradient -->
           <div class="relative px-6 py-5 border-b border-border bg-gradient-to-r from-blue-500/10 via-indigo-500/10 to-purple-500/10">
             <div class="flex items-start justify-between">
@@ -400,8 +362,6 @@ const close = () => {
               {{ t('modal.createDatabase') }}
             </button>
           </div>
-        </div>
-      </Transition>
     </div>
-  </Transition>
+  </div>
 </template>

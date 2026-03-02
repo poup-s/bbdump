@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
@@ -29,21 +29,13 @@ const form = ref({
   databaseIds: [] as string[],
 });
 
-watch(() => store.showProjectModal, (show) => {
-  if (show) {
-    if (store.editingProject) {
-      form.value = {
-        name: store.editingProject.name,
-        color: store.editingProject.color,
-        databaseIds: [...store.editingProject.databaseIds],
-      };
-    } else {
-      form.value = {
-        name: '',
-        color: 'bg-blue-500',
-        databaseIds: [],
-      };
-    }
+onMounted(() => {
+  if (store.editingProject) {
+    form.value = {
+      name: store.editingProject.name,
+      color: store.editingProject.color,
+      databaseIds: [...store.editingProject.databaseIds],
+    };
   }
 });
 
@@ -93,7 +85,7 @@ const save = async () => {
 </script>
 
 <template>
-  <div v-if="store.showProjectModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
     <div
       class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-lg w-full border border-border overflow-hidden flex flex-col max-h-[90vh]"
       @click.stop

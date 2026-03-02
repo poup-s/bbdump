@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, computed } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
@@ -102,16 +102,8 @@ const close = () => {
   searchQuery.value = '';
 };
 
-watch(() => store.showExtensionsModal, (show) => {
-  if (show) {
-    loadExtensions();
-  }
-});
-
 onMounted(() => {
-  if (store.showExtensionsModal) {
-    loadExtensions();
-  }
+  loadExtensions();
 });
 </script>
 

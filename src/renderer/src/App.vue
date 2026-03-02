@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from 'vue';
+import { computed } from 'vue';
 import { store } from './store';
 import { useI18n } from './composables/useI18n';
-import { useToast } from './composables/useToast';
-import { ipcRenderer } from './electron';
+import { useAppEvents } from './composables/useAppEvents';
 import { useDark, useToggle } from '@vueuse/core';
 
 // Components
@@ -26,10 +25,10 @@ import ThreeBackground from './components/ThreeBackground.vue';
 import VideoLoader from './components/VideoLoader.vue';
 import ExtensionsModal from './components/ExtensionsModal.vue';
 
-const { t, setLanguage } = useI18n();
-const { addToast } = useToast();
+const { t } = useI18n();
 const isDark = useDark();
 const toggleDark = useToggle(isDark);
+useAppEvents();
 
 const activeTab = computed({
   get: () => store.activeTab,
@@ -45,141 +44,6 @@ const tabs = [
   { id: 'settings', label: 'nav.settings', short: 'navShort.settings', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z' },
   { id: 'about', label: 'nav.about', short: 'navShort.about', icon: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z' }
 ];
-
-const loadConfig = async () => {
-  try {
-    const config = await ipcRenderer.invoke('get-config');
-    store.databases = config.databases;
-    store.projects = config.projects || [];
-    store.viewMode = config.viewMode || 'list';
-
-    // Handle onboarding state
-    store.onboardingCompleted = config.onboardingCompleted || false;
-
-    // Handle language
-    if (config.language) {
-      store.language = config.language;
-      setLanguage(config.language);
-    }
-
-    // Handle SQL mutations setting
-    store.allowSqlMutations = config.allowSqlMutations || false;
-  } catch (error) {
-    console.error('Error loading config:', error);
-    addToast('Error loading configuration', 'error');
-  }
-};
-
-const loadAppInfo = async () => {
-  try {
-    const version = await ipcRenderer.invoke('get-app-version');
-    store.appVersion = version;
-  } catch (error) {
-    console.error('Error loading app info:', error);
-  }
-};
-
-const checkForUpdates = async () => {
-  try {
-    store.checkingUpdate = true;
-    const result = await ipcRenderer.invoke('check-for-updates');
-    store.checkingUpdate = false;
-    
-    if (result.updateAvailable) {
-      store.updateAvailable = true;
-      store.updateDetails = {
-        version: result.version,
-        url: result.url,
-        releaseNotes: result.releaseNotes
-      };
-      addToast(t('settings.updateAvailable', { version: result.version }), 'info', '__navigate:about');
-    } else {
-      store.updateAvailable = false;
-      store.updateDetails = null;
-    }
-  } catch (error) {
-    store.checkingUpdate = false;
-    console.error('Error checking for updates:', error);
-  }
-};
-
-// IPC Listeners
-const setupListeners = () => {
-  ipcRenderer.on('backup-complete', (_: any, result: any) => {
-    store.isBackingUp = false;
-    if (result.success) {
-      const db = store.databases.find(d => d.id === result.databaseId);
-      addToast(t('backup.success', { db: db?.name || result.database }), 'success');
-      if (db) db.lastBackup = result.timestamp;
-    } else {
-      addToast(t('backup.error', { db: result.database, error: result.error }), 'error');
-    }
-    store.backupProgress = null;
-  });
-
-  ipcRenderer.on('backup-progress', (_: any, data: any) => {
-    store.backupProgress = data;
-  });
-
-  ipcRenderer.on('backup-started', (_: any, dbId: string) => {
-    store.isBackingUp = true;
-    const db = store.databases.find(d => d.id === dbId);
-    store.backupProgress = { status: 'starting', dbId, logs: [], error: null };
-    addToast(t('backup.started', { db: db?.name || dbId }), 'info');
-  });
-
-  ipcRenderer.on('open-dbviewer', (_: any, dbId: string) => {
-    const db = store.databases.find(d => d.id === dbId);
-    if (db) {
-      store.viewerDb = db;
-      store.showDbViewer = true;
-    }
-  });
-
-  ipcRenderer.on('edit-db', (_: any, dbId: string) => {
-    const db = store.databases.find(d => d.id === dbId);
-    if (db) {
-      store.editingDatabase = JSON.parse(JSON.stringify(db));
-      store.showDatabaseModal = true;
-    }
-  });
-
-  ipcRenderer.on('update-download-progress', (_: any, progress: any) => {
-    store.downloadingUpdate = true;
-    store.downloadProgress = progress.percent;
-  });
-
-  ipcRenderer.on('update-downloaded', () => {
-    store.downloadingUpdate = false;
-    store.updateDownloaded = true;
-    addToast(t('settings.updateReady'), 'success');
-  });
-
-  ipcRenderer.on('update-error', (_: any, _errorMsg: string) => {
-    store.downloadingUpdate = false;
-    store.downloadProgress = 0;
-    addToast(t('settings.updateError'), 'error');
-  });
-
-};
-
-onMounted(() => {
-  loadConfig();
-  loadAppInfo();
-  checkForUpdates();
-  setupListeners();
-});
-
-onUnmounted(() => {
-  ipcRenderer.removeAllListeners('backup-complete');
-  ipcRenderer.removeAllListeners('backup-progress');
-  ipcRenderer.removeAllListeners('backup-started');
-  ipcRenderer.removeAllListeners('open-dbviewer');
-  ipcRenderer.removeAllListeners('edit-db');
-  ipcRenderer.removeAllListeners('update-download-progress');
-  ipcRenderer.removeAllListeners('update-downloaded');
-  ipcRenderer.removeAllListeners('update-error');
-});
 
 const handleLoaderComplete = () => {
   store.isLoading = false;
@@ -287,17 +151,26 @@ const handleLoaderComplete = () => {
     <ToastNotification />
     <ConfirmModal />
     
-    <!-- Modals -->
-    <DatabaseModal />
-    <CreateDatabaseModal />
-    <RestoreBackupModal />
-    <RestoreConfirmModal />
-    <!-- BackupProgressModal removed in favor of card animation -->
+    <!-- Modals — mounted on demand via v-if for memory efficiency -->
+    <Transition enter-active-class="transition duration-300 ease-out" enter-from-class="opacity-0" enter-to-class="opacity-100" leave-active-class="transition duration-200 ease-in" leave-from-class="opacity-100" leave-to-class="opacity-0">
+      <DatabaseModal v-if="store.showDatabaseModal" />
+    </Transition>
+    <Transition enter-active-class="transition duration-300 ease-out" enter-from-class="opacity-0" enter-to-class="opacity-100" leave-active-class="transition duration-200 ease-in" leave-from-class="opacity-100" leave-to-class="opacity-0">
+      <CreateDatabaseModal v-if="store.showCreateDatabaseModal" />
+    </Transition>
+    <Transition enter-active-class="transition duration-200 ease-out" enter-from-class="opacity-0" enter-to-class="opacity-100" leave-active-class="transition duration-150 ease-in" leave-from-class="opacity-100" leave-to-class="opacity-0">
+      <RestoreBackupModal v-if="store.showRestoreModal" />
+    </Transition>
+    <Transition enter-active-class="transition duration-200 ease-out" enter-from-class="opacity-0 scale-95" enter-to-class="opacity-100 scale-100" leave-active-class="transition duration-150 ease-in" leave-from-class="opacity-100 scale-100" leave-to-class="opacity-0 scale-95">
+      <RestoreConfirmModal v-if="store.showRestoreConfirmModal" />
+    </Transition>
+    <Transition enter-active-class="transition duration-200 ease-out" enter-from-class="opacity-0" enter-to-class="opacity-100" leave-active-class="transition duration-150 ease-in" leave-from-class="opacity-100" leave-to-class="opacity-0">
+      <ExtensionsModal v-if="store.showExtensionsModal" />
+    </Transition>
     <DbViewer
       v-if="store.showDbViewer"
       @close="store.showDbViewer = false; store.viewerDb = null"
     />
-    <ExtensionsModal v-if="store.showExtensionsModal" />
 
   </div>
 </template>
