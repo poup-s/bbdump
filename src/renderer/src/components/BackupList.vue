@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
+import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
@@ -57,8 +58,8 @@ const loadBackups = async () => {
   try {
     const response = await ipcRenderer.invoke('get-backups');
     store.backups = response.backups || [];
-  } catch (error: any) {
-    addToast('Error loading backups: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error loading backups: ' + getErrorMessage(error), 'error');
   } finally {
     isLoading.value = false;
   }
@@ -76,8 +77,8 @@ const deleteBackup = (backup: Backup) => {
         selected.value.delete(backup.filename);
         await loadBackups();
         addToast(t('toasts.backupDeleted'), 'success');
-      } catch (error: any) {
-        addToast('Error deleting backup: ' + error.message, 'error');
+      } catch (error) {
+        addToast('Error deleting backup: ' + getErrorMessage(error), 'error');
       }
     }
   });
@@ -101,8 +102,8 @@ const deleteSelected = () => {
         selected.value = new Set();
         await loadBackups();
         addToast(t('backup.deleteSelectedSuccess', { count }), 'success');
-      } catch (error: any) {
-        addToast('Error deleting backups: ' + error.message, 'error');
+      } catch (error) {
+        addToast('Error deleting backups: ' + getErrorMessage(error), 'error');
       } finally {
         isDeleting.value = false;
       }
@@ -121,8 +122,8 @@ const downloadBackup = async (backup: Backup) => {
     if (result?.success) {
       addToast(t('backup.downloaded'), 'success');
     }
-  } catch (error: any) {
-    addToast('Error downloading backup: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error downloading backup: ' + getErrorMessage(error), 'error');
   }
 };
 

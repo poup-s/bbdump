@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, markRaw, nextTick } from 'vue';
+import { getErrorMessage } from '../../utils';
 import { VueFlow, useVueFlow } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
@@ -143,9 +144,9 @@ const loadRelationsGraph = async () => {
     await nextTick();
     fitView({ padding: 0.3, duration: 800 });
 
-  } catch (err: any) {
+  } catch (err) {
     console.error('Error loading relations graph:', err);
-    error.value = err.message || 'Failed to load relations';
+    error.value = getErrorMessage(err) || 'Failed to load relations';
   } finally {
     loading.value = false;
   }

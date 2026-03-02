@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
+import { getErrorMessage } from '../utils';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
@@ -78,8 +79,8 @@ const loadConfig = async () => {
     }
 
     configInfo.value = info;
-  } catch (error: any) {
-    addToast(`Error loading PostgreSQL config: ${error.message}`, 'error');
+  } catch (error) {
+    addToast(`Error loading PostgreSQL config: ${getErrorMessage(error)}`, 'error');
     configInfo.value = null;
   } finally {
     isLoading.value = false;
@@ -102,8 +103,8 @@ const killConnection = async (pid: number) => {
         } else {
           addToast(result.error || t('postgresConfig.killError'), 'error');
         }
-      } catch (error: any) {
-        addToast(`Error killing connection: ${error.message}`, 'error');
+      } catch (error) {
+        addToast(`Error killing connection: ${getErrorMessage(error)}`, 'error');
       }
     }
   });
@@ -124,8 +125,8 @@ const dropDatabase = async (dbName: string) => {
         } else {
           addToast(result.error || t('postgresConfig.dropError'), 'error');
         }
-      } catch (error: any) {
-        addToast(`Error dropping database: ${error.message}`, 'error');
+      } catch (error) {
+        addToast(`Error dropping database: ${getErrorMessage(error)}`, 'error');
       }
     }
   });
@@ -152,8 +153,8 @@ const restartPostgres = async () => {
           addToast(result.error || t('viewer.restartError'), 'error');
           isRestarting.value = false;
         }
-      } catch (error: any) {
-        addToast(error.message || t('viewer.restartError'), 'error');
+      } catch (error) {
+        addToast(getErrorMessage(error) || t('viewer.restartError'), 'error');
         isRestarting.value = false;
       }
     }
@@ -205,8 +206,8 @@ const addDatabaseToConfig = async (connectionInfo: any) => {
 
     store.activeTab = 'databases';
     addToast(t('postgresConfig.databaseAdded', { name: connectionInfo.database }), 'success');
-  } catch (error: any) {
-    addToast(`Error adding database: ${error.message}`, 'error');
+  } catch (error) {
+    addToast(`Error adding database: ${getErrorMessage(error)}`, 'error');
   }
 };
 
@@ -228,8 +229,8 @@ const testDatabase = async (dbName: string) => {
     } else {
       addToast(result.error || t('postgresConfig.connectionError'), 'error');
     }
-  } catch (error: any) {
-    addToast(`Error testing connection: ${error.message}`, 'error');
+  } catch (error) {
+    addToast(`Error testing connection: ${getErrorMessage(error)}`, 'error');
   } finally {
     isConnecting.value = false;
   }
@@ -255,8 +256,8 @@ const testConnectionWithPassword = async () => {
     } else {
       addToast(result.error || t('postgresConfig.connectionError'), 'error');
     }
-  } catch (error: any) {
-    addToast(`Error testing connection: ${error.message}`, 'error');
+  } catch (error) {
+    addToast(`Error testing connection: ${getErrorMessage(error)}`, 'error');
   } finally {
     isConnecting.value = false;
   }
@@ -296,8 +297,8 @@ const disconnectDatabase = async (dbName: string) => {
           'success'
         );
         await loadConfig();
-      } catch (error: any) {
-        addToast(`Error removing database from list: ${error.message}`, 'error');
+      } catch (error) {
+        addToast(`Error removing database from list: ${getErrorMessage(error)}`, 'error');
       }
     }
   });

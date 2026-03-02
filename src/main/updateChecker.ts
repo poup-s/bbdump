@@ -1,4 +1,5 @@
 import { autoUpdater, UpdateInfo as ElectronUpdateInfo } from 'electron-updater';
+import { getErrorMessage } from './utils';
 import { app, BrowserWindow } from 'electron';
 import { logger } from './logger';
 
@@ -80,14 +81,14 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
       url: `https://github.com/poup-s/bbDump-app/releases/tag/v${info.version}`,
       releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
     };
-  } catch (error: any) {
-    logger.error(`Update check failed: ${error.message}`);
+  } catch (error) {
+    logger.error(`Update check failed: ${getErrorMessage(error)}`);
     return {
       updateAvailable: false,
       version: '',
       url: '',
       releaseNotes: '',
-      error: error.message,
+      error: getErrorMessage(error),
     };
   }
 }

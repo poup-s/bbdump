@@ -1,4 +1,5 @@
 import { ipcMain, BrowserWindow } from 'electron';
+import { getErrorMessage } from '../utils';
 import * as databaseCreator from '../databaseCreator';
 import { backupManager } from '../backup';
 import { logger } from '../logger';
@@ -73,11 +74,11 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
                 database: newDb
             };
 
-        } catch (error: any) {
-            logger.error(`Error creating local database: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error creating local database: ${getErrorMessage(error)}`);
             return {
                 success: false,
-                error: error.message
+                error: getErrorMessage(error)
             };
         }
     });
@@ -253,8 +254,8 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
 
             return { success: true };
 
-        } catch (error: any) {
-            logger.error(`Error duplicating database: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error duplicating database: ${getErrorMessage(error)}`);
             // Cleanup backup file created during failed duplication
             if (createdBackupFile) {
                 try {
@@ -266,7 +267,7 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
                     logger.warn(`Failed to cleanup backup file: ${cleanupError}`);
                 }
             }
-            return { success: false, error: error.message };
+            return { success: false, error: getErrorMessage(error) };
         }
     });
 }

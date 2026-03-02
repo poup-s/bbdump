@@ -1,4 +1,8 @@
-import { Database, Log } from './types';
+import { Database } from './types';
+
+export function getErrorMessage(e: unknown): string {
+    return e instanceof Error ? e.message : String(e);
+}
 
 export function getDbDisplayName(db: Database): string {
     if (db.displayName && db.displayName.trim() !== '') {

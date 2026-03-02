@@ -1,4 +1,5 @@
 import { spawn, exec } from 'child_process';
+import { getErrorMessage } from '../utils';
 import { promisify } from 'util';
 import { detectOS, getOSType } from '../os/osDetector';
 import { logger } from '../logger';
@@ -57,8 +58,8 @@ export async function installHomebrew(
       externalInstallation: true,
       instructions: 'Une fenêtre Terminal a été ouverte avec la commande d\'installation de Homebrew. Suivez les instructions dans le Terminal, puis revenez ici et cliquez sur "Revérifier".'
     };
-  } catch (error: any) {
-    logger.error(`Failed to open Terminal for Homebrew installation: ${error.message}`);
+  } catch (error) {
+    logger.error(`Failed to open Terminal for Homebrew installation: ${getErrorMessage(error)}`);
     return {
       success: false,
       error: `Impossible d'ouvrir le Terminal. Veuillez installer Homebrew manuellement en exécutant cette commande dans le Terminal :\n\n/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
@@ -182,10 +183,10 @@ async function installPostgresMacOS(
         }
       });
     });
-  } catch (error: any) {
+  } catch (error) {
     return {
       success: false,
-      error: `Échec de l'installation de PostgreSQL: ${error.message}`
+      error: `Échec de l'installation de PostgreSQL: ${getErrorMessage(error)}`
     };
   }
 }
@@ -260,10 +261,10 @@ async function installPostgresLinux(
       success: false,
       error: `Impossible d'ouvrir un terminal automatiquement. Veuillez exécuter cette commande manuellement :\n\n${installCommand}`
     };
-  } catch (error: any) {
+  } catch (error) {
     return {
       success: false,
-      error: `Échec de l'installation de PostgreSQL: ${error.message}`
+      error: `Échec de l'installation de PostgreSQL: ${getErrorMessage(error)}`
     };
   }
 }

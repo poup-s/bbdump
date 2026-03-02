@@ -13,7 +13,7 @@ const loadScheduledTasks = async () => {
   try {
     const tasks = await ipcRenderer.invoke('get-scheduled-tasks');
     store.scheduledTasks = tasks;
-  } catch (error: any) {
+  } catch (error) {
     console.error('Error loading scheduled tasks:', error);
   }
 };

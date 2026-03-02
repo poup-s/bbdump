@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import { getErrorMessage } from '../utils';
 import * as dbViewer from '../dbViewer';
 import { logger } from '../logger';
 import { encryptionManager } from '../encryption';
@@ -60,8 +61,8 @@ export function registerDbViewerHandlers() {
             logger.info(`Getting tables for database: ${params.db.id}`);
             const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.getDatabaseTables(dbConfig);
-        } catch (error: any) {
-            logger.error(`Error getting database tables: ${error.message || error}`);
+        } catch (error) {
+            logger.error(`Error getting database tables: ${getErrorMessage(error) || error}`);
             throw error;
         }
     });
@@ -71,8 +72,8 @@ export function registerDbViewerHandlers() {
             logger.info(`Getting full schema for database: ${params.db.id}`);
             const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.getDatabaseFullSchema(dbConfig);
-        } catch (error: any) {
-            logger.error(`Error getting database full schema: ${error.message || error}`);
+        } catch (error) {
+            logger.error(`Error getting database full schema: ${getErrorMessage(error) || error}`);
             throw error;
         }
     });
@@ -232,8 +233,8 @@ export function registerDbViewerHandlers() {
                 maxRows: params.maxRows,
                 timeoutMs: params.timeoutMs
             });
-        } catch (error: any) {
-            logger.error(`Error executing SQL query: ${error.message || error}`);
+        } catch (error) {
+            logger.error(`Error executing SQL query: ${getErrorMessage(error) || error}`);
             throw error;
         }
     });
@@ -245,6 +246,10 @@ export function registerDbViewerHandlers() {
         timeoutMs?: number;
     }) => {
         try {
+            const config = getConfig();
+            if (!config.allowSqlMutations) {
+                throw new Error('SQL mutations are disabled in settings');
+            }
             logger.info(`Executing SQL mutation on ${params.db.id}`);
             const dbConfig = getDbConfig(params.db.id);
             return await dbViewer.executeMutationQuery({
@@ -253,8 +258,8 @@ export function registerDbViewerHandlers() {
                 maxRows: params.maxRows,
                 timeoutMs: params.timeoutMs
             });
-        } catch (error: any) {
-            logger.error(`Error executing SQL mutation: ${error.message || error}`);
+        } catch (error) {
+            logger.error(`Error executing SQL mutation: ${getErrorMessage(error) || error}`);
             throw error;
         }
     });
@@ -263,8 +268,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('get-postgres-config', async (_, port: number = 5432) => {
         try {
             return await postgresConfig.getPostgresConfigInfo(port);
-        } catch (error: any) {
-            logger.error(`Error getting PostgreSQL config: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error getting PostgreSQL config: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -272,8 +277,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('kill-postgres-connection', async (_, pid: number, port: number = 5432) => {
         try {
             return await postgresConfig.killConnection(pid, port);
-        } catch (error: any) {
-            logger.error(`Error killing PostgreSQL connection: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error killing PostgreSQL connection: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -281,8 +286,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('disconnect-postgres-database', async (_, dbName: string, port: number = 5432) => {
         try {
             return await postgresConfig.disconnectDatabase(dbName, port);
-        } catch (error: any) {
-            logger.error(`Error disconnecting PostgreSQL database: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error disconnecting PostgreSQL database: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -290,8 +295,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('drop-postgres-database', async (_, dbName: string, port: number = 5432, forceDisconnect: boolean = true) => {
         try {
             return await postgresConfig.dropDatabase(dbName, port, forceDisconnect);
-        } catch (error: any) {
-            logger.error(`Error dropping PostgreSQL database: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error dropping PostgreSQL database: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -299,8 +304,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('test-postgres-connection', async (_, dbName: string, port: number = 5432, password?: string) => {
         try {
             return await postgresConfig.testDatabaseConnection(dbName, port, password);
-        } catch (error: any) {
-            logger.error(`Error testing PostgreSQL connection: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error testing PostgreSQL connection: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -308,8 +313,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('get-postgres-extensions', async (_, dbName: string, port: number = 5432) => {
         try {
             return await postgresConfig.listPostgresExtensions(dbName, port);
-        } catch (error: any) {
-            logger.error(`Error getting PostgreSQL extensions: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error getting PostgreSQL extensions: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -317,8 +322,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('install-postgres-extension', async (_, dbName: string, extensionName: string, port: number = 5432) => {
         try {
             return await postgresConfig.installExtension(dbName, extensionName, port);
-        } catch (error: any) {
-            logger.error(`Error installing PostgreSQL extension: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error installing PostgreSQL extension: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -326,8 +331,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('uninstall-postgres-extension', async (_, dbName: string, extensionName: string, port: number = 5432) => {
         try {
             return await postgresConfig.uninstallExtension(dbName, extensionName, port);
-        } catch (error: any) {
-            logger.error(`Error uninstalling PostgreSQL extension: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error uninstalling PostgreSQL extension: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -335,8 +340,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('get-postgres-performance-stats', async (_, dbName: string, port: number = 5432) => {
         try {
             return await postgresConfig.getPostgresPerformanceStats(dbName, port);
-        } catch (error: any) {
-            logger.error(`Error getting PostgreSQL performance stats: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error getting PostgreSQL performance stats: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -344,8 +349,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('reset-postgres-performance-stats', async (_, dbName: string, port: number = 5432) => {
         try {
             return await postgresConfig.resetPostgresPerformanceStats(dbName, port);
-        } catch (error: any) {
-            logger.error(`Error resetting PostgreSQL performance stats: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error resetting PostgreSQL performance stats: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -353,8 +358,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('restart-postgres', async (_) => {
         try {
             return await postgresConfig.restartPostgres();
-        } catch (error: any) {
-            logger.error(`Error restarting PostgreSQL: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error restarting PostgreSQL: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -362,8 +367,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('check-postgres-config', async (_, extensionName: string) => {
         try {
             return await postgresConfig.checkPostgresConfig(extensionName);
-        } catch (error: any) {
-            logger.error(`Error checking PostgreSQL config: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error checking PostgreSQL config: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -371,8 +376,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('fix-postgres-config', async (_, extensionName: string) => {
         try {
             return await postgresConfig.fixPostgresConfig(extensionName);
-        } catch (error: any) {
-            logger.error(`Error fixing PostgreSQL config: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error fixing PostgreSQL config: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -390,8 +395,8 @@ export function registerDbViewerHandlers() {
                 return parseInt(result.rows[0].size, 10);
             }
             return null;
-        } catch (error: any) {
-            logger.error(`Error getting database size for ${dbId}: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error getting database size for ${dbId}: ${getErrorMessage(error)}`);
             return null;
         }
     });

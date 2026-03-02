@@ -152,7 +152,7 @@ watch(() => props.modelValue, (newVal) => {
     visualState.value = parsed;
     
     // Check if it matches a preset
-    const preset = presets.find(p => p.value === newVal);
+    const preset = presets.value.find(p => p.value === newVal);
     if (preset) {
       editMode.value = 'preset';
     } else {
@@ -174,7 +174,6 @@ const selectPreset = (preset: typeof presets[0]) => {
 
 // Common values for dropdowns
 const hourOptions = Array.from({ length: 24 }, (_, i) => i);
-const minuteOptions = [0, 15, 30, 45];
 const dayOptions = Array.from({ length: 31 }, (_, i) => i + 1);
 const monthOptions = Array.from({ length: 12 }, (_, i) => i + 1);
 const dayOfWeekOptions = computed(() => {

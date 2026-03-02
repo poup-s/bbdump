@@ -1,6 +1,7 @@
 import { Client } from 'pg';
+import { getErrorMessage } from './utils';
 import { logger } from './logger';
-import { checkPostgresInstalled, checkPostgresRunning, tryPgConnect, getPgClient } from './postgresManager';
+import { checkPostgresInstalled } from './postgresManager';
 
 export interface PostgresDatabase {
   name: string;
@@ -235,9 +236,9 @@ export async function killConnection(pid: number, port: number = 5432): Promise<
 
     logger.info(`Terminated PostgreSQL connection with PID ${pid}`);
     return { success: true };
-  } catch (error: any) {
-    logger.error(`Error killing connection ${pid}: ${error.message}`);
-    return { success: false, error: error.message };
+  } catch (error) {
+    logger.error(`Error killing connection ${pid}: ${getErrorMessage(error)}`);
+    return { success: false, error: getErrorMessage(error) };
   } finally {
     await client.end();
   }
@@ -283,9 +284,9 @@ export async function disconnectDatabase(dbName: string, port: number = 5432): P
 
     logger.info(`Disconnected ${connectionCount} connection(s) from database "${dbName}"`);
     return { success: true, disconnectedCount: connectionCount };
-  } catch (error: any) {
-    logger.error(`Error disconnecting database ${dbName}: ${error.message}`);
-    return { success: false, error: error.message };
+  } catch (error) {
+    logger.error(`Error disconnecting database ${dbName}: ${getErrorMessage(error)}`);
+    return { success: false, error: getErrorMessage(error) };
   } finally {
     await client.end();
   }
@@ -330,9 +331,9 @@ export async function dropDatabase(dbName: string, port: number = 5432, forceDis
 
     logger.info(`Database "${dbName}" dropped successfully`);
     return { success: true };
-  } catch (error: any) {
-    logger.error(`Error dropping database ${dbName}: ${error.message}`);
-    return { success: false, error: error.message };
+  } catch (error) {
+    logger.error(`Error dropping database ${dbName}: ${getErrorMessage(error)}`);
+    return { success: false, error: getErrorMessage(error) };
   } finally {
     await client.end();
   }
@@ -391,18 +392,18 @@ export async function testDatabaseConnection(
             database: dbName
           }
         };
-      } catch (error: any) {
+      } catch (error) {
         try {
           await client.end();
         } catch {
           // Ignore
         }
         // Si c'est une erreur d'authentification, continuer avec le prochain utilisateur
-        if (error.message.includes('password') || error.message.includes('authentication')) {
+        if (getErrorMessage(error).includes('password') || getErrorMessage(error).includes('authentication')) {
           continue;
         }
         // Sinon, retourner l'erreur
-        return { success: false, error: error.message };
+        return { success: false, error: getErrorMessage(error) };
       }
     }
     return { success: false, error: 'Authentication failed with provided password' };
@@ -439,10 +440,10 @@ export async function testDatabaseConnection(
               database: dbName
             }
           };
-        } catch (error: any) {
+        } catch (error) {
           try { await client.end(); } catch { /* Ignore */ }
-          if (error.message.includes('does not exist') && !error.message.includes('role')) {
-            return { success: false, error: error.message };
+          if (getErrorMessage(error).includes('does not exist') && !getErrorMessage(error).includes('role')) {
+            return { success: false, error: getErrorMessage(error) };
           }
         }
       }
@@ -479,7 +480,7 @@ export async function testDatabaseConnection(
             database: dbName
           }
         };
-      } catch (error: any) {
+      } catch (error) {
         try {
           await client.end();
         } catch {
@@ -487,12 +488,12 @@ export async function testDatabaseConnection(
         }
 
         // Si c'est une erreur d'authentification, on a besoin d'un mot de passe
-        if (error.message.includes('password') || error.message.includes('authentication') || error.message.includes('SCRAM')) {
+        if (getErrorMessage(error).includes('password') || getErrorMessage(error).includes('authentication') || getErrorMessage(error).includes('SCRAM')) {
           return { success: false, needsPassword: true, error: 'Password required' };
         }
 
         // Autre erreur (base n'existe pas, etc.)
-        return { success: false, error: error.message };
+        return { success: false, error: getErrorMessage(error) };
       }
     }
   }
@@ -508,7 +509,6 @@ export async function getPostgresConfigInfo(port: number = 5432): Promise<Postgr
     // Essayer d'abord de se connecter directement à PostgreSQL
     // Si on peut se connecter, PostgreSQL est clairement installé et fonctionne
     let version: string | undefined;
-    let isRunning = false;
 
     try {
       const client = await createPostgresConnection(port);
@@ -517,11 +517,10 @@ export async function getPostgresConfigInfo(port: number = 5432): Promise<Postgr
         const versionResult = await client.query('SELECT version()');
         const versionMatch = versionResult.rows[0]?.version?.match(/PostgreSQL (\d+\.\d+)/);
         version = versionMatch ? versionMatch[1] : undefined;
-        isRunning = true;
       } finally {
         await client.end();
       }
-    } catch (connectionError: any) {
+    } catch {
       // Si la connexion échoue, vérifier si PostgreSQL est installé mais pas démarré
       const installed = await checkPostgresInstalled();
       if (!installed.installed) {
@@ -572,8 +571,8 @@ export async function getPostgresConfigInfo(port: number = 5432): Promise<Postgr
       databases,
       activeConnections: connections
     };
-  } catch (error: any) {
-    logger.error(`Error getting PostgreSQL config info: ${error.message}`);
+  } catch (error) {
+    logger.error(`Error getting PostgreSQL config info: ${getErrorMessage(error)}`);
     throw error;
   }
 }
@@ -598,8 +597,8 @@ export async function listPostgresExtensions(dbName: string, port: number = 5432
 
     const result = await client.query(query);
     return result.rows;
-  } catch (error: any) {
-    logger.error(`Error listing extensions for ${dbName}: ${error.message}`);
+  } catch (error) {
+    logger.error(`Error listing extensions for ${dbName}: ${getErrorMessage(error)}`);
     throw error;
   } finally {
     await client.end();
@@ -625,9 +624,9 @@ export async function installExtension(dbName: string, extensionName: string, po
     }
 
     return { success: true };
-  } catch (error: any) {
-    logger.error(`Error installing extension ${extensionName} on ${dbName}: ${error.message}`);
-    return { success: false, error: error.message };
+  } catch (error) {
+    logger.error(`Error installing extension ${extensionName} on ${dbName}: ${getErrorMessage(error)}`);
+    return { success: false, error: getErrorMessage(error) };
   } finally {
     await client.end();
   }
@@ -652,9 +651,9 @@ export async function uninstallExtension(dbName: string, extensionName: string, 
     }
 
     return { success: true };
-  } catch (error: any) {
-    logger.error(`Error uninstalling extension ${extensionName} from ${dbName}: ${error.message}`);
-    return { success: false, error: error.message };
+  } catch (error) {
+    logger.error(`Error uninstalling extension ${extensionName} from ${dbName}: ${getErrorMessage(error)}`);
+    return { success: false, error: getErrorMessage(error) };
   } finally {
     await client.end();
   }
@@ -726,8 +725,8 @@ export async function getPostgresPerformanceStats(dbName: string, port: number =
       },
       extensionActive: true
     };
-  } catch (error: any) {
-    if (error.message.includes('pg_stat_statements must be loaded via shared_preload_libraries')) {
+  } catch (error) {
+    if (getErrorMessage(error).includes('pg_stat_statements must be loaded via shared_preload_libraries')) {
       // Tenter de récupérer le répertoire de données pour aider l'utilisateur
       let dataDir = 'unknown';
       try {
@@ -737,8 +736,8 @@ export async function getPostgresPerformanceStats(dbName: string, port: number =
 
       return { success: true, stats: [], extensionActive: true, isNotPreloaded: true, dataDirectory: dataDir };
     }
-    logger.error(`Error getting performance stats for ${dbName}: ${error.message}`);
-    return { success: false, error: error.message };
+    logger.error(`Error getting performance stats for ${dbName}: ${getErrorMessage(error)}`);
+    return { success: false, error: getErrorMessage(error) };
   } finally {
     await client.end();
   }
@@ -754,9 +753,9 @@ export async function resetPostgresPerformanceStats(dbName: string, port: number
     await client.query('SELECT pg_stat_statements_reset()');
     logger.info(`Performance stats reset for database "${dbName}"`);
     return { success: true };
-  } catch (error: any) {
-    logger.error(`Error resetting performance stats for ${dbName}: ${error.message}`);
-    return { success: false, error: error.message };
+  } catch (error) {
+    logger.error(`Error resetting performance stats for ${dbName}: ${getErrorMessage(error)}`);
+    return { success: false, error: getErrorMessage(error) };
   } finally {
     await client.end();
   }

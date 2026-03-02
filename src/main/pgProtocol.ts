@@ -15,7 +15,7 @@ const SSL_REQUEST_CODE = 80877103;
 // Backend message type bytes
 const MSG_AUTH = 0x52;           // 'R'
 const MSG_ERROR = 0x45;          // 'E'
-const MSG_READY = 0x5A;          // 'Z'
+const _MSG_READY = 0x5A;          // 'Z'
 
 // Auth subtypes (inside 'R' messages)
 const AUTH_OK = 0;

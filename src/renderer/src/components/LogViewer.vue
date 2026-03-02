@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
+import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
@@ -99,12 +100,12 @@ const formatTimestamp = (timestamp: string) => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 };
 
-const copyLog = async (log: Log, index: number) => {
+const copyLog = async (log: Log, _index: number) => {
   try {
     const logText = `[${new Date(log.timestamp).toLocaleString()}] [${log.level.toUpperCase()}]${log.database ? ` [${log.database}]` : ''} ${log.message}`;
     await navigator.clipboard.writeText(logText);
     addToast(t('logs.copied'), 'success');
-  } catch (error: any) {
+  } catch {
     addToast(t('logs.copyError'), 'error');
   }
 };
@@ -116,7 +117,7 @@ const copyAllLogs = async () => {
     ).join('\n');
     await navigator.clipboard.writeText(allLogsText);
     addToast(t('logs.allCopied', { count: filteredLogs.value.length }), 'success');
-  } catch (error: any) {
+  } catch {
     addToast(t('logs.copyError'), 'error');
   }
 };
@@ -128,8 +129,8 @@ const loadLogs = async () => {
     const logs = await ipcRenderer.invoke('get-logs');
     store.logs = logs;
     expandedLogs.value.clear();
-  } catch (error: any) {
-    addToast('Error loading logs: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error loading logs: ' + getErrorMessage(error), 'error');
   } finally {
     isLoading.value = false;
   }
@@ -147,8 +148,8 @@ const clearLogs = () => {
         store.logs = [];
         expandedLogs.value.clear();
         addToast(t('toasts.logsCleared'), 'success');
-      } catch (error: any) {
-        addToast('Error clearing logs: ' + error.message, 'error');
+      } catch (error) {
+        addToast('Error clearing logs: ' + getErrorMessage(error), 'error');
       }
     }
   });

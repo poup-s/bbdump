@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, computed, onBeforeUnmount } from 'vue';
+import { getErrorMessage } from '../../utils';
 import { useI18n } from '../../composables/useI18n';
 import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
@@ -13,7 +14,7 @@ const props = defineProps<{
   table: string | null;
 }>();
 
-const emit = defineEmits(['navigateToTable']);
+defineEmits(['navigateToTable']);
 
 const { t } = useI18n();
 const { addToast } = useToast();
@@ -207,9 +208,9 @@ const loadData = async () => {
 
     rows.value = result.rows;
     totalRows.value = result.total;
-  } catch (err: any) {
+  } catch (err) {
     console.error('Error loading data:', err);
-    error.value = err.message;
+    error.value = getErrorMessage(err);
   } finally {
     loading.value = false;
   }
@@ -263,8 +264,8 @@ const deleteCurrentRow = () => {
         selectedRowIndex.value = null;
         fkPreview.value = null;
         loadData();
-      } catch (err: any) {
-        addToast(t('viewer.deleteErrorDetail', { error: err.message }), 'error');
+      } catch (err) {
+        addToast(t('viewer.deleteErrorDetail', { error: getErrorMessage(err) }), 'error');
       }
     }
   });
@@ -396,9 +397,9 @@ const saveSlideoverChanges = async () => {
     addToast(t('viewer.saveSuccess', { count: changes.length }), 'success');
     slideoverEdits.value = {};
     loadData();
-  } catch (err: any) {
+  } catch (err) {
     console.error('Error saving changes:', err);
-    addToast(t('viewer.saveErrorDetail', { error: err.message }), 'error');
+    addToast(t('viewer.saveErrorDetail', { error: getErrorMessage(err) }), 'error');
   } finally {
     slideoverSaving.value = false;
   }
@@ -485,9 +486,9 @@ const saveNewRow = async () => {
     addToast(t('viewer.addRowSuccess'), 'success');
     cancelAddRow();
     loadData();
-  } catch (err: any) {
+  } catch (err) {
     console.error('Error adding row:', err);
-    addToast(err.message || 'Error adding row', 'error');
+    addToast(getErrorMessage(err) || 'Error adding row', 'error');
   } finally {
     addSaving.value = false;
   }
@@ -567,7 +568,7 @@ const handleFkSearch = (columnName: string, query: string) => {
 };
 
 // Copy cell value to clipboard
-const copyCell = async (value: any, rowIndex: number, colName: string) => {
+const _copyCell = async (value: any, rowIndex: number, colName: string) => {
   const text = value === null ? '' : String(value);
   try {
     await navigator.clipboard.writeText(text);
@@ -647,9 +648,9 @@ const navigateToFk = async (col: any, value: any) => {
       fkPreview.value.row = data.row || null;
       fkPreview.value.loading = false;
     }
-  } catch (err: any) {
+  } catch (err) {
     if (fkPreview.value) {
-      fkPreview.value.error = err.message;
+      fkPreview.value.error = getErrorMessage(err);
       fkPreview.value.loading = false;
     }
   }

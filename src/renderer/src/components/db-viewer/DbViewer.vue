@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue';
+import { getErrorMessage } from '../../utils';
 import { store } from '../../store';
 import { useI18n } from '../../composables/useI18n';
 import { useConfirm } from '../../composables/useConfirm';
@@ -51,9 +52,9 @@ const loadTables = async () => {
   try {
     const result = await ipcRenderer.invoke('get-db-tables', { db: buildDbConfig(store.viewerDb) });
     tables.value = result.tables;
-  } catch (err: any) {
+  } catch (err) {
     console.error('Error loading tables:', err);
-    error.value = err.message || 'Failed to connect to database';
+    error.value = getErrorMessage(err) || 'Failed to connect to database';
   } finally {
     loading.value = false;
   }

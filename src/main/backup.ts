@@ -1,4 +1,5 @@
 import { spawn, exec, ChildProcess } from 'child_process';
+import { getErrorMessage } from './utils';
 import * as path from 'path';
 import * as fs from 'fs';
 import { promisify } from 'util';
@@ -60,8 +61,8 @@ export class BackupManager {
       this.pgRestorePath = await this.findPostgresCommand('pg_restore');
       logger.info(`pg_dump found: ${this.pgDumpPath}`);
       logger.info(`pg_restore found: ${this.pgRestorePath}`);
-    } catch (error: any) {
-      logger.warn(`Failed to initialize PostgreSQL paths: ${error.message}`);
+    } catch (error) {
+      logger.warn(`Failed to initialize PostgreSQL paths: ${getErrorMessage(error)}`);
     }
   }
 
@@ -101,7 +102,7 @@ export class BackupManager {
             });
           }
         }
-      } catch (error) {
+      } catch {
         // Ignore
       }
 
@@ -123,8 +124,8 @@ export class BackupManager {
       }
 
       this.versionsDetected = true;
-    } catch (error: any) {
-      logger.error(`Error detecting pg_dump versions: ${error.message}`);
+    } catch (error) {
+      logger.error(`Error detecting pg_dump versions: ${getErrorMessage(error)}`);
     }
   }
 
@@ -164,7 +165,7 @@ export class BackupManager {
             });
           }
         }
-      } catch (error) {
+      } catch {
         // Ignore
       }
 
@@ -186,8 +187,8 @@ export class BackupManager {
       }
 
       this.pgRestoreVersionsDetected = true;
-    } catch (error: any) {
-      logger.error(`Error detecting pg_restore versions: ${error.message}`);
+    } catch (error) {
+      logger.error(`Error detecting pg_restore versions: ${getErrorMessage(error)}`);
     }
   }
 
@@ -217,7 +218,7 @@ export class BackupManager {
               }
             }
           }
-        } catch (error) {
+        } catch {
           // Ignore
         }
       }
@@ -247,7 +248,7 @@ export class BackupManager {
               }
             }
           }
-        } catch (error) {
+        } catch {
           // Ignore
         }
       }
@@ -274,7 +275,7 @@ export class BackupManager {
               }
             }
           }
-        } catch (error) {
+        } catch {
           // Ignore
         }
       }
@@ -309,7 +310,7 @@ export class BackupManager {
               }
             }
           }
-        } catch (error) {
+        } catch {
           // Ignore
         }
       }
@@ -342,7 +343,7 @@ export class BackupManager {
               }
             }
           }
-        } catch (error) {
+        } catch {
           // Ignore
         }
       }
@@ -372,7 +373,7 @@ export class BackupManager {
               }
             }
           }
-        } catch (error) {
+        } catch {
           // Ignore
         }
       }
@@ -399,7 +400,7 @@ export class BackupManager {
               }
             }
           }
-        } catch (error) {
+        } catch {
           // Ignore
         }
       }
@@ -434,7 +435,7 @@ export class BackupManager {
               }
             }
           }
-        } catch (error) {
+        } catch {
           // Ignore
         }
       }
@@ -469,7 +470,7 @@ export class BackupManager {
       const { stdout } = await execAsync(`"${pgDumpPath}" --version 2>&1`);
       const versionMatch = stdout.match(/(\d+\.\d+)/);
       return versionMatch ? versionMatch[1] : null;
-    } catch (error) {
+    } catch {
       return null;
     }
   }
@@ -482,7 +483,7 @@ export class BackupManager {
       const { stdout } = await execAsync(`"${pgRestorePath}" --version 2>&1`);
       const versionMatch = stdout.match(/(\d+\.\d+)/);
       return versionMatch ? versionMatch[1] : null;
-    } catch (error) {
+    } catch {
       return null;
     }
   }
@@ -724,8 +725,8 @@ apt-get install -y postgresql-client-${majorVersion}
         logger.info(`Running install script via pkexec...`, dbName);
         await execAsync(`pkexec bash "${tmpScript}"`, { timeout: 180000 });
         if (verifyInstall()) return true;
-      } catch (error: any) {
-        logger.info(`pkexec install failed: ${error.message}`, dbName);
+      } catch (error) {
+        logger.info(`pkexec install failed: ${getErrorMessage(error)}`, dbName);
       } finally {
         // Cleanup temp script
         try { fs.unlinkSync(tmpScript); } catch { /* ignore */ }
@@ -745,8 +746,8 @@ apt-get install -y postgresql-client-${majorVersion}
           await execAsync(cmd, { timeout: 60000 });
         }
         if (verifyInstall()) return true;
-      } catch (error: any) {
-        logger.info(`sudo PGDG install failed: ${error.message}`, dbName);
+      } catch (error) {
+        logger.info(`sudo PGDG install failed: ${getErrorMessage(error)}`, dbName);
       }
     }
 
@@ -846,12 +847,12 @@ apt-get install -y postgresql-client-${majorVersion}
           logger.info(`Available pg_dump versions: ${this.allPgDumpVersions.map(v => v.version).join(', ')}`, db.name);
         }
       }
-    } catch (error: any) {
+    } catch (error) {
       // Re-throw version mismatch errors with clear messages
-      if (error.message?.includes('version mismatch')) {
+      if (getErrorMessage(error)?.includes('version mismatch')) {
         throw error;
       }
-      logger.error(`Error finding compatible pg_dump: ${error.message}`, db.name);
+      logger.error(`Error finding compatible pg_dump: ${getErrorMessage(error)}`, db.name);
     }
 
     // Fallback: utiliser le pg_dump par défaut
@@ -879,7 +880,7 @@ apt-get install -y postgresql-client-${majorVersion}
 
     // Chercher une version compatible de pg_restore
     // pg_restore peut lire les backups créés avec la même version majeure ou supérieure
-    const backupMajorVersion = backupVersion.major.toString();
+    const _backupMajorVersion = backupVersion.major.toString();
 
     // Chercher d'abord une version exacte ou supérieure
     const compatibleVersions: PgDumpVersion[] = [];
@@ -944,7 +945,7 @@ apt-get install -y postgresql-client-${majorVersion}
       // Vérifier que le fichier est exécutable
       try {
         fs.accessSync(this.pgDumpPath, fs.constants.X_OK);
-      } catch (error) {
+      } catch {
         return {
           valid: false,
           error: `pg_dump found but not executable: ${this.pgDumpPath}`
@@ -1388,8 +1389,8 @@ apt-get install -y postgresql-client-${majorVersion}
         const pgDumpVersion = versionMatch[1];
         logger.info(`Using pg_dump version: ${pgDumpVersion}`, db.name);
       }
-    } catch (error: any) {
-      logger.warn(`Could not verify pg_dump version: ${error.message}`, db.name);
+    } catch (error) {
+      logger.warn(`Could not verify pg_dump version: ${getErrorMessage(error)}`, db.name);
     }
 
     return new Promise((resolve) => {
@@ -1731,6 +1732,7 @@ apt-get install -y postgresql-client-${majorVersion}
       }
     }
 
+    // eslint-disable-next-line no-async-promise-executor
     return new Promise(async (resolve) => {
       // Fonction de nettoyage centralisée pour le fichier temporaire
       const cleanupTempFile = () => {

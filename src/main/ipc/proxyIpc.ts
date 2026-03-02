@@ -1,4 +1,5 @@
 import { ipcMain } from 'electron';
+import { getErrorMessage } from '../utils';
 import { tcpProxyManager, ProxyStatus, TargetCredentials } from '../tcpProxy';
 import { getConfig, saveConfig } from './configIpc';
 import { encryptionManager } from '../encryption';
@@ -19,8 +20,8 @@ function resolveDbCredentials(dbId: string): TargetCredentials | null {
     if (password && db.encrypted) {
         try {
             password = encryptionManager.decrypt(password);
-        } catch (err: any) {
-            logger.error(`Failed to decrypt password for ${db.name}: ${err.message}`);
+        } catch (err) {
+            logger.error(`Failed to decrypt password for ${db.name}: ${getErrorMessage(err)}`);
         }
     }
 
@@ -80,9 +81,9 @@ export function registerProxyHandlers() {
             saveConfig(config);
 
             return { success: true };
-        } catch (err: any) {
-            logger.error(`proxy-start error: ${err.message}`);
-            return { success: false, error: err.message };
+        } catch (err) {
+            logger.error(`proxy-start error: ${getErrorMessage(err)}`);
+            return { success: false, error: getErrorMessage(err) };
         }
     });
 
@@ -101,9 +102,9 @@ export function registerProxyHandlers() {
             }
 
             return { success: true };
-        } catch (err: any) {
-            logger.error(`proxy-stop error: ${err.message}`);
-            return { success: false, error: err.message };
+        } catch (err) {
+            logger.error(`proxy-stop error: ${getErrorMessage(err)}`);
+            return { success: false, error: getErrorMessage(err) };
         }
     });
 
@@ -135,9 +136,9 @@ export function registerProxyHandlers() {
             saveConfig(config);
 
             return { success: true };
-        } catch (err: any) {
-            logger.error(`proxy-switch-target error: ${err.message}`);
-            return { success: false, error: err.message };
+        } catch (err) {
+            logger.error(`proxy-switch-target error: ${getErrorMessage(err)}`);
+            return { success: false, error: getErrorMessage(err) };
         }
     });
 

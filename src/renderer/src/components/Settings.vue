@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
+import { getErrorMessage } from '../utils';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
@@ -71,8 +72,8 @@ const saveLanguage = async () => {
   try {
     await ipcRenderer.invoke('save-settings', { language: currentLang.value });
     addToast(t('toasts.settingsSaved'), 'success');
-  } catch (error: any) {
-    addToast('Error saving settings: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error saving settings: ' + getErrorMessage(error), 'error');
   }
 };
 
@@ -84,8 +85,8 @@ const exportKey = async () => {
     } else if (result.error) {
       addToast(result.error, 'error');
     }
-  } catch (error: any) {
-    addToast('Error exporting key: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error exporting key: ' + getErrorMessage(error), 'error');
   }
 };
 
@@ -97,8 +98,8 @@ const importKey = async () => {
     } else if (result.error) {
       addToast(result.error, 'error');
     }
-  } catch (error: any) {
-    addToast('Error importing key: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error importing key: ' + getErrorMessage(error), 'error');
   }
 };
 
@@ -109,8 +110,8 @@ const changeBackupLocation = async () => {
       defaultPath.value = result;
       addToast(t('settings.backupLocationChanged'), 'success');
     }
-  } catch (error: any) {
-    addToast('Error changing backup location: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error changing backup location: ' + getErrorMessage(error), 'error');
   }
 };
 
@@ -124,8 +125,8 @@ const toggleSqlMutations = async () => {
   try {
     await ipcRenderer.invoke('save-settings', { allowSqlMutations: allowSqlMutations.value });
     addToast(t('toasts.settingsSaved'), 'success');
-  } catch (error: any) {
-    addToast('Error saving settings: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error saving settings: ' + getErrorMessage(error), 'error');
   }
 };
 
@@ -142,8 +143,8 @@ const toggleMcpSkipConfirmation = async () => {
         try {
           await ipcRenderer.invoke('save-settings', { mcpSkipConfirmation: true });
           addToast(t('toasts.settingsSaved'), 'success');
-        } catch (error: any) {
-          addToast('Error saving settings: ' + error.message, 'error');
+        } catch (error) {
+          addToast('Error saving settings: ' + getErrorMessage(error), 'error');
           mcpSkipConfirmation.value = false;
         }
       }
@@ -154,8 +155,8 @@ const toggleMcpSkipConfirmation = async () => {
     try {
       await ipcRenderer.invoke('save-settings', { mcpSkipConfirmation: false });
       addToast(t('toasts.settingsSaved'), 'success');
-    } catch (error: any) {
-      addToast('Error saving settings: ' + error.message, 'error');
+    } catch (error) {
+      addToast('Error saving settings: ' + getErrorMessage(error), 'error');
       mcpSkipConfirmation.value = true;
     }
   }
@@ -185,8 +186,8 @@ const installMcp = async () => {
     } else {
       addToast(result.error || t('settings.mcpInstallError'), 'error');
     }
-  } catch (error: any) {
-    addToast(error.message || t('settings.mcpInstallError'), 'error');
+  } catch (error) {
+    addToast(getErrorMessage(error) || t('settings.mcpInstallError'), 'error');
   } finally {
     mcpLoading.value = false;
   }
@@ -200,8 +201,8 @@ const uninstallMcp = async () => {
       addToast(t('settings.mcpUninstallSuccess'), 'success');
       mcpInstalled.value = false;
     }
-  } catch (error: any) {
-    addToast(error.message, 'error');
+  } catch (error) {
+    addToast(getErrorMessage(error), 'error');
   } finally {
     mcpLoading.value = false;
   }

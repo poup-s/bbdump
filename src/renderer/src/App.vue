@@ -139,8 +139,8 @@ const setupListeners = () => {
   ipcRenderer.on('edit-db', (_: any, dbId: string) => {
     const db = store.databases.find(d => d.id === dbId);
     if (db) {
-      store.editingDb = db;
-      store.showEditModal = true;
+      store.editingDatabase = JSON.parse(JSON.stringify(db));
+      store.showDatabaseModal = true;
     }
   });
 
@@ -155,7 +155,7 @@ const setupListeners = () => {
     addToast(t('settings.updateReady'), 'success');
   });
 
-  ipcRenderer.on('update-error', (_: any, errorMsg: string) => {
+  ipcRenderer.on('update-error', (_: any, _errorMsg: string) => {
     store.downloadingUpdate = false;
     store.downloadProgress = 0;
     addToast(t('settings.updateError'), 'error');

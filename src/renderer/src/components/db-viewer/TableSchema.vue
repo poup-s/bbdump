@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue';
+import { getErrorMessage } from '../../utils';
 import { useI18n } from '../../composables/useI18n';
 import { ipcRenderer } from '../../electron';
 import { Database, buildDbConfig } from '../../types';
@@ -52,9 +53,9 @@ const loadSchema = async () => {
         constraintName: fk.constraint_name
       }));
 
-  } catch (err: any) {
+  } catch (err) {
     console.error('Error loading schema:', err);
-    error.value = err.message;
+    error.value = getErrorMessage(err);
   } finally {
     loading.value = false;
   }

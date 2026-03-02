@@ -10,7 +10,6 @@ const orbitsGroup = shallowRef();
 // Theme adaptive colors
 const emerald = '#10b981';
 const metalColor = computed(() => isDark.value ? '#1e293b' : '#cbd5e1'); // Slate-800 vs Slate-300
-const glowIntensity = computed(() => isDark.value ? 0.8 : 0.4);
 
 // Data clusters setup
 const count = 50;

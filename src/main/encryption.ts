@@ -1,6 +1,5 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
-import * as path from 'path';
 import { logger } from './logger';
 import { pathManager } from './paths';
 

@@ -1,5 +1,5 @@
 import { reactive } from 'vue';
-import { Database, Backup, Log, ScheduledTask, Project, ProxyActivityEvent } from './types';
+import { Database, Backup, Log, ScheduledTask, Project, ProxyActivityEvent, RestoreTarget } from './types';
 
 export const store = reactive({
     databases: [] as Database[],
@@ -18,9 +18,6 @@ export const store = reactive({
     updateDownloaded: false,
 
     // Modal states
-    showAddModal: false,
-    showEditModal: false,
-    editingDb: null as Database | null,
     showDbViewer: false,
     viewerDb: null as Database | null,
     showDatabaseModal: false,
@@ -29,7 +26,7 @@ export const store = reactive({
     showRestoreModal: false,
     showRestoreConfirmModal: false,
     restoreBackupFile: null as string | null,
-    restoreTargetDb: null as Database | null,
+    restoreTargetDb: null as RestoreTarget | null,
     editingDatabase: null as Database | null,
     modalTargetSection: null as 'schedule' | null,
     showBackupModal: false,

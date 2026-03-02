@@ -1,4 +1,5 @@
 import { exec, spawn } from 'child_process';
+import { getErrorMessage } from './utils';
 import { promisify } from 'util';
 import * as os from 'os';
 import { logger } from './logger';
@@ -170,8 +171,8 @@ async function findBrewPath(): Promise<string | null> {
     }
 
     return null;
-  } catch (error: any) {
-    logger.warn(`Error finding Homebrew path: ${error.message}`);
+  } catch (error) {
+    logger.warn(`Error finding Homebrew path: ${getErrorMessage(error)}`);
     return null;
   }
 }
@@ -405,8 +406,8 @@ export async function checkPostgresRunning(port: number = 5432): Promise<{ runni
     }
 
     return { running: false };
-  } catch (error: any) {
-    logger.error(`Error checking PostgreSQL status: ${error.message}`);
+  } catch (error) {
+    logger.error(`Error checking PostgreSQL status: ${getErrorMessage(error)}`);
     return { running: false };
   }
 }
@@ -492,13 +493,13 @@ async function installPostgresMacOS(
                   await execAsync(`${initdbPath} ${dataDir}`);
                   logger.info(`Database initialized at ${dataDir}`);
                   break;
-                } catch (error: any) {
+                } catch (error) {
                   // Ignore si déjà initialisé ou si le répertoire n'existe pas
-                  logger.info(`Initdb skipped for ${dataDir}: ${error.message}`);
+                  logger.info(`Initdb skipped for ${dataDir}: ${getErrorMessage(error)}`);
                 }
               }
             }
-          } catch (error: any) {
+          } catch {
             // Ignore si déjà initialisé
             logger.info('Database may already be initialized or initialization skipped');
           }
@@ -512,10 +513,10 @@ async function installPostgresMacOS(
         }
       });
     });
-  } catch (error: any) {
+  } catch (error) {
     return {
       success: false,
-      error: `Failed to install PostgreSQL: ${error.message}`
+      error: `Failed to install PostgreSQL: ${getErrorMessage(error)}`
     };
   }
 }
@@ -567,16 +568,16 @@ async function installPostgresLinux(
     onProgress({ step: 'initdb', message: 'Initializing PostgreSQL database...', progress: 80 });
     try {
       await execAsync('postgresql-setup --initdb || /usr/pgsql-*/bin/postgresql-setup --initdb');
-    } catch (error: any) {
-      logger.warn(`Initdb may have failed or already done: ${error.message}`);
+    } catch (error) {
+      logger.warn(`Initdb may have failed or already done: ${getErrorMessage(error)}`);
     }
 
     onProgress({ step: 'installing', message: 'PostgreSQL installed successfully', progress: 100 });
     return { success: true };
-  } catch (error: any) {
+  } catch (error) {
     return {
       success: false,
-      error: `Failed to install PostgreSQL: ${error.message}`
+      error: `Failed to install PostgreSQL: ${getErrorMessage(error)}`
     };
   }
 }
@@ -827,8 +828,8 @@ async function findPostgresDataDirToCreate(): Promise<string | null> {
     const defaultDir = `/opt/homebrew/var/postgresql@${majorVersion}`;
     logger.info(`Using default PostgreSQL data directory: ${defaultDir}`);
     return defaultDir;
-  } catch (error: any) {
-    logger.warn(`Failed to determine PostgreSQL data directory: ${error.message}`);
+  } catch (error) {
+    logger.warn(`Failed to determine PostgreSQL data directory: ${getErrorMessage(error)}`);
   }
 
   if (osType === 'linux') {
@@ -853,8 +854,8 @@ async function initPostgresDatabase(
     const parentDir = dataDir.substring(0, dataDir.lastIndexOf('/'));
     try {
       await execAsync(`mkdir -p "${parentDir}"`);
-    } catch (error: any) {
-      logger.warn(`Failed to create parent directory: ${error.message}`);
+    } catch (error) {
+      logger.warn(`Failed to create parent directory: ${getErrorMessage(error)}`);
     }
 
     // Find initdb
@@ -1027,19 +1028,20 @@ async function initPostgresDatabase(
           error: `initdb completed but data directory not found at ${dataDir}. Output: ${stdout}${stderr ? `\nErrors: ${stderr}` : ''}`
         };
       }
-    } catch (error: any) {
-      logger.error(`initdb failed: ${error.message}`);
-      const errorOutput = error.stdout || error.stderr || error.message;
+    } catch (error) {
+      logger.error(`initdb failed: ${getErrorMessage(error)}`);
+      const spawnError = error as { stdout?: string; stderr?: string };
+      const errorOutput = spawnError.stdout || spawnError.stderr || getErrorMessage(error);
       return {
         success: false,
         error: `Failed to initialize PostgreSQL database: ${errorOutput}\n\nCommand: ${initdbPath} -D "${dataDir}"`
       };
     }
-  } catch (error: any) {
-    logger.error(`Failed to initialize PostgreSQL database: ${error.message}`);
+  } catch (error) {
+    logger.error(`Failed to initialize PostgreSQL database: ${getErrorMessage(error)}`);
     return {
       success: false,
-      error: `Failed to initialize PostgreSQL database: ${error.message}`
+      error: `Failed to initialize PostgreSQL database: ${getErrorMessage(error)}`
     };
   }
 }
@@ -1067,8 +1069,8 @@ async function findBrewPostgresService(): Promise<string | null> {
         }
       }
     }
-  } catch (error: any) {
-    logger.warn(`Failed to list brew services: ${error.message}`);
+  } catch (error) {
+    logger.warn(`Failed to list brew services: ${getErrorMessage(error)}`);
   }
 
   // Si aucun service n'est trouvé dans brew services, essayer de trouver via brew list
@@ -1184,8 +1186,8 @@ export async function startPostgreSQL(
             }
             logger.info(`Waiting for PostgreSQL to start... (attempt ${i + 1}/5)`);
           }
-        } catch (error: any) {
-          logger.warn(`Brew services start failed: ${error.message}`);
+        } catch (error) {
+          logger.warn(`Brew services start failed: ${getErrorMessage(error)}`);
         }
       } else {
         // Essayer les services PostgreSQL courants en fonction de la version installée
@@ -1224,8 +1226,8 @@ export async function startPostgreSQL(
                 logger.info(`PostgreSQL started successfully via brew services (${service})`);
                 return { success: true };
               }
-            } catch (error: any) {
-              logger.info(`Service ${service} not available or failed: ${error.message}`);
+            } catch (error) {
+              logger.info(`Service ${service} not available or failed: ${getErrorMessage(error)}`);
               continue;
             }
           }
@@ -1282,8 +1284,8 @@ export async function startPostgreSQL(
                 await tryPgConnect(port, currentUser);
                 logger.info('PostgreSQL connection test successful');
                 return { success: true };
-              } catch (connError: any) {
-                logger.warn(`PostgreSQL process detected but connection test failed: ${connError.message}`);
+              } catch (connError) {
+                logger.warn(`PostgreSQL process detected but connection test failed: ${getErrorMessage(connError)}`);
                 // Continuer à attendre
               }
             }
@@ -1299,9 +1301,10 @@ export async function startPostgreSQL(
           }
 
           logger.error('PostgreSQL start command succeeded but server is not accessible');
-        } catch (error: any) {
-          logger.error(`Manual start failed: ${error.message}`);
-          const errorOutput = error.stdout || error.stderr || error.message;
+        } catch (error) {
+          logger.error(`Manual start failed: ${getErrorMessage(error)}`);
+          const spawnError = error as { stdout?: string; stderr?: string };
+          const errorOutput = spawnError.stdout || spawnError.stderr || getErrorMessage(error);
           logger.error(`pg_ctl error details: ${errorOutput}`);
         }
       } else {
@@ -1447,9 +1450,9 @@ export async function startPostgreSQL(
             started = true;
             break;
           }
-        } catch (error: any) {
-          lastError = error.message;
-          logger.info(`Start command failed: ${cmd} — ${error.message}`);
+        } catch (error) {
+          lastError = getErrorMessage(error);
+          logger.info(`Start command failed: ${cmd} — ${getErrorMessage(error)}`);
           continue;
         }
       }
@@ -1479,10 +1482,10 @@ export async function startPostgreSQL(
         error: 'Windows start not yet supported'
       };
     }
-  } catch (error: any) {
+  } catch (error) {
     return {
       success: false,
-      error: `Failed to start PostgreSQL: ${error.message}`
+      error: `Failed to start PostgreSQL: ${getErrorMessage(error)}`
     };
   }
 }
@@ -1529,13 +1532,13 @@ async function createLinuxUserRole(
       await execAsync(cmd, { timeout: 30000 });
       logger.info(`Successfully created PostgreSQL role "${currentUser}"`);
       return;
-    } catch (error: any) {
+    } catch (error) {
       // "already exists" is fine
-      if (error.message?.includes('already exists') || error.stderr?.includes('already exists')) {
+      if (getErrorMessage(error)?.includes('already exists') || (error as { stderr?: string }).stderr?.includes('already exists')) {
         logger.info(`PostgreSQL role "${currentUser}" already exists`);
         return;
       }
-      logger.info(`Create role command failed: ${cmd} — ${error.message}`);
+      logger.info(`Create role command failed: ${cmd} — ${getErrorMessage(error)}`);
       continue;
     }
   }
@@ -1679,8 +1682,8 @@ export async function ensurePostgreSQL(
             logger.info(`PostgreSQL is actually accessible with user ${user}`);
             running = { running: true, port };
             break;
-          } catch (error: any) {
-            logger.info(`Connection failed with user ${user}: ${error.message}`);
+          } catch (error) {
+            logger.info(`Connection failed with user ${user}: ${getErrorMessage(error)}`);
             continue;
           }
         }
@@ -1737,9 +1740,9 @@ export async function ensurePostgreSQL(
         connected = true;
         logger.info(`PostgreSQL connection verified successfully on port ${port} with user: ${user}`);
         break;
-      } catch (error: any) {
-        connectionError = error.message;
-        logger.info(`Connection failed with user ${user}: ${error.message}`);
+      } catch (error) {
+        connectionError = getErrorMessage(error);
+        logger.info(`Connection failed with user ${user}: ${getErrorMessage(error)}`);
         continue;
       }
     }
@@ -1772,9 +1775,9 @@ export async function ensurePostgreSQL(
             connected = true;
             logger.info(`Will use system user ${currentUser} for PostgreSQL connections`);
           }
-        } catch (createError: any) {
+        } catch (createError) {
           // L'utilisateur existe peut-être déjà ou erreur de permissions
-          if (createError.message.includes('already exists')) {
+          if (getErrorMessage(createError).includes('already exists')) {
             logger.info('PostgreSQL user "postgres" already exists');
             await adminClient.end();
             try {
@@ -1789,14 +1792,14 @@ export async function ensurePostgreSQL(
               logger.info(`Will use system user ${currentUser} for PostgreSQL connections`);
             }
           } else {
-            logger.warn(`Could not create postgres user: ${createError.message}, will use system user`);
+            logger.warn(`Could not create postgres user: ${getErrorMessage(createError)}, will use system user`);
             await adminClient.end();
             postgresUser = currentUser;
             connected = true;
           }
         }
-      } catch (adminError: any) {
-        logger.warn(`Could not connect as ${currentUser} to create postgres user: ${adminError.message}`);
+      } catch (adminError) {
+        logger.warn(`Could not connect as ${currentUser} to create postgres user: ${getErrorMessage(adminError)}`);
         // Si on ne peut pas créer postgres, utiliser l'utilisateur système
         postgresUser = currentUser;
         connected = true;
@@ -1832,10 +1835,10 @@ export async function ensurePostgreSQL(
         version: installed.version
       }
     };
-  } catch (error: any) {
+  } catch (error) {
     return {
       success: false,
-      error: `Failed to ensure PostgreSQL: ${error.message}`
+      error: `Failed to ensure PostgreSQL: ${getErrorMessage(error)}`
     };
   }
 }
@@ -1881,15 +1884,15 @@ export async function restartPostgresService(): Promise<{ success: boolean; erro
 
         await execAsync(`net stop ${serviceName} && net start ${serviceName}`);
         return { success: true };
-      } catch (error: any) {
-        return { success: false, error: `Failed to restart on Windows: ${error.message}` };
+      } catch (error) {
+        return { success: false, error: `Failed to restart on Windows: ${getErrorMessage(error)}` };
       }
     }
 
     return { success: false, error: 'OS not supported for auto-restart' };
-  } catch (error: any) {
-    logger.error(`Error restarting PostgreSQL: ${error.message}`);
-    return { success: false, error: error.message };
+  } catch (error) {
+    logger.error(`Error restarting PostgreSQL: ${getErrorMessage(error)}`);
+    return { success: false, error: getErrorMessage(error) };
   }
 }
 /**
@@ -1910,8 +1913,8 @@ export async function updateSharedPreloadLibraries(libName: string, action: 'add
     let content = '';
     try {
       content = await fs.readFile(configPath, 'utf-8');
-    } catch (error: any) {
-      logger.error(`Error reading ${configPath}: ${error.message}`);
+    } catch (error) {
+      logger.error(`Error reading ${configPath}: ${getErrorMessage(error)}`);
       return { success: false, error: `Permission denied or file not found: ${configPath}` };
     }
 
@@ -1962,9 +1965,9 @@ export async function updateSharedPreloadLibraries(libName: string, action: 'add
     }
 
     return { success: true }; // No modification needed
-  } catch (error: any) {
-    logger.error(`Error updating shared_preload_libraries: ${error.message}`);
-    return { success: false, error: error.message };
+  } catch (error) {
+    logger.error(`Error updating shared_preload_libraries: ${getErrorMessage(error)}`);
+    return { success: false, error: getErrorMessage(error) };
   }
 }
 
@@ -1980,7 +1983,7 @@ export async function checkSharedPreloadLibraries(libName: string): Promise<{ su
     const path = await import('path');
     const configPath = path.join(dataDir, 'postgresql.conf');
 
-    let content = await fs.readFile(configPath, 'utf-8');
+    const content = await fs.readFile(configPath, 'utf-8');
     // Regex multiline pour trouver la ligne active (non commentée)
     const regex = /^\s*shared_preload_libraries\s*=\s*'([^']*)'/m;
     const match = content.match(regex);
@@ -1991,7 +1994,7 @@ export async function checkSharedPreloadLibraries(libName: string): Promise<{ su
     }
 
     return { success: true, isPresent: false };
-  } catch (error: any) {
-    return { success: false, isPresent: false, error: error.message };
+  } catch (error) {
+    return { success: false, isPresent: false, error: getErrorMessage(error) };
   }
 }

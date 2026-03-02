@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { ipcRenderer } from '../electron';
@@ -62,7 +63,7 @@ const verificationSteps = ref<Array<{ name: string; status: 'pending' | 'checkin
   { name: 'postgresServer', status: 'pending' }
 ]);
 
-const currentStep = computed(() => {
+const _currentStep = computed(() => {
   return verificationSteps.value.findIndex(s => s.status === 'checking' || s.status === 'pending');
 });
 
@@ -327,9 +328,9 @@ const installHomebrew = async () => {
       verificationSteps.value[2].status = 'error';
       installError.value = result.error || 'Failed to install Homebrew';
     }
-  } catch (error: any) {
+  } catch (error) {
     verificationSteps.value[2].status = 'error';
-    installError.value = 'Error installing Homebrew: ' + error.message;
+    installError.value = 'Error installing Homebrew: ' + getErrorMessage(error);
   } finally {
     installing.value.homebrew = false;
     installProgress.value = null;
@@ -367,10 +368,10 @@ const installPostgreSQL = async () => {
       verificationSteps.value[1].status = 'error';
       installError.value = result.error || 'Failed to install PostgreSQL';
     }
-  } catch (error: any) {
+  } catch (error) {
     verificationSteps.value[0].status = 'error';
     verificationSteps.value[1].status = 'error';
-    installError.value = 'Error installing PostgreSQL: ' + error.message;
+    installError.value = 'Error installing PostgreSQL: ' + getErrorMessage(error);
   } finally {
     installing.value.postgresql = false;
     installProgress.value = null;
@@ -474,7 +475,7 @@ const installPostgreSQL = async () => {
                 <!-- Steps List -->
                 <div class="space-y-1">
                   <div 
-                    v-for="(step, index) in verificationSteps" 
+                    v-for="step in verificationSteps" 
                     :key="step.name"
                     class="flex items-center gap-1.5 text-xs"
                   >

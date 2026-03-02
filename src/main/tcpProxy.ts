@@ -10,6 +10,7 @@
  * Fixed client URL example: postgresql://proxy:proxy@localhost:54320/proxy
  */
 import * as net from 'net';
+import { getErrorMessage } from './utils';
 import * as tls from 'tls';
 import { logger } from './logger';
 import { proxyActivityLog } from './proxyActivityLog';
@@ -180,10 +181,10 @@ class TcpProxyManager {
             clientSocket.pipe(serverSocket);
             serverSocket.pipe(clientSocket);
 
-        } catch (err: any) {
-            logger.error(`[proxy:${projectId}] Connection error: ${err.message}`);
+        } catch (err) {
+            logger.error(`[proxy:${projectId}] Connection error: ${getErrorMessage(err)}`);
             // Try to inform the client
-            try { clientSocket.write(buildErrorResponse(err.message)); } catch {}
+            try { clientSocket.write(buildErrorResponse(getErrorMessage(err))); } catch { /* ignore write errors on failed socket */ }
             cleanup();
         }
     }

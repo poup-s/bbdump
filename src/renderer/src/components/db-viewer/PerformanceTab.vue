@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
+import { getErrorMessage } from '../../utils';
 import { useI18n } from '../../composables/useI18n';
 import { useToast } from '../../composables/useToast';
 import { ipcRenderer } from '../../electron';
@@ -43,8 +44,8 @@ const loadStats = async () => {
     } else {
       addToast(result.error || 'Failed to load stats', 'error');
     }
-  } catch (error: any) {
-    addToast(error.message || 'Error loading stats', 'error');
+  } catch (error) {
+    addToast(getErrorMessage(error) || 'Error loading stats', 'error');
   } finally {
     isLoading.value = false;
   }
@@ -65,8 +66,8 @@ const resetStats = () => {
         } else {
           addToast(result.error || t('viewer.statsResetError'), 'error');
         }
-      } catch (error: any) {
-        addToast(error.message || t('viewer.statsResetError'), 'error');
+      } catch (error) {
+        addToast(getErrorMessage(error) || t('viewer.statsResetError'), 'error');
       }
     }
   });
@@ -103,8 +104,8 @@ const restartServer = async () => {
           addToast(result.error || t('viewer.restartError'), 'error');
           isRestarting.value = false;
         }
-      } catch (error: any) {
-        addToast(error.message || t('viewer.restartError'), 'error');
+      } catch (error) {
+        addToast(getErrorMessage(error) || t('viewer.restartError'), 'error');
         isRestarting.value = false;
       }
     }
@@ -122,8 +123,8 @@ const fixConfig = async () => {
     } else {
       addToast(result.error || t('viewer.fixConfigError'), 'error');
     }
-  } catch (error: any) {
-    addToast(error.message || t('viewer.fixConfigError'), 'error');
+  } catch (error) {
+    addToast(getErrorMessage(error) || t('viewer.fixConfigError'), 'error');
   } finally {
     isFixing.value = false;
   }

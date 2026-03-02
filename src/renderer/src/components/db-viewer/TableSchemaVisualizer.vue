@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, markRaw, nextTick } from 'vue';
+import { getErrorMessage } from '../../utils';
 import { VueFlow, useVueFlow } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
@@ -122,9 +123,9 @@ const loadFullSchema = async () => {
     await nextTick();
     fitView({ padding: 0.2, duration: 800 });
 
-  } catch (err: any) {
+  } catch (err) {
     console.error('Error loading full schema:', err);
-    error.value = err.message || 'Failed to load schema';
+    error.value = getErrorMessage(err) || 'Failed to load schema';
   } finally {
     loading.value = false;
   }

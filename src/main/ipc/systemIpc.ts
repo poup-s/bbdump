@@ -1,17 +1,14 @@
 import { ipcMain, app, BrowserWindow, dialog } from 'electron';
+import { getErrorMessage } from '../utils';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import { logger } from '../logger';
 import { pathManager } from '../paths';
 import { fileEncryptionManager } from '../fileEncryption';
 import { backupManager } from '../backup';
 import { checkForUpdates, downloadUpdate, quitAndInstall } from '../updateChecker';
-import { DatabaseConfig } from '../../types/config';
 import { encryptionManager } from '../encryption';
-import * as databaseCreator from '../databaseCreator';
 import { getConfig, saveConfig } from './configIpc';
-import { sanitizeDatabaseConfig, sanitizeAppConfig } from '../configHelper';
 import { cronManager } from '../cron';
 import { resolveConfirmation } from '../mcpConfirmServer';
 
@@ -41,8 +38,8 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
                 } : { installed: true },
                 postgresServer: prerequisites.postgresServer
             };
-        } catch (error: any) {
-            logger.error(`Error checking prerequisites: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error checking prerequisites: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -56,8 +53,8 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
                 }
             };
             return await installHomebrew(onProgress);
-        } catch (error: any) {
-            logger.error(`Error installing Homebrew: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error installing Homebrew: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -80,8 +77,8 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
                 }
             };
             return await installPostgreSQL(onProgress, { brewPath });
-        } catch (error: any) {
-            logger.error(`Error installing PostgreSQL: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error installing PostgreSQL: ${getErrorMessage(error)}`);
             throw error;
         }
     });
@@ -104,7 +101,7 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
                 return { success: false, database: id, timestamp: new Date().toISOString(), error };
             }
 
-            let decryptedDb = { ...db };
+            const decryptedDb = { ...db };
             try {
                 if (db.encrypted) {
                     decryptedDb.password = encryptionManager.decrypt(db.password);
@@ -384,8 +381,8 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
             }
 
             return { installed, configExists, configPath, serverPath, claudeDesktopDetected, bbdumpConfigPath: pathManager.configPath, bbdumpKeyPath: pathManager.encryptionKeyPath };
-        } catch (error: any) {
-            logger.error(`Error checking MCP status: ${error.message}`);
+        } catch (error) {
+            logger.error(`Error checking MCP status: ${getErrorMessage(error)}`);
             return { installed: false, configExists: false, configPath: pathManager.claudeDesktopConfigPath, serverPath: pathManager.mcpServerPath, claudeDesktopDetected: false, bbdumpConfigPath: pathManager.configPath, bbdumpKeyPath: pathManager.encryptionKeyPath };
         }
     });
@@ -433,9 +430,9 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
             logger.info(`MCP server installed in Claude Desktop config: ${configPath}`);
 
             return { success: true, configPath };
-        } catch (error: any) {
-            logger.error(`Error installing MCP for Claude Desktop: ${error.message}`);
-            return { success: false, error: error.message };
+        } catch (error) {
+            logger.error(`Error installing MCP for Claude Desktop: ${getErrorMessage(error)}`);
+            return { success: false, error: getErrorMessage(error) };
         }
     });
 
@@ -457,9 +454,9 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
             }
 
             return { success: true };
-        } catch (error: any) {
-            logger.error(`Error uninstalling MCP from Claude Desktop: ${error.message}`);
-            return { success: false, error: error.message };
+        } catch (error) {
+            logger.error(`Error uninstalling MCP from Claude Desktop: ${getErrorMessage(error)}`);
+            return { success: false, error: getErrorMessage(error) };
         }
     });
 }

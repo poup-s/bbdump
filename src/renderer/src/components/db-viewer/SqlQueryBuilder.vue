@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
+import { getErrorMessage } from '../../utils';
 import { useI18n } from '../../composables/useI18n';
 import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
@@ -340,7 +341,7 @@ const loadSchema = async () => {
     allColumns.value = result.columns;
     allForeignKeys.value = result.foreignKeys;
     schemaLoaded.value = true;
-  } catch (err: any) {
+  } catch (err) {
     console.error('Failed to load schema:', err);
   }
 };
@@ -465,8 +466,8 @@ const runQuery = async (sql: string, isMutation: boolean) => {
       timestamp: Date.now()
     });
     if (queryHistory.value.length > 20) queryHistory.value.pop();
-  } catch (err: any) {
-    queryError.value = err.message || 'Query failed';
+  } catch (err) {
+    queryError.value = getErrorMessage(err) || 'Query failed';
   } finally {
     isExecuting.value = false;
   }
@@ -795,7 +796,7 @@ const parseRawSqlToBlocks = (sql: string) => {
     // Parse JOINs
     for (let ji = 0; ji < joinPositions.length; ji++) {
       const start = joinPositions[ji];
-      const end = ji + 1 < joinPositions.length ? joinPositions[ji + 1] : firstBoundary;
+      const _end = ji + 1 < joinPositions.length ? joinPositions[ji + 1] : firstBoundary;
       // Also check against WHERE, GROUP BY, etc.
       const clauseEnd = boundaries.filter(b => b > start).reduce((min, b) => Math.min(min, b), afterFrom.length);
       const joinStr = afterFrom.substring(start, clauseEnd).trim();

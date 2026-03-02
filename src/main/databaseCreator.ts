@@ -1,4 +1,5 @@
 import { Client } from 'pg';
+import { getErrorMessage } from './utils';
 import format from 'pg-format';
 import { logger } from './logger';
 import * as net from 'net';
@@ -54,8 +55,8 @@ async function checkPostgresServer(port: number, password?: string): Promise<{ a
           await tryPgConnect(port, user);
           logger.info(`PostgreSQL server is accessible on port ${port} with user ${user} via socket (attempt ${attempt}/${maxAttempts})`);
           return { available: true };
-        } catch (error: any) {
-          lastError = error.message;
+        } catch (error) {
+          lastError = getErrorMessage(error);
         }
       }
     }
@@ -84,8 +85,8 @@ async function checkPostgresServer(port: number, password?: string): Promise<{ a
           await testClient.end();
           logger.info(`PostgreSQL server is accessible on port ${port} with user ${user} (attempt ${attempt}/${maxAttempts})`);
           return { available: true };
-        } catch (error: any) {
-          lastError = error.message;
+        } catch (error) {
+          lastError = getErrorMessage(error);
           try {
             await testClient.end();
           } catch {
@@ -340,7 +341,7 @@ export async function createLocalDatabase(
         password: params.password || '' // Utiliser le mot de passe fourni ou vide
       }
     };
-  } catch (error: any) {
+  } catch (error) {
     if (client) {
       try {
         await client.end();
@@ -349,10 +350,10 @@ export async function createLocalDatabase(
       }
     }
 
-    logger.error(`Error creating database: ${error.message}`);
+    logger.error(`Error creating database: ${getErrorMessage(error)}`);
     return {
       success: false,
-      error: error.message || 'Failed to create database'
+      error: getErrorMessage(error) || 'Failed to create database'
     };
   }
 }
@@ -368,7 +369,7 @@ export interface DuplicateDatabaseProgress {
  * Duplique une base de données externe vers une base locale
  */
 export async function duplicateExternalToLocal(
-  sourceDb: {
+  _sourceDb: {
     name: string;
     host: string;
     port: number;
@@ -377,10 +378,10 @@ export async function duplicateExternalToLocal(
     ssl?: boolean;
     connectionString?: string;
   },
-  newDbName: string,
-  newPort: number,
-  existingPorts: number[],
-  onProgress?: (progress: DuplicateDatabaseProgress) => void
+  _newDbName: string,
+  _newPort: number,
+  _existingPorts: number[],
+  _onProgress?: (progress: DuplicateDatabaseProgress) => void
 ): Promise<{ success: boolean; error?: string; database?: any }> {
   // Cette fonction orchestre le backup et le restore
   // Mais comme elle dépend de backupManager qui dépend de config... 

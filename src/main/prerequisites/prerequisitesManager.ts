@@ -1,5 +1,6 @@
 import { detectOS, getOSType } from '../os/osDetector';
-import { detectTool, detectPostgresTools, detectHomebrew, ToolDetectionResult } from '../tools/toolDetector';
+import { getErrorMessage } from '../utils';
+import { detectPostgresTools, detectHomebrew, ToolDetectionResult } from '../tools/toolDetector';
 import { getToolPaths } from '../os/osPaths';
 import { checkPostgresInstalled } from '../postgresManager';
 import { logger } from '../logger';
@@ -21,7 +22,7 @@ export interface PrerequisitesResult {
  */
 export async function checkPrerequisites(): Promise<PrerequisitesResult> {
   const os = detectOS();
-  const toolPaths = getToolPaths(os.type, os.architecture);
+  const _toolPaths = getToolPaths(os.type, os.architecture);
   
   logger.info(`Vérification des prérequis sur ${os.type} (${os.architecture})`);
   
@@ -50,8 +51,8 @@ export async function checkPrerequisites(): Promise<PrerequisitesResult> {
     } else {
       postgresServer.error = 'Serveur PostgreSQL non trouvé';
     }
-  } catch (error: any) {
-    postgresServer.error = error.message || 'Échec de la vérification de PostgreSQL';
+  } catch (error) {
+    postgresServer.error = getErrorMessage(error) || 'Échec de la vérification de PostgreSQL';
   }
   
   return {

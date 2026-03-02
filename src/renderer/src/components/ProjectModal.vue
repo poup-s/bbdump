@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
+import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
 import { ipcRenderer } from '../electron';
-import { Project } from '../types';
 
 const { t } = useI18n();
 const { addToast } = useToast();
@@ -84,8 +84,8 @@ const save = async () => {
     const config = await ipcRenderer.invoke('get-config');
     store.projects = config.projects || [];
     close();
-  } catch (error: any) {
-    addToast('Error saving project: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error saving project: ' + getErrorMessage(error), 'error');
   } finally {
     isLoading.value = false;
   }

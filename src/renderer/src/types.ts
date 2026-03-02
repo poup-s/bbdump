@@ -101,6 +101,8 @@ export interface TableRelation {
     constraint_type?: string;
 }
 
+export type RestoreTarget = Database & { isNew?: boolean };
+
 /**
  * Build a plain DB config object safe for IPC (avoids Vue reactive proxy cloning errors)
  */

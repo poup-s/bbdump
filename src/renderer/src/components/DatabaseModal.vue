@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
+import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
@@ -118,7 +119,7 @@ const parseConnectionUrl = (url: string) => {
       return true;
     }
     return false;
-  } catch (e) {
+  } catch {
     return false;
   }
 };
@@ -236,8 +237,8 @@ const save = async () => {
     const config = await ipcRenderer.invoke('get-config');
     store.databases = config.databases;
     close();
-  } catch (error: any) {
-    addToast('Error saving database: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error saving database: ' + getErrorMessage(error), 'error');
   } finally {
     isLoading.value = false;
   }

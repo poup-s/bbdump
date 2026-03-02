@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, computed } from 'vue';
+import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
@@ -58,8 +59,8 @@ const loadExtensions = async () => {
       store.extensionsModalDb.name, 
       store.extensionsModalDb.port
     );
-  } catch (error: any) {
-    addToast(`Error loading extensions: ${error.message}`, 'error');
+  } catch (error) {
+    addToast(`Error loading extensions: ${getErrorMessage(error)}`, 'error');
   } finally {
     isLoading.value = false;
   }
@@ -84,8 +85,8 @@ const toggleExtension = async (extension: any) => {
     } else {
       addToast(result.error || t('postgresConfig.extensionError'), 'error');
     }
-  } catch (error: any) {
-    addToast(`Error managing extension: ${error.message}`, 'error');
+  } catch (error) {
+    addToast(`Error managing extension: ${getErrorMessage(error)}`, 'error');
   }
 };
 

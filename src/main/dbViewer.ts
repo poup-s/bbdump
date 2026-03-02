@@ -1,4 +1,5 @@
 import { Pool, PoolClient } from 'pg';
+import { getErrorMessage } from './utils';
 import format from 'pg-format';
 import { logger } from './logger';
 
@@ -185,9 +186,9 @@ async function getClient(params: ConnectionParams): Promise<PoolClient> {
   const pool = poolManager.getPool(params);
   try {
     return await pool.connect();
-  } catch (err: any) {
+  } catch (err) {
     // If the server requires SSL and we connected without it, retry with SSL
-    if (!params.ssl && err.message?.includes('no encryption')) {
+    if (!params.ssl && getErrorMessage(err)?.includes('no encryption')) {
       logger.info(`Connection to ${params.database} failed without SSL, retrying with SSL...`);
       poolManager.removePool(params);
       const sslParams = { ...params, ssl: true };
@@ -201,7 +202,7 @@ async function getClient(params: ConnectionParams): Promise<PoolClient> {
     const isLocalHost = params.host === 'localhost' || params.host === '127.0.0.1';
 
     if (isLinux && isLocalHost && !params.connectionString) {
-      logger.info(`Connection to ${params.database} via socket failed: ${err.message}, trying fallbacks...`);
+      logger.info(`Connection to ${params.database} via socket failed: ${getErrorMessage(err)}, trying fallbacks...`);
       poolManager.removePool(params);
 
       // Try /tmp socket
@@ -569,11 +570,11 @@ export async function updateTableData(params: ConnectionParams & {
           column: change.column,
           rowsAffected: result.rowCount
         });
-      } catch (error: any) {
+      } catch (error) {
         results.push({
           success: false,
           column: change.column,
-          error: error.message
+          error: getErrorMessage(error)
         });
       }
     }
@@ -587,9 +588,9 @@ export async function updateTableData(params: ConnectionParams & {
       await client.query('ROLLBACK');
       return { success: false, results };
     }
-  } catch (error: any) {
+  } catch (error) {
     await client.query('ROLLBACK');
-    throw new Error(`Failed to update table data: ${error.message}`);
+    throw new Error(`Failed to update table data: ${getErrorMessage(error)}`);
   } finally {
     client.release();
   }
@@ -613,8 +614,8 @@ export async function deleteTableRow(params: ConnectionParams & {
       success: true,
       rowsAffected: result.rowCount
     };
-  } catch (error: any) {
-    throw new Error(`Failed to delete row: ${error.message}`);
+  } catch (error) {
+    throw new Error(`Failed to delete row: ${getErrorMessage(error)}`);
   } finally {
     client.release();
   }
@@ -648,8 +649,8 @@ export async function insertTableRow(params: ConnectionParams & {
       success: true,
       row: result.rows[0]
     };
-  } catch (error: any) {
-    throw new Error(`Failed to insert row: ${error.message}`);
+  } catch (error) {
+    throw new Error(`Failed to insert row: ${getErrorMessage(error)}`);
   } finally {
     client.release();
   }
@@ -715,9 +716,9 @@ export async function executeQuery(params: ConnectionParams & {
       truncated,
       duration
     };
-  } catch (error: any) {
+  } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
-    throw new Error(error.message);
+    throw new Error(getErrorMessage(error));
   } finally {
     client.release();
   }
@@ -757,9 +758,9 @@ export async function executeMutationQuery(params: ConnectionParams & {
       duration,
       command: result.command
     };
-  } catch (error: any) {
+  } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
-    throw new Error(error.message);
+    throw new Error(getErrorMessage(error));
   } finally {
     client.release();
   }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
+import { getErrorMessage } from '../utils';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
 import { ipcRenderer } from '../electron';
@@ -128,8 +129,8 @@ const duplicateToLocal = async () => {
     } else {
       addToast(result.error || t('databases.duplicateError'), 'error');
     }
-  } catch (error: any) {
-    addToast(`Error duplicating database: ${error.message}`, 'error');
+  } catch (error) {
+    addToast(`Error duplicating database: ${getErrorMessage(error)}`, 'error');
   } finally {
       isDuplicating.value = false;
       duplicateProgress.value = null;

@@ -38,9 +38,14 @@ const ALLOWED_SEND_CHANNELS = new Set([
 ]);
 
 const ALLOWED_RECEIVE_CHANNELS = new Set([
-    'backup-started', 'backup-complete', 'install-progress',
+    'backup-started', 'backup-complete', 'backup-progress',
+    'scheduled-backup-started', 'scheduled-backup-completed',
+    'install-progress',
+    'create-database-progress', 'duplicate-progress',
     'tray-refresh', 'open-dbviewer', 'edit-db',
     'update-available', 'update-downloaded', 'update-error',
+    'update-download-progress', 'update-not-available',
+    'mcp-confirm-request', 'mcp-confirm-timeout',
 ]);
 
 // Custom APIs for renderer
@@ -88,6 +93,6 @@ if (process.contextIsolated) {
         console.error(error);
     }
 } else {
-    // @ts-ignore (define in dts)
+    // @ts-expect-error (define in dts)
     window.electron = api;
 }

@@ -28,7 +28,7 @@ const checkForUpdates = async () => {
       store.updateDetails = null;
       addToast(t('settings.upToDate'), 'success');
     }
-  } catch (error) {
+  } catch {
     store.checkingUpdate = false;
     addToast(t('settings.updateError'), 'error');
   }
@@ -40,7 +40,7 @@ const downloadUpdate = async () => {
   store.downloadProgress = 0;
   try {
     await ipcRenderer.invoke('download-update');
-  } catch (error) {
+  } catch {
     store.downloadingUpdate = false;
     addToast(t('settings.updateError'), 'error');
   }

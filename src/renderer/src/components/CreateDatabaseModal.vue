@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
@@ -124,8 +125,8 @@ const createDatabase = async () => {
       addToast(result.error || t('createDatabase.errors.createFailed'), 'error');
       progress.value = null;
     }
-  } catch (error: any) {
-    addToast(error.message || t('createDatabase.errors.createFailed'), 'error');
+  } catch (error) {
+    addToast(getErrorMessage(error) || t('createDatabase.errors.createFailed'), 'error');
     progress.value = null;
   } finally {
     isLoading.value = false;

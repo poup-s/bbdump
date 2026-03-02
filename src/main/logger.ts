@@ -172,12 +172,12 @@ class Logger {
       // Fallback pour les anciens formats ou formats non standard
       const bracketMatches = line.match(/\[([^\]]+)\]/g);
       if (bracketMatches && bracketMatches.length >= 2) {
-        timestamp = bracketMatches[0].replace(/[\[\]]/g, '');
-        const levelStr = bracketMatches[1].replace(/[\[\]]/g, '').toLowerCase();
+        timestamp = bracketMatches[0].replace(/[[\]]/g, '');
+        const levelStr = bracketMatches[1].replace(/[[\]]/g, '').toLowerCase();
         if (levelStr === 'info' || levelStr === 'error' || levelStr === 'warn') {
           level = levelStr as LogEntry['level'];
           if (bracketMatches.length >= 3) {
-            const potentialDb = bracketMatches[2].replace(/[\[\]]/g, '');
+            const potentialDb = bracketMatches[2].replace(/[[\]]/g, '');
             const keywords = ['preparing', 'checking', 'connecting', 'creating', 'complete', 'backup', 'restore'];
             if (!keywords.includes(potentialDb.toLowerCase()) && /^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$/.test(potentialDb)) {
               database = potentialDb;

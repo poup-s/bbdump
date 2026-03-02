@@ -3,6 +3,7 @@ import { ref, computed, onUnmounted, watch } from 'vue';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
+import type { RestoreTarget } from '../types';
 
 const { t } = useI18n();
 const { addToast } = useToast();
@@ -13,7 +14,7 @@ const newDbName = ref('');
 const newDbPort = ref(5432);
 const countdown = ref(5);
 const isCountdownActive = ref(false);
-let countdownInterval: NodeJS.Timeout | null = null;
+let countdownInterval: ReturnType<typeof setInterval> | null = null;
 
 // Auto-select first database if available
 const databases = computed(() => store.databases || []);
@@ -119,7 +120,7 @@ const proceedToConfirm = () => {
       output: '',
       isLocalBbdump: true,
       isNew: true
-    } as any;
+    } as RestoreTarget;
   }
 
   store.showRestoreModal = false;

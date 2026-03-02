@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
@@ -128,8 +129,8 @@ const importAllHidden = async () => {
     store.databases = config.databases;
     
     await loadHiddenDatabasesCount();
-  } catch (error: any) {
-    addToast('Error importing databases: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error importing databases: ' + getErrorMessage(error), 'error');
   } finally {
     isImportingHidden.value = false;
   }
@@ -173,8 +174,8 @@ const deleteDatabase = (db: Database) => {
           const config = await ipcRenderer.invoke('get-config');
           store.databases = config.databases;
           addToast(isLocal ? t('toasts.dbDeleted') : t('toasts.connectionDeleted'), 'success');
-        } catch (error: any) {
-          addToast('Error deleting database: ' + error.message, 'error');
+        } catch (error) {
+          addToast('Error deleting database: ' + getErrorMessage(error), 'error');
         }
       }
   });
@@ -184,9 +185,9 @@ const backupNow = async (db: Database) => {
   try {
     store.isBackingUp = true;
     await ipcRenderer.invoke('backup-now', db.id);
-  } catch (error: any) {
+  } catch (error) {
     store.isBackingUp = false;
-    addToast('Error starting backup: ' + error.message, 'error');
+    addToast('Error starting backup: ' + getErrorMessage(error), 'error');
   }
 };
 
@@ -209,7 +210,7 @@ const copyConnectionUrl = async (db: Database) => {
   try {
     await navigator.clipboard.writeText(url);
     addToast(t('databases.urlCopied'), 'success');
-  } catch (error) {
+  } catch {
     addToast('Failed to copy URL', 'error');
   }
 };
@@ -239,8 +240,8 @@ const disconnectDatabase = async (db: Database) => {
           t('databases.databaseRemovedFromList', { name: db.name }),
           'success'
         );
-      } catch (error: any) {
-        addToast(`Error removing database from list: ${error.message}`, 'error');
+      } catch (error) {
+        addToast(`Error removing database from list: ${getErrorMessage(error)}`, 'error');
       }
     }
   });
@@ -258,8 +259,8 @@ const toggleMask = async (db: Database) => {
     await ipcRenderer.invoke('toggle-mask', db.id, !db.masked);
     const config = await ipcRenderer.invoke('get-config');
     store.databases = config.databases;
-  } catch (error: any) {
-    addToast('Error toggling mask: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error toggling mask: ' + getErrorMessage(error), 'error');
   }
 };
 
@@ -324,8 +325,8 @@ const toggleProjectMask = async (project: Project) => {
     const config = await ipcRenderer.invoke('get-config');
     store.projects = config.projects || [];
     store.databases = config.databases || [];
-  } catch (error: any) {
-    addToast('Error toggling project mask: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error toggling project mask: ' + getErrorMessage(error), 'error');
   }
 };
 
@@ -397,8 +398,8 @@ const onListCardDrop = async (event: DragEvent, targetDbId: string) => {
   try {
     const config = await ipcRenderer.invoke('reorder-databases', ids);
     store.databases = config.databases;
-  } catch (error: any) {
-    addToast('Error reordering databases: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error reordering databases: ' + getErrorMessage(error), 'error');
   }
 };
 
@@ -407,8 +408,8 @@ const moveDatabaseToProject = async (databaseId: string, targetProjectId: string
     const config = await ipcRenderer.invoke('move-database-to-project', databaseId, targetProjectId);
     store.projects = config.projects || [];
     addToast(t('project.databaseMoved'), 'success');
-  } catch (error: any) {
-    addToast('Error moving database: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error moving database: ' + getErrorMessage(error), 'error');
   }
 };
 
@@ -449,8 +450,8 @@ const onProjectDrop = async (event: DragEvent, targetProjectId: string) => {
   try {
     const config = await ipcRenderer.invoke('reorder-projects', ids);
     store.projects = config.projects || [];
-  } catch (error: any) {
-    addToast('Error reordering projects: ' + error.message, 'error');
+  } catch (error) {
+    addToast('Error reordering projects: ' + getErrorMessage(error), 'error');
   }
 };
 
@@ -491,8 +492,8 @@ const deleteProject = (project: Project) => {
         const config = await ipcRenderer.invoke('get-config');
         store.projects = config.projects || [];
         addToast(t('project.deleted', { name: project.name }), 'success');
-      } catch (error: any) {
-        addToast('Error deleting project: ' + error.message, 'error');
+      } catch (error) {
+        addToast('Error deleting project: ' + getErrorMessage(error), 'error');
       }
     }
   });
@@ -578,9 +579,9 @@ const handleProxyToggle = async (project: Project) => {
       }
       await refreshProxyStatuses();
     }
-  } catch (err: any) {
+  } catch (err) {
     console.error('handleProxyToggle error:', err);
-    addToast(t('proxy.startError', { error: err.message || 'Unknown error' }), 'error');
+    addToast(t('proxy.startError', { error: getErrorMessage(err) || 'Unknown error' }), 'error');
   }
 };
 
@@ -619,9 +620,9 @@ const handleUpdateProxyConfig = async (projectId: string, config: { port?: numbe
 
     addToast(t('proxy.configSaved'), 'success');
     await refreshProxyStatuses();
-  } catch (err: any) {
+  } catch (err) {
     console.error('handleUpdateProxyConfig error:', err);
-    addToast(t('proxy.startError', { error: err.message || 'Unknown error' }), 'error');
+    addToast(t('proxy.startError', { error: getErrorMessage(err) || 'Unknown error' }), 'error');
   }
 };
 
@@ -658,9 +659,9 @@ const handleSetProxyTarget = (projectId: string, dbId: string) => {
           addToast(t('proxy.switchError', { error: result.error }), 'error');
         }
         await refreshProxyStatuses();
-      } catch (err: any) {
+      } catch (err) {
         console.error('handleSetProxyTarget error:', err);
-        addToast(t('proxy.switchError', { error: err.message || 'Unknown error' }), 'error');
+        addToast(t('proxy.switchError', { error: getErrorMessage(err) || 'Unknown error' }), 'error');
       }
     }
   });

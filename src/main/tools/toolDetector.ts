@@ -48,7 +48,7 @@ async function resolveWildcardPath(wildcardPath: string): Promise<string[]> {
         }
       }
     }
-  } catch (error) {
+  } catch {
     // Ignore les erreurs de résolution
   }
 
