@@ -220,7 +220,9 @@ async function getClient(params: ConnectionParams): Promise<PoolClient> {
         try {
           const tcpParams = { ...params, host: 'localhost', password: pwd };
           const tcpPool = poolManager.getPool(tcpParams);
-          return await tcpPool.connect();
+          const client = await tcpPool.connect();
+          logger.warn(`Connected to ${params.database} using fallback password (original password may be incorrect)`);
+          return client;
         } catch {
           poolManager.removePool({ ...params, host: 'localhost', password: pwd });
         }
@@ -693,7 +695,7 @@ export async function executeQuery(params: ConnectionParams & {
 }) {
   const client = await getClient(params);
   const maxRows = params.maxRows || 5000;
-  const timeoutMs = params.timeoutMs || 60000;
+  const timeoutMs = Math.max(100, Math.min(600000, Math.floor(Number(params.timeoutMs) || 60000)));
 
   try {
     await client.query('BEGIN READ ONLY');
@@ -734,7 +736,7 @@ export async function executeMutationQuery(params: ConnectionParams & {
 }) {
   const client = await getClient(params);
   const maxRows = params.maxRows || 5000;
-  const timeoutMs = params.timeoutMs || 60000;
+  const timeoutMs = Math.max(100, Math.min(600000, Math.floor(Number(params.timeoutMs) || 60000)));
 
   try {
     await client.query('BEGIN');
