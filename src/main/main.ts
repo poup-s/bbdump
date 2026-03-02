@@ -371,6 +371,7 @@ app.on('before-quit', async () => {
   stopConfirmServer();
   tcpProxyManager.stopAll();
   cronManager.cancelAllBackups();
+  backupManager.killAllActiveProcesses();
   try {
     await closeAllPools();
   } catch (error) {

@@ -1,4 +1,4 @@
-import { spawn, exec } from 'child_process';
+import { spawn, exec, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { promisify } from 'util';
@@ -28,6 +28,7 @@ export class BackupManager {
   private allPgRestoreVersions: PgDumpVersion[] = []; // Toutes les versions de pg_restore trouvées
   private versionsDetected: boolean = false;
   private pgRestoreVersionsDetected: boolean = false;
+  private activeProcesses: Set<ChildProcess> = new Set();
 
   constructor() {
     this.backupDir = pathManager.backupsPath;
@@ -516,6 +517,16 @@ export class BackupManager {
 
   setMainWindow(window: Electron.BrowserWindow | null) {
     this.mainWindow = window;
+  }
+
+  killAllActiveProcesses() {
+    for (const proc of this.activeProcesses) {
+      if (!proc.killed) {
+        proc.kill('SIGTERM');
+        setTimeout(() => { if (!proc.killed) proc.kill('SIGKILL'); }, 3000);
+      }
+    }
+    this.activeProcesses.clear();
   }
 
   /**
@@ -1129,6 +1140,23 @@ apt-get install -y postgresql-client-${majorVersion}
   }
 
   private validateDatabaseConfig(db: DatabaseConfig): { valid: boolean; error?: string } {
+    // Validation des champs requis (en premier, avant toute utilisation des champs)
+    if (!db.name || db.name.trim().length === 0) {
+      return { valid: false, error: 'Database name is required' };
+    }
+
+    if (!db.host || db.host.trim().length === 0) {
+      return { valid: false, error: 'Host is required' };
+    }
+
+    if (!db.user || db.user.trim().length === 0) {
+      return { valid: false, error: 'Username is required' };
+    }
+
+    if (!db.isLocalBbdump && (!db.password || db.password.trim().length === 0)) {
+      return { valid: false, error: 'Password is required' };
+    }
+
     // Validation du port
     if (!Number.isInteger(db.port) || db.port < 1 || db.port > 65535) {
       return {
@@ -1163,6 +1191,11 @@ apt-get install -y postgresql-client-${majorVersion}
     }
 
     // Validation du chemin de sortie contre path traversal
+    // db.output peut être absent (géré plus bas dans executeBackup avec le chemin par défaut)
+    if (!db.output || db.output.trim().length === 0) {
+      return { valid: true }; // Le chemin par défaut sera utilisé dans executeBackup
+    }
+
     const normalizedPath = path.normalize(db.output);
 
     // Bloquer les tentatives de path traversal
@@ -1246,44 +1279,6 @@ apt-get install -y postgresql-client-${majorVersion}
           error: `Invalid backup timeout: ${db.backupTimeout}. Must not exceed 24 hours (${maxTimeout}ms)`
         };
       }
-    }
-
-    // Validation des champs requis
-    if (!db.name || db.name.trim().length === 0) {
-      return {
-        valid: false,
-        error: 'Database name is required'
-      };
-    }
-
-    if (!db.host || db.host.trim().length === 0) {
-      return {
-        valid: false,
-        error: 'Host is required'
-      };
-    }
-
-    if (!db.user || db.user.trim().length === 0) {
-      return {
-        valid: false,
-        error: 'Username is required'
-      };
-    }
-
-    // Pour les bases locales créées par bbdump, le mot de passe peut être vide
-    // (connexion via ident/peer authentication)
-    if (!db.isLocalBbdump && (!db.password || db.password.trim().length === 0)) {
-      return {
-        valid: false,
-        error: 'Password is required'
-      };
-    }
-
-    if (!db.output || db.output.trim().length === 0) {
-      return {
-        valid: false,
-        error: 'Output path is required'
-      };
     }
 
     return { valid: true };
@@ -1457,6 +1452,7 @@ apt-get install -y postgresql-client-${majorVersion}
       }
 
       const pgDump = spawn(compatiblePgDump, args, { env });
+      this.activeProcesses.add(pgDump);
 
       let errorOutput = '';
       let isTimedOut = false;
@@ -1467,6 +1463,7 @@ apt-get install -y postgresql-client-${majorVersion}
       const cleanup = () => {
         if (cleanedUp) return;
         cleanedUp = true;
+        this.activeProcesses.delete(pgDump);
         clearTimeout(timeoutHandle);
         clearTimeout(safetyTimeoutHandle);
         process.removeListener('SIGTERM' as any, signalHandler);
@@ -1800,6 +1797,7 @@ apt-get install -y postgresql-client-${majorVersion}
       }
 
       const pgRestore = spawn(compatiblePgRestorePath, args, { env });
+      this.activeProcesses.add(pgRestore);
 
       let errorOutput = '';
       let stdoutOutput = '';
@@ -1817,6 +1815,7 @@ apt-get install -y postgresql-client-${majorVersion}
       });
 
       pgRestore.on('error', (error) => {
+        this.activeProcesses.delete(pgRestore);
         // Nettoyer le fichier temporaire en cas d'erreur de lancement
         cleanupTempFile();
 
@@ -1831,6 +1830,7 @@ apt-get install -y postgresql-client-${majorVersion}
       });
 
       pgRestore.on('close', (code) => {
+        this.activeProcesses.delete(pgRestore);
         // Toujours nettoyer le fichier temporaire déchiffré
         cleanupTempFile();
 
