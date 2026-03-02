@@ -57,7 +57,7 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
 
             const dbToSave = {
                 ...sanitizedDb,
-                enabled: params.enabled !== undefined ? params.enabled : sanitizedDb.enabled,
+                enabled: params.enabled !== undefined ? params.enabled : false, // No backup by default for new local DBs
                 encrypted: shouldEncrypt,
                 password: shouldEncrypt && newDb.password ? encryptionManager.encrypt(newDb.password) : (newDb.password || ''),
                 isLocalBbdump: true

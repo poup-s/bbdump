@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
+import { store } from '../store';
 import { Database, Project } from '../types';
 import DatabaseCardCompact from './DatabaseCardCompact.vue';
 
@@ -188,6 +189,16 @@ const onDrop = (event: DragEvent) => {
             fill="none" viewBox="0 0 24 24" stroke="currentColor"
           >
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+        <!-- Create DB in this project -->
+        <button
+          @click.stop="store.createDatabaseForProjectId = project.id; store.showCreateDatabaseModal = true"
+          class="px-2 py-1 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-gray-400 hover:text-blue-500 transition-colors flex items-center gap-1"
+          :title="t('modal.createDatabase')"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
           </svg>
         </button>
         <!-- Edit -->

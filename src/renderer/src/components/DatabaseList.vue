@@ -625,35 +625,45 @@ const handleUpdateProxyConfig = async (projectId: string, config: { port?: numbe
   }
 };
 
-const handleSetProxyTarget = async (projectId: string, dbId: string) => {
-  try {
-    const result = await ipcRenderer.invoke('proxy-switch-target', projectId, dbId);
-    if (result.success) {
-      const db = store.databases.find(d => d.id === dbId);
-      const name = db?.displayName || db?.name || dbId;
-      addToast(t('proxy.targetSwitched', { name }), 'success');
-      const config = await ipcRenderer.invoke('get-config');
-      store.projects = config.projects || [];
+const handleSetProxyTarget = (projectId: string, dbId: string) => {
+  const db = store.databases.find(d => d.id === dbId);
+  const name = db?.displayName || db?.name || dbId;
 
-      // Auto-start if proxy is enabled, port is set, but not yet running
-      const project = store.projects.find(p => p.id === projectId);
-      const status = store.proxyStatuses[projectId];
-      if (project?.proxyEnabled && project?.proxyPort && !status?.running) {
-        const startResult = await ipcRenderer.invoke('proxy-start', projectId, project.proxyPort);
-        if (startResult.success) {
-          addToast(t('proxy.started', { port: project.proxyPort }), 'success');
+  showConfirm({
+    title: t('proxy.confirmTarget', { name }),
+    message: t('proxy.confirmTargetMessage'),
+    confirmText: t('common.confirm'),
+    cancelText: t('common.cancel'),
+    type: 'info',
+    onConfirm: async () => {
+      try {
+        const result = await ipcRenderer.invoke('proxy-switch-target', projectId, dbId);
+        if (result.success) {
+          addToast(t('proxy.targetSwitched', { name }), 'success');
+          const config = await ipcRenderer.invoke('get-config');
+          store.projects = config.projects || [];
+
+          // Auto-start if proxy is enabled, port is set, but not yet running
+          const project = store.projects.find(p => p.id === projectId);
+          const status = store.proxyStatuses[projectId];
+          if (project?.proxyEnabled && project?.proxyPort && !status?.running) {
+            const startResult = await ipcRenderer.invoke('proxy-start', projectId, project.proxyPort);
+            if (startResult.success) {
+              addToast(t('proxy.started', { port: project.proxyPort }), 'success');
+            } else {
+              addToast(t('proxy.startError', { error: startResult.error }), 'error');
+            }
+          }
         } else {
-          addToast(t('proxy.startError', { error: startResult.error }), 'error');
+          addToast(t('proxy.switchError', { error: result.error }), 'error');
         }
+        await refreshProxyStatuses();
+      } catch (err: any) {
+        console.error('handleSetProxyTarget error:', err);
+        addToast(t('proxy.switchError', { error: err.message || 'Unknown error' }), 'error');
       }
-    } else {
-      addToast(t('proxy.switchError', { error: result.error }), 'error');
     }
-    await refreshProxyStatuses();
-  } catch (err: any) {
-    console.error('handleSetProxyTarget error:', err);
-    addToast(t('proxy.switchError', { error: err.message || 'Unknown error' }), 'error');
-  }
+  });
 };
 
 // --- Proxy Activity Logs ---
@@ -778,7 +788,7 @@ onUnmounted(() => {
       <div class="flex gap-3">
         <!-- Bouton Créer une base -->
         <button
-          @click="store.showCreateDatabaseModal = true"
+          @click="store.createDatabaseForProjectId = null; store.showCreateDatabaseModal = true"
           class="group relative overflow-hidden bg-gradient-to-br from-blue-600 via-blue-500 to-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-medium shadow-lg shadow-blue-500/30 hover:shadow-xl hover:shadow-blue-500/40 transition-all duration-300 flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
         >
           <div class="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700"></div>
