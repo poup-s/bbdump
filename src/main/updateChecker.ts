@@ -98,15 +98,20 @@ export async function downloadUpdate(): Promise<void> {
 
 export function quitAndInstall(): void {
   logger.info('Quitting and installing update...');
-  // Nullify the window reference before closing to prevent destroyed-object errors
-  // in any autoUpdater callbacks that may fire during shutdown
-  mainWindow = null;
-  // Remove listeners that prevent the app from quitting
-  app.removeAllListeners('window-all-closed');
-  // Force-close all windows so the app can actually quit
-  const windows = BrowserWindow.getAllWindows();
-  windows.forEach(w => w.removeAllListeners('close'));
-  windows.forEach(w => w.destroy());
-  // isSilent=false (show installer), isForceRunAfter=true (relaunch app after install)
-  autoUpdater.quitAndInstall(false, true);
+  
+  // On laisse le temps à l'IPC de retourner la réponse au renderer
+  // avant de déclencher la procédure de fermeture et mise à jour
+  setTimeout(() => {
+    // Nettoyage forcé pour s'assurer qu'Electron quitte bien
+    // (electron-updater peut parfois bloquer si des fenêtres restent actives)
+    app.removeAllListeners('window-all-closed');
+    const windows = BrowserWindow.getAllWindows();
+    windows.forEach(w => {
+      w.removeAllListeners('close');
+      w.destroy();
+    });
+
+    // isSilent=false (show installer), isForceRunAfter=true (relaunch app after install)
+    autoUpdater.quitAndInstall(false, true);
+  }, 1000);
 }
