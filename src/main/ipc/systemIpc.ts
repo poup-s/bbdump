@@ -1,4 +1,4 @@
-import { ipcMain, app, BrowserWindow } from 'electron';
+import { ipcMain, app, BrowserWindow, dialog } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -222,7 +222,6 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
 
     ipcMain.handle('download-backup', async (_, filename: string) => {
         try {
-            const { dialog } = require('electron');
             const backupDir = pathManager.backupsPath;
             const filePath = path.resolve(backupDir, filename);
             const normalizedDir = path.resolve(backupDir) + path.sep;
@@ -268,7 +267,6 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
     ipcMain.handle('get-default-path', () => pathManager.backupsPath);
 
     ipcMain.handle('select-directory', async () => {
-        const { dialog } = require('electron');
         const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] });
         if (result.canceled || result.filePaths.length === 0) return null;
         return result.filePaths[0];
@@ -301,7 +299,6 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
 
     ipcMain.handle('export-encryption-key', async () => {
         try {
-            const { dialog } = require('electron');
             const keyPath = pathManager.encryptionKeyPath;
 
             if (!fs.existsSync(keyPath)) return { success: false, error: 'Encryption key not found' };
@@ -327,7 +324,6 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
 
     ipcMain.handle('import-encryption-key', async () => {
         try {
-            const { dialog } = require('electron');
             const keyPath = pathManager.encryptionKeyPath;
 
             if (!mainWindow || mainWindow.isDestroyed()) return { success: false, error: 'Window not available' };
@@ -342,7 +338,7 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
 
             const importPath = result.filePaths[0];
             const importedKey = fs.readFileSync(importPath, 'utf8').trim();
-            if (importedKey.length !== 64) return { success: false, error: 'Invalid key file (incorrect size)' };
+            if (importedKey.length !== 64 || !/^[0-9a-fA-F]{64}$/.test(importedKey)) return { success: false, error: 'Invalid key file (incorrect size or format)' };
 
             if (fs.existsSync(keyPath)) {
                 const backupPath = path.join(pathManager.appDataPath, `.encryption.key.backup-${Date.now()}`);

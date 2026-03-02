@@ -43,7 +43,7 @@ function createWindow(): void {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, '../preload/index.js'),
-      sandbox: false // Required for some node modules if not fully sandboxed
+      sandbox: true
     }
   });
 
@@ -104,7 +104,6 @@ function createWindow(): void {
 
   // Add context menu for copy/paste
   mainWindow.webContents.on('context-menu', (_, props) => {
-    const { Menu } = require('electron');
     const menu = Menu.buildFromTemplate([
       { role: 'cut', enabled: props.editFlags.canCut },
       { role: 'copy', enabled: props.editFlags.canCopy },
@@ -152,7 +151,7 @@ function createTrayPopup(): void {
       preload: path.join(__dirname, '../preload/index.js'),
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false
+      sandbox: true
     }
   });
 
