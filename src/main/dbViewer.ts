@@ -240,13 +240,10 @@ export async function getDatabaseTables(params: ConnectionParams) {
   const client = await getClient(params);
 
   try {
-    // Step 1: Get table names with fast reltuples estimate
+    // Step 1: Get table names
     const query = `
-      SELECT
-        t.table_name as name,
-        COALESCE(pc.reltuples::bigint, 0) as row_count_estimate
+      SELECT t.table_name as name
       FROM information_schema.tables t
-      LEFT JOIN pg_class pc ON pc.relname = t.table_name AND pc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = t.table_schema)
       WHERE t.table_schema = 'public'
       AND t.table_type = 'BASE TABLE'
       ORDER BY t.table_name;
@@ -255,31 +252,21 @@ export async function getDatabaseTables(params: ConnectionParams) {
     const result = await client.query(query);
     logger.info(`getDatabaseTables found ${result.rows.length} tables`);
 
-    const tableNames = result.rows.map(r => r.name);
-    const estimates = new Map(result.rows.map(r => [r.name, Math.max(0, parseInt(r.row_count_estimate) || 0)]));
+    const tableNames: string[] = result.rows.map(r => r.name);
 
-    // Step 2: Identify tables where reltuples is missing (0 = never analyzed or truly empty)
-    const needsCount = tableNames.filter(name => (estimates.get(name) || 0) <= 0);
-
-    // Step 3: For tables without estimates, do actual COUNT(*) via UNION ALL
-    const counts = new Map<string, number>();
-    if (needsCount.length > 0) {
-      logger.info(`reltuples unavailable for ${needsCount.length}/${tableNames.length} tables, using COUNT(*)`);
-      const countParts = needsCount.map(name =>
+    // Step 2: Get exact row counts via UNION ALL COUNT(*)
+    const tables: { name: string; row_count: number }[] = [];
+    if (tableNames.length > 0) {
+      const countParts = tableNames.map(name =>
         format('SELECT %L as name, COUNT(*) as row_count FROM %I.%I', name, 'public', name)
       );
       const countQuery = countParts.join(' UNION ALL ');
       const countResult = await client.query(countQuery);
-      countResult.rows.forEach(r => counts.set(r.name, parseInt(r.row_count)));
+      const counts = new Map(countResult.rows.map(r => [r.name, parseInt(r.row_count)]));
+      for (const name of tableNames) {
+        tables.push({ name, row_count: counts.get(name) || 0 });
+      }
     }
-
-    // Merge: use reltuples when available, COUNT(*) otherwise
-    const tables = tableNames.map(name => ({
-      name,
-      row_count: (estimates.get(name) || 0) > 0
-        ? estimates.get(name)!
-        : (counts.get(name) || 0)
-    }));
 
     return { tables };
   } finally {
@@ -451,11 +438,7 @@ export async function getTableData(params: ConnectionParams & {
       query = format('SELECT * FROM %I.%I %s LIMIT $1 OFFSET $2', 'public', params.table, orderByClause);
       queryParams = [params.limit, offset];
 
-      // Use pg_class estimate for fast total count (avoids slow COUNT(*) on large tables)
-      countQuery = format(
-        'SELECT COALESCE(c.reltuples::bigint, 0) as count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname = %L AND n.nspname = %L',
-        params.table, 'public'
-      );
+      countQuery = format('SELECT COUNT(*) as count FROM %I.%I', 'public', params.table);
       countParams = [];
     }
 
@@ -464,11 +447,7 @@ export async function getTableData(params: ConnectionParams & {
       client.query(countQuery, countParams)
     ]);
 
-    let totalCount = parseInt(countResult.rows[0]?.count || '0');
-    // reltuples can return -1 for never-analyzed tables; fall back to fetched row count
-    if (totalCount < 0) {
-      totalCount = result.rows.length;
-    }
+    const totalCount = parseInt(countResult.rows[0]?.count || '0');
 
     return {
       rows: result.rows,
