@@ -1030,7 +1030,8 @@ export const translations = {
             created: 'Project "{name}" created',
             updated: 'Project "{name}" updated',
             deleted: 'Project "{name}" deleted',
-            databaseMoved: 'Database moved successfully'
+            databaseMoved: 'Database moved successfully',
+            addDb: 'Add DB'
         }
     },
     fr: {
@@ -2063,7 +2064,8 @@ export const translations = {
             created: 'Projet "{name}" créé',
             updated: 'Projet "{name}" mis à jour',
             deleted: 'Projet "{name}" supprimé',
-            databaseMoved: 'Base de données déplacée'
+            databaseMoved: 'Base de données déplacée',
+            addDb: 'Ajouter'
         }
     }
 };

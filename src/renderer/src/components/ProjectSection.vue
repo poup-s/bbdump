@@ -179,8 +179,9 @@ const onDrop = (event: DragEvent) => {
         <!-- Proxy panel expand (when enabled) -->
         <button
           v-if="project.proxyEnabled"
-          @click.stop="proxyPanelOpen = !proxyPanelOpen"
-          class="p-0.5 rounded transition-colors text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 flex items-center gap-0.5"
+          @click.stop="proxyPanelOpen = !proxyPanelOpen; if (proxyPanelOpen) collapsed = false"
+          class="px-2 py-1 rounded-lg transition-colors text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 flex items-center gap-1"
+          :title="t('proxy.configureProxy')"
         >
           <span v-if="proxyStatus?.running" class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
           <svg
@@ -190,6 +191,7 @@ const onDrop = (event: DragEvent) => {
           >
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
           </svg>
+          <span class="text-[10px] font-medium">{{ t('proxy.configureProxy') }}</span>
         </button>
         <!-- Create DB in this project -->
         <button
@@ -200,6 +202,7 @@ const onDrop = (event: DragEvent) => {
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
           </svg>
+          <span class="text-[10px] font-medium">{{ t('project.addDb') }}</span>
         </button>
         <!-- Edit -->
         <button
