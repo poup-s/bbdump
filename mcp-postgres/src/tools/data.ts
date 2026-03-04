@@ -7,10 +7,11 @@ import pgFormat from 'pg-format';
 
 const filterSchema = z.object({
   column: z.string().describe('Column name'),
-  operator: z.enum(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is_null', 'is_not_null'])
+  operator: z.enum(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is_null', 'is_not_null', 'in', 'between'])
     .describe('Comparison operator'),
-  value: z.union([z.string(), z.number(), z.boolean()]).optional()
-    .describe('Value to compare (not needed for is_null/is_not_null)'),
+  value: z.union([z.string(), z.number(), z.boolean(), z.array(z.union([z.string(), z.number(), z.boolean()]))])
+    .optional()
+    .describe('Value to compare (not needed for is_null/is_not_null). Use array for in/between operators.'),
 });
 
 export function registerDataTools(server: McpServer) {

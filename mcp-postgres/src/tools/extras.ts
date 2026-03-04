@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getClient, executeReadOnly } from '../db.js';
 import { jsonResult, errorResult } from '../types.js';
+import { getHistory, clearHistory } from '../history.js';
 
 export function registerExtraTools(server: McpServer) {
   server.tool(
@@ -222,6 +223,100 @@ export function registerExtraTools(server: McpServer) {
       } finally {
         client.release();
       }
+    }
+  );
+
+  server.tool(
+    'list_triggers',
+    'List all triggers on a table with their timing, event, and action statement.',
+    {
+      table: z.string().describe('Table name'),
+      database: z.string().optional().describe('Database name'),
+      schema: z.string().default('public').describe('Schema (default: public)'),
+    },
+    async ({ table, database, schema }) => {
+      const client = await getClient(database);
+      try {
+        const result = await executeReadOnly(client, `
+          SELECT
+            trigger_name,
+            event_manipulation,
+            action_timing,
+            action_statement,
+            action_orientation,
+            action_condition
+          FROM information_schema.triggers
+          WHERE event_object_schema = $1 AND event_object_table = $2
+          ORDER BY trigger_name, event_manipulation
+        `, [schema, table]);
+        return jsonResult({
+          triggers: result.rows,
+          count: result.rows.length,
+          table: `${schema}.${table}`,
+        });
+      } catch (err: any) {
+        return errorResult(err.message);
+      } finally {
+        client.release();
+      }
+    }
+  );
+
+  server.tool(
+    'list_sequences',
+    'List all sequences in a schema with their current values and configuration.',
+    {
+      database: z.string().optional().describe('Database name'),
+      schema: z.string().default('public').describe('Schema (default: public)'),
+    },
+    async ({ database, schema }) => {
+      const client = await getClient(database);
+      try {
+        const result = await executeReadOnly(client, `
+          SELECT
+            s.sequence_name,
+            s.data_type,
+            s.start_value,
+            s.minimum_value,
+            s.maximum_value,
+            s.increment,
+            s.cycle_option,
+            pg.last_value
+          FROM information_schema.sequences s
+          LEFT JOIN pg_sequences pg
+            ON pg.schemaname = s.sequence_schema AND pg.sequencename = s.sequence_name
+          WHERE s.sequence_schema = $1
+          ORDER BY s.sequence_name
+        `, [schema]);
+        return jsonResult({
+          sequences: result.rows,
+          count: result.rows.length,
+        });
+      } catch (err: any) {
+        return errorResult(err.message);
+      } finally {
+        client.release();
+      }
+    }
+  );
+
+  server.tool(
+    'query_history',
+    'View recent query history from this MCP session. Shows tool name, database, SQL, duration, and timestamp for user-initiated queries and mutations.',
+    {
+      limit: z.number().min(1).max(100).default(20).describe('Number of recent queries to return (default: 20)'),
+      clear: z.boolean().default(false).describe('Clear the history after reading it'),
+    },
+    async ({ limit, clear: shouldClear }) => {
+      const records = getHistory(limit);
+      if (shouldClear) {
+        clearHistory();
+      }
+      return jsonResult({
+        queries: records,
+        count: records.length,
+        cleared: shouldClear,
+      });
     }
   );
 }

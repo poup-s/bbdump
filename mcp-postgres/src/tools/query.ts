@@ -1,7 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getClient, executeReadOnly } from '../db.js';
+import { getClient, executeReadOnly, getActiveConnectionInfo } from '../db.js';
 import { jsonResult, errorResult, config } from '../types.js';
+import { recordQuery } from '../history.js';
 
 // Defense-in-depth: early rejection of write operations with a clear error message.
 // The real protection is the BEGIN READ ONLY transaction in executeReadOnly().
@@ -35,6 +36,9 @@ export function registerQueryTools(server: McpServer) {
 
         const result = await executeReadOnly(client, sql, undefined, timeout_ms);
         const duration = Date.now() - startTime;
+
+        const dbName = database || getActiveConnectionInfo().database;
+        recordQuery({ tool: 'execute_query', database: dbName, sql, duration_ms: duration });
 
         const truncated = result.rows.length > effectiveMaxRows;
         const rows = truncated ? result.rows.slice(0, effectiveMaxRows) : result.rows;
@@ -78,7 +82,10 @@ export function registerQueryTools(server: McpServer) {
         const analyzeFlag = analyze ? 'ANALYZE true,' : '';
         const explainSql = `EXPLAIN (${analyzeFlag} FORMAT ${format}) ${sql}`;
 
+        const startTime = Date.now();
         const result = await executeReadOnly(client, explainSql);
+        const dbName = database || getActiveConnectionInfo().database;
+        recordQuery({ tool: 'explain_query', database: dbName, sql: explainSql, duration_ms: Date.now() - startTime });
 
         if (format === 'json') {
           return jsonResult(result.rows[0]['QUERY PLAN']);

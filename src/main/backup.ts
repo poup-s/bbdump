@@ -1679,6 +1679,88 @@ apt-get install -y postgresql-client-${majorVersion}
     }
   }
 
+  /**
+   * Run pg_restore for a specific section (pre-data, data, post-data).
+   */
+  private runPgRestoreSection(
+    pgRestorePath: string,
+    baseArgs: string[],
+    env: NodeJS.ProcessEnv,
+    section: 'pre-data' | 'data' | 'post-data',
+    backupPath: string,
+    targetName: string,
+  ): Promise<{ code: number; stdout: string; stderr: string }> {
+    return new Promise((resolve) => {
+      const args = [...baseArgs, `--section=${section}`, backupPath];
+      logger.info(`[restore:${section}] pg_restore --section=${section}`, targetName);
+
+      const proc = spawn(pgRestorePath, args, { env });
+      this.activeProcesses.add(proc);
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout.on('data', (d) => {
+        const m = d.toString();
+        stdout += m;
+        logger.info(m.trim(), targetName);
+      });
+      proc.stderr.on('data', (d) => {
+        const m = d.toString();
+        stderr += m;
+        logger.info(m.trim(), targetName);
+      });
+      proc.on('error', (err) => {
+        this.activeProcesses.delete(proc);
+        resolve({ code: -1, stdout, stderr: stderr + err.message });
+      });
+      proc.on('close', (code) => {
+        this.activeProcesses.delete(proc);
+        resolve({ code: code ?? -1, stdout, stderr });
+      });
+    });
+  }
+
+  /**
+   * Run a SQL command on the target database via psql (stdin piped).
+   */
+  private async runPsqlSql(
+    target: { name: string; host: string; port: number; user: string; password: string; connectionString?: string },
+    sql: string,
+    env: NodeJS.ProcessEnv,
+  ): Promise<{ code: number; stdout: string; stderr: string }> {
+    const psqlPath = await this.findPostgresCommand('psql');
+    const args: string[] = [];
+
+    if (target.connectionString) {
+      const cleanedConnectionString = this.cleanConnectionString(target.connectionString);
+      args.push('-d', cleanedConnectionString);
+    } else {
+      const isLinux = process.platform === 'linux';
+      const isLocalHost = target.host === 'localhost' || target.host === '127.0.0.1';
+      const hasPassword = target.password && target.password.trim().length > 0;
+      if (isLinux && isLocalHost && !hasPassword) {
+        args.push('-h', '/var/run/postgresql');
+      } else {
+        args.push('-h', target.host);
+      }
+      args.push('-p', target.port.toString(), '-U', target.user, '-d', target.name);
+    }
+
+    return new Promise((resolve) => {
+      const proc = spawn(psqlPath, args, { env });
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout.on('data', (d) => { stdout += d.toString(); });
+      proc.stderr.on('data', (d) => { stderr += d.toString(); });
+      proc.on('error', (err) => resolve({ code: -1, stdout, stderr: err.message }));
+      proc.on('close', (code) => resolve({ code: code ?? -1, stdout, stderr }));
+
+      proc.stdin.write(sql);
+      proc.stdin.end();
+    });
+  }
+
   async restoreBackup(backupFile: string, target: { name: string; host: string; port: number; user: string; password: string; connectionString?: string }): Promise<BackupResult> {
     const timestamp = new Date().toISOString();
     logger.info(`Starting restore of ${backupFile} to ${target.name}`, target.name);
@@ -1732,192 +1814,243 @@ apt-get install -y postgresql-client-${majorVersion}
       }
     }
 
-    // eslint-disable-next-line no-async-promise-executor
-    return new Promise(async (resolve) => {
-      // Fonction de nettoyage centralisée pour le fichier temporaire
-      const cleanupTempFile = () => {
-        if (tempDecryptedPath && fs.existsSync(tempDecryptedPath)) {
-          try {
-            fs.unlinkSync(tempDecryptedPath);
-            logger.info(`Temporary decrypted file deleted: ${tempDecryptedPath}`, target.name);
-          } catch (cleanupError) {
-            logger.warn(`Unable to delete temporary file: ${cleanupError}`, target.name);
-          }
+    // Fonction de nettoyage centralisée pour le fichier temporaire
+    const cleanupTempFile = () => {
+      if (tempDecryptedPath && fs.existsSync(tempDecryptedPath)) {
+        try {
+          fs.unlinkSync(tempDecryptedPath);
+          logger.info(`Temporary decrypted file deleted: ${tempDecryptedPath}`, target.name);
+        } catch (cleanupError) {
+          logger.warn(`Unable to delete temporary file: ${cleanupError}`, target.name);
         }
-      };
-      const args = [
+      }
+    };
+
+    try {
+      // Build common pg_restore args (without --section and backup file — added per section)
+      const baseArgs = [
         '-v',
-        '--no-owner', // Ne pas restaurer les propriétaires (évite les erreurs de permissions)
-        '--no-acl', // Ne pas restaurer les ACLs (évite les erreurs de permissions)
-        '--no-tablespaces', // Ne pas restaurer les tablespaces (évite les tablespaces n'existent pas)
-        // Ne pas utiliser --exit-on-error car cela arrête la restauration dès la première erreur non critique
+        '--no-owner',
+        '--no-acl',
+        '--no-tablespaces',
       ];
 
-      // Si une connection string est fournie, l'utiliser
+      // Build connection args
       if (target.connectionString) {
         const cleanedConnectionString = this.cleanConnectionString(target.connectionString);
-        args.push('-d', cleanedConnectionString);
+        baseArgs.push('-d', cleanedConnectionString);
       } else {
         const isLinux = process.platform === 'linux';
         const isLocalHost = target.host === 'localhost' || target.host === '127.0.0.1';
         const hasPassword = target.password && target.password.trim().length > 0;
-
-        // On Linux with local host and no password, use Unix socket (peer auth)
         if (isLinux && isLocalHost && !hasPassword) {
-          args.push('-h', '/var/run/postgresql');
+          baseArgs.push('-h', '/var/run/postgresql');
         } else {
-          args.push('-h', target.host);
+          baseArgs.push('-h', target.host);
         }
-        args.push('-p', target.port.toString());
-        args.push('-U', target.user);
-        args.push('-d', target.name);
+        baseArgs.push('-p', target.port.toString());
+        baseArgs.push('-U', target.user);
+        baseArgs.push('-d', target.name);
       }
 
-      // Ajouter le fichier de backup à la fin
-      args.push(actualBackupPath);
-
-      // Trouver la version compatible de pg_restore basée sur la version du backup
       const compatiblePgRestorePath = await this.findCompatiblePgRestore(actualBackupPath);
-
-      logger.info(`Command: ${compatiblePgRestorePath} ${args.join(' ')}`, target.name);
 
       const env: NodeJS.ProcessEnv = {
         ...process.env,
         LC_ALL: 'C',
-        LANG: 'C'
+        LANG: 'C',
       };
 
-      // Support SSL avec certificats auto-signés
       if (target.connectionString && target.connectionString.includes('sslmode=require')) {
         env.PGSSLMODE = 'require';
-        env.PGSSLCERT = 'disable'; // Accept self-signed certificates
+        env.PGSSLCERT = 'disable';
       }
 
-      // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string et si un mot de passe est fourni
       if (!target.connectionString && target.password && target.password.trim().length > 0) {
         env.PGPASSWORD = target.password;
       }
 
-      const pgRestore = spawn(compatiblePgRestorePath, args, { env });
-      this.activeProcesses.add(pgRestore);
+      let allStdout = '';
+      let allStderr = '';
 
-      let errorOutput = '';
-      let stdoutOutput = '';
+      // ──────────────────────────────────────────────────────────────────
+      // Multi-section restore: pre-data → drop CHECK → data → recreate CHECK → post-data
+      //
+      // CHECK constraints that call functions referencing other tables cause
+      // COPY failures when pg_restore loads data in TOC order (the referenced
+      // table may not have data yet). Temporarily dropping CHECK constraints
+      // around the data loading phase solves this.
+      // ──────────────────────────────────────────────────────────────────
 
-      pgRestore.stderr.on('data', (data) => {
-        const message = data.toString();
-        errorOutput += message;
-        logger.info(message.trim(), target.name);
-      });
+      // STEP 1: Restore schema (tables, types, functions, CHECK constraints)
+      logger.info(`[restore] Step 1/5: Restoring schema (pre-data)...`, target.name);
+      const preData = await this.runPgRestoreSection(
+        compatiblePgRestorePath, baseArgs, env, 'pre-data', actualBackupPath, target.name,
+      );
+      allStdout += preData.stdout;
+      allStderr += preData.stderr;
 
-      pgRestore.stdout.on('data', (data) => {
-        const message = data.toString();
-        stdoutOutput += message;
-        logger.info(message.trim(), target.name);
-      });
-
-      pgRestore.on('error', (error) => {
-        this.activeProcesses.delete(pgRestore);
-        // Nettoyer le fichier temporaire en cas d'erreur de lancement
+      if (preData.stderr.includes('FATAL')) {
         cleanupTempFile();
-
-        const errorMsg = `Error launching pg_restore: ${error.message}`;
-        logger.error(errorMsg, target.name);
-        resolve({
+        return {
           success: false,
           database: target.name,
           timestamp,
-          error: errorMsg
-        });
-      });
+          error: `pg_restore pre-data failed with FATAL error:\n${preData.stderr}`,
+          output: preData.stdout + preData.stderr,
+        };
+      }
 
-      pgRestore.on('close', (code) => {
-        this.activeProcesses.delete(pgRestore);
-        // Toujours nettoyer le fichier temporaire déchiffré
-        cleanupTempFile();
+      // STEP 2: Drop CHECK constraints (save definitions in a helper table)
+      logger.info(`[restore] Step 2/5: Temporarily dropping CHECK constraints...`, target.name);
+      const dropCheckSql = `
+        CREATE TABLE IF NOT EXISTS _bbdump_saved_checks (
+          table_name text,
+          constraint_name text,
+          definition text
+        );
+        TRUNCATE _bbdump_saved_checks;
+        INSERT INTO _bbdump_saved_checks
+        SELECT conrelid::regclass::text, conname, pg_get_constraintdef(oid)
+        FROM pg_constraint
+        WHERE contype = 'c'
+          AND connamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public');
+        DO $$ DECLARE r RECORD; dropped int := 0; BEGIN
+          FOR r IN SELECT table_name, constraint_name FROM _bbdump_saved_checks LOOP
+            EXECUTE format('ALTER TABLE %s DROP CONSTRAINT IF EXISTS %I', r.table_name, r.constraint_name);
+            dropped := dropped + 1;
+          END LOOP;
+          RAISE NOTICE 'Dropped % CHECK constraint(s)', dropped;
+        END $$;
+      `;
+      const dropResult = await this.runPsqlSql(target, dropCheckSql, env);
+      if (dropResult.code !== 0) {
+        logger.warn(`[restore] Warning: could not drop CHECK constraints: ${dropResult.stderr}`, target.name);
+      } else {
+        logger.info(`[restore] CHECK constraints temporarily dropped`, target.name);
+      }
 
-        const combinedOutput = stdoutOutput + errorOutput;
+      // STEP 3: Load data (with triggers disabled to bypass FK constraint triggers)
+      logger.info(`[restore] Step 3/5: Loading data...`, target.name);
+      const dataArgs = [...baseArgs, '--disable-triggers'];
+      const dataResult = await this.runPgRestoreSection(
+        compatiblePgRestorePath, dataArgs, env, 'data', actualBackupPath, target.name,
+      );
+      allStdout += dataResult.stdout;
+      allStderr += dataResult.stderr;
 
-        // Liste des erreurs non critiques à ignorer (spécifiques à certains providers comme Neon ou versions PG différentes)
-        const nonCriticalErrorPatterns = [
-          /unrecognized configuration parameter/i,
-          /transaction_timeout/i,
-          /does not exist/i,
-          /already exists/i,
-          /permission denied/i,
-          /role.*does not exist/i,
-          /errors ignored on restore/i,
-          /erreurs ignorées lors de la restauration/i // Backup fallback for French
-        ];
+      // STEP 4: Recreate CHECK constraints from saved definitions
+      logger.info(`[restore] Step 4/5: Recreating CHECK constraints...`, target.name);
+      const recreateCheckSql = `
+        DO $$ DECLARE r RECORD; recreated int := 0; BEGIN
+          FOR r IN SELECT table_name, constraint_name, definition FROM _bbdump_saved_checks LOOP
+            BEGIN
+              EXECUTE format('ALTER TABLE %s ADD CONSTRAINT %I %s', r.table_name, r.constraint_name, r.definition);
+              recreated := recreated + 1;
+            EXCEPTION WHEN OTHERS THEN
+              RAISE WARNING 'Could not recreate constraint % on %: %', r.constraint_name, r.table_name, SQLERRM;
+            END;
+          END LOOP;
+          RAISE NOTICE 'Recreated % CHECK constraint(s)', recreated;
+        END $$;
+        DROP TABLE IF EXISTS _bbdump_saved_checks;
+      `;
+      const recreateResult = await this.runPsqlSql(target, recreateCheckSql, env);
+      if (recreateResult.code !== 0) {
+        logger.warn(`[restore] Warning: could not recreate some CHECK constraints: ${recreateResult.stderr}`, target.name);
+      } else {
+        logger.info(`[restore] CHECK constraints recreated`, target.name);
+      }
 
-        // Vérifier si l'erreur est critique
-        const hasCriticalError = errorOutput.includes('FATAL') ||
-          (errorOutput.includes('ERROR') &&
-            !nonCriticalErrorPatterns.some(pattern => pattern.test(errorOutput)));
+      // STEP 5: Restore indexes and foreign keys (post-data)
+      logger.info(`[restore] Step 5/5: Creating indexes and foreign keys (post-data)...`, target.name);
+      const postData = await this.runPgRestoreSection(
+        compatiblePgRestorePath, baseArgs, env, 'post-data', actualBackupPath, target.name,
+      );
+      allStdout += postData.stdout;
+      allStderr += postData.stderr;
 
-        // Vérifier si des données ont été restaurées (indicateurs de succès)
-        // On cherche à la fois en Anglais (C locale) et en Français (au cas où C échouerait localement)
-        const hasRestoreActivity =
-          // English (Target Locale C)
-          combinedOutput.includes('CREATE TABLE') ||
-          combinedOutput.includes('CREATE INDEX') ||
-          combinedOutput.includes('CREATE SEQUENCE') ||
-          combinedOutput.includes('CREATE FUNCTION') ||
-          combinedOutput.includes('processing data for table') ||
-          combinedOutput.includes('COPY ') ||
-          combinedOutput.includes('INSERT INTO') ||
-          combinedOutput.includes('ALTER TABLE') ||
-          // French (Backup fallback)
-          combinedOutput.includes('création de TABLE') ||
-          combinedOutput.includes('traitement des données de la table');
+      // Cleanup temp decrypted file
+      cleanupTempFile();
 
-        // Vérifier si pg_restore indique explicitement que les erreurs ont été ignorées
-        const errorsIgnored = combinedOutput.includes('errors ignored on restore') ||
-          combinedOutput.includes('erreurs ignorées lors de la restauration');
+      // ── Aggregate results ──
+      const combinedOutput = allStdout + allStderr;
 
-        // pg_restore peut retourner 1 avec des warnings mais réussir quand même
-        // Code 0 = succès complet
-        // Code 1 = warnings mais peut être un succès si des données ont été restaurées OU si les erreurs ont été ignorées
-        // Code > 1 = erreur critique
-        if (code === 0) {
-          // Succès complet
-          const successMsg = `Restore successful from ${backupFile} to ${target.name}`;
-          logger.info(successMsg, target.name);
-          resolve({
-            success: true,
-            database: target.name,
-            timestamp,
-            message: successMsg,
-            output: combinedOutput
-          });
-        } else if (code === 1 && (hasRestoreActivity || errorsIgnored) && !hasCriticalError) {
-          // Code 1 avec activité de restauration OU erreurs ignorées = succès malgré les warnings
-          const successMsg = `Restore completed${errorsIgnored ? ' (some errors were ignored)' : ' with warnings'} from ${backupFile} to ${target.name}`;
-          logger.info(successMsg, target.name);
-          if (errorOutput && !hasCriticalError) {
-            logger.warn(`Non-critical warnings during restore (ignored): ${errorOutput.substring(0, 500)}`, target.name);
-          }
-          resolve({
-            success: true,
-            database: target.name,
-            timestamp,
-            message: successMsg,
-            output: combinedOutput
-          });
-        } else {
-          // Échec réel
-          const errorMsg = `pg_restore failed with code ${code}${hasRestoreActivity ? ' (partial restore)' : ''}\n${errorOutput}`;
-          logger.error(errorMsg, target.name);
-          resolve({
-            success: false,
-            database: target.name,
-            timestamp,
-            error: errorMsg,
-            output: combinedOutput
-          });
+      const nonCriticalErrorPatterns = [
+        /unrecognized configuration parameter/i,
+        /transaction_timeout/i,
+        /does not exist/i,
+        /already exists/i,
+        /permission denied/i,
+        /role.*does not exist/i,
+        /errors ignored on restore/i,
+        /erreurs ignorées lors de la restauration/i,
+      ];
+
+      const hasCriticalError = allStderr.includes('FATAL') ||
+        (allStderr.includes('ERROR') &&
+          !nonCriticalErrorPatterns.some(pattern => pattern.test(allStderr)));
+
+      const hasRestoreActivity =
+        combinedOutput.includes('CREATE TABLE') ||
+        combinedOutput.includes('CREATE INDEX') ||
+        combinedOutput.includes('CREATE SEQUENCE') ||
+        combinedOutput.includes('CREATE FUNCTION') ||
+        combinedOutput.includes('processing data for table') ||
+        combinedOutput.includes('COPY ') ||
+        combinedOutput.includes('INSERT INTO') ||
+        combinedOutput.includes('ALTER TABLE') ||
+        combinedOutput.includes('création de TABLE') ||
+        combinedOutput.includes('traitement des données de la table');
+
+      const errorsIgnored = combinedOutput.includes('errors ignored on restore') ||
+        combinedOutput.includes('erreurs ignorées lors de la restauration');
+
+      const allSucceeded = preData.code === 0 && dataResult.code === 0 && postData.code === 0;
+
+      if (allSucceeded) {
+        const successMsg = `Restore successful from ${backupFile} to ${target.name}`;
+        logger.info(successMsg, target.name);
+        return {
+          success: true,
+          database: target.name,
+          timestamp,
+          message: successMsg,
+          output: combinedOutput,
+        };
+      } else if ((hasRestoreActivity || errorsIgnored) && !hasCriticalError) {
+        const successMsg = `Restore completed${errorsIgnored ? ' (some errors were ignored)' : ' with warnings'} from ${backupFile} to ${target.name}`;
+        logger.info(successMsg, target.name);
+        if (allStderr && !hasCriticalError) {
+          logger.warn(`Non-critical warnings during restore (ignored): ${allStderr.substring(0, 500)}`, target.name);
         }
-      });
-    });
+        return {
+          success: true,
+          database: target.name,
+          timestamp,
+          message: successMsg,
+          output: combinedOutput,
+        };
+      } else {
+        const errorMsg = `pg_restore failed${hasRestoreActivity ? ' (partial restore)' : ''}\n${allStderr}`;
+        logger.error(errorMsg, target.name);
+        return {
+          success: false,
+          database: target.name,
+          timestamp,
+          error: errorMsg,
+          output: combinedOutput,
+        };
+      }
+    } catch (err: any) {
+      cleanupTempFile();
+      return {
+        success: false,
+        database: target.name,
+        timestamp,
+        error: `Restore failed: ${err.message}`,
+      };
+    }
   }
 }
 

@@ -2,11 +2,11 @@ import pgFormat from 'pg-format';
 
 export interface Filter {
   column: string;
-  operator: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'like' | 'ilike' | 'is_null' | 'is_not_null';
-  value?: string | number | boolean;
+  operator: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'like' | 'ilike' | 'is_null' | 'is_not_null' | 'in' | 'between';
+  value?: string | number | boolean | (string | number | boolean)[];
 }
 
-const OPERATOR_MAP: Record<Filter['operator'], string> = {
+const OPERATOR_MAP: Record<string, string> = {
   eq: '=',
   neq: '!=',
   gt: '>',
@@ -17,6 +17,8 @@ const OPERATOR_MAP: Record<Filter['operator'], string> = {
   ilike: 'ILIKE',
   is_null: 'IS NULL',
   is_not_null: 'IS NOT NULL',
+  in: 'IN',
+  between: 'BETWEEN',
 };
 
 /**
@@ -49,6 +51,20 @@ export function buildWhereClause(
 
     if (filter.operator === 'is_null' || filter.operator === 'is_not_null') {
       conditions.push(`${col} ${sqlOp}`);
+    } else if (filter.operator === 'in') {
+      if (!Array.isArray(filter.value) || filter.value.length === 0) {
+        throw new Error(`Filter on column "${filter.column}" with operator "in" requires a non-empty array value`);
+      }
+      const placeholders = filter.value.map((_: any) => `$${paramIndex++}`);
+      conditions.push(`${col} IN (${placeholders.join(', ')})`);
+      params.push(...filter.value);
+    } else if (filter.operator === 'between') {
+      if (!Array.isArray(filter.value) || filter.value.length !== 2) {
+        throw new Error(`Filter on column "${filter.column}" with operator "between" requires an array of exactly 2 values`);
+      }
+      conditions.push(`${col} BETWEEN $${paramIndex} AND $${paramIndex + 1}`);
+      params.push(filter.value[0], filter.value[1]);
+      paramIndex += 2;
     } else {
       if (filter.value === undefined || filter.value === null) {
         throw new Error(`Filter on column "${filter.column}" with operator "${filter.operator}" requires a value`);

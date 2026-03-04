@@ -1,8 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getClient, executeReadOnly } from '../db.js';
+import { getClient, executeReadOnly, getActiveConnectionInfo } from '../db.js';
 import { jsonResult, textResult, errorResult } from '../types.js';
 import pgFormat from 'pg-format';
+import { requestConfirmation } from '../confirm.js';
+import { recordQuery } from '../history.js';
 
 export function registerDatabaseTools(server: McpServer) {
   server.tool(
@@ -69,7 +71,21 @@ export function registerDatabaseTools(server: McpServer) {
         sql += pgFormat(' ENCODING %L', encoding);
         sql += ' TEMPLATE template0';
 
+        // Request user confirmation before creating database
+        const dbName = getActiveConnectionInfo().database;
+        const approved = await requestConfirmation({
+          tool: 'create_database',
+          database: dbName,
+          sql,
+          description: `CREATE DATABASE "${name}"`,
+        });
+        if (!approved) {
+          return errorResult('Database creation refused by user');
+        }
+
+        const startTime = Date.now();
         await client.query(sql);
+        recordQuery({ tool: 'create_database', database: dbName, sql, duration_ms: Date.now() - startTime });
 
         return textResult(`Database "${name}" created successfully`);
       } catch (err: any) {

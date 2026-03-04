@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import pg from 'pg';
 import { setActiveConnection, getActiveConnectionInfo } from '../db.js';
 import {
   isBbdumpConfigured,
@@ -70,6 +71,67 @@ export function registerConnectionTools(server: McpServer) {
         );
       } catch (err: any) {
         return errorResult(`Failed to switch connection: ${err.message}`);
+      }
+    }
+  );
+
+  server.tool(
+    'test_connection',
+    'Test connectivity to a database connection configured in bbdump without switching the active connection. Returns reachability, latency, and server version.',
+    {
+      name: z.string().describe('The connection name, displayName, or id as shown in list_connections.'),
+    },
+    async ({ name }) => {
+      if (!isBbdumpConfigured()) {
+        return errorResult('bbdump config integration is not available. Cannot test connections.');
+      }
+
+      let pool: pg.Pool | null = null;
+      try {
+        const params = getConnectionParams(name);
+        if (!params) {
+          return errorResult(
+            `Connection "${name}" not found in bbdump configuration. Use list_connections to see available connections.`
+          );
+        }
+
+        const sslConfig = params.ssl ? { rejectUnauthorized: params.sslRejectUnauthorized ?? false } : undefined;
+
+        pool = new pg.Pool({
+          host: params.host,
+          port: params.port,
+          user: params.user,
+          password: params.password || undefined,
+          database: params.database,
+          max: 1,
+          connectionTimeoutMillis: 5000,
+          ssl: sslConfig,
+        });
+
+        const startTime = Date.now();
+        const client = await pool.connect();
+        try {
+          const result = await client.query('SELECT version()');
+          const latency = Date.now() - startTime;
+          return jsonResult({
+            reachable: true,
+            latency_ms: latency,
+            version: result.rows[0]?.version,
+            connection: `${params.user}@${params.host}:${params.port}/${params.database}`,
+          });
+        } finally {
+          client.release();
+        }
+      } catch (err: any) {
+        return jsonResult({
+          reachable: false,
+          error: err.message,
+          connection: name,
+        });
+      } finally {
+        if (pool) {
+          await pool.end().catch(() => {});
+        }
       }
     }
   );

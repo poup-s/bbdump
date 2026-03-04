@@ -15,6 +15,7 @@ interface ActiveConnection {
   password: string;
   database: string;
   ssl?: boolean;
+  sslRejectUnauthorized?: boolean;
 }
 
 let activeConnection: ActiveConnection = {
@@ -32,6 +33,7 @@ export function setActiveConnection(params: {
   password: string;
   database: string;
   ssl?: boolean;
+  sslRejectUnauthorized?: boolean;
 }): void {
   activeConnection = { ...params };
 }
@@ -56,7 +58,9 @@ export function getPool(database?: string): pg.Pool {
   let pool = pools.get(key);
   if (pool) return pool;
 
-  const sslConfig = activeConnection.ssl ? { rejectUnauthorized: false } : undefined;
+  const sslConfig = activeConnection.ssl
+    ? { rejectUnauthorized: activeConnection.sslRejectUnauthorized ?? false }
+    : undefined;
 
   pool = new Pool({
     host: activeConnection.host,
@@ -150,6 +154,25 @@ export async function executeWrite(
     await client.query(`SET LOCAL statement_timeout = ${timeout}`);
     const result = await client.query(sql, params);
     await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK').catch((e) => console.error('ROLLBACK failed:', (e as Error).message));
+    throw err;
+  }
+}
+
+export async function executeDryRun(
+  client: PoolClient,
+  sql: string,
+  params?: any[],
+  timeoutMs?: number
+): Promise<pg.QueryResult> {
+  const timeout = timeoutMs || config.statementTimeout;
+  try {
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL statement_timeout = ${timeout}`);
+    const result = await client.query(sql, params);
+    await client.query('ROLLBACK');
     return result;
   } catch (err) {
     await client.query('ROLLBACK').catch((e) => console.error('ROLLBACK failed:', (e as Error).message));

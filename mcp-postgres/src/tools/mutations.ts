@@ -1,17 +1,19 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getClient, executeWrite, getActiveConnectionInfo } from '../db.js';
+import { getClient, executeWrite, executeDryRun, getActiveConnectionInfo } from '../db.js';
 import { jsonResult, errorResult } from '../types.js';
 import { buildWhereClause, type Filter } from '../filters.js';
 import pgFormat from 'pg-format';
 import { requestConfirmation } from '../confirm.js';
+import { recordQuery } from '../history.js';
 
 const filterSchema = z.object({
   column: z.string().describe('Column name'),
-  operator: z.enum(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is_null', 'is_not_null'])
+  operator: z.enum(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'like', 'ilike', 'is_null', 'is_not_null', 'in', 'between'])
     .describe('Comparison operator'),
-  value: z.union([z.string(), z.number(), z.boolean()]).optional()
-    .describe('Value to compare (not needed for is_null/is_not_null)'),
+  value: z.union([z.string(), z.number(), z.boolean(), z.array(z.union([z.string(), z.number(), z.boolean()]))])
+    .optional()
+    .describe('Value to compare (not needed for is_null/is_not_null). Use array for in/between operators.'),
 });
 
 export function registerMutationTools(server: McpServer) {
@@ -68,7 +70,9 @@ export function registerMutationTools(server: McpServer) {
 
       const client = await getClient(database);
       try {
+        const startTime = Date.now();
         const result = await executeWrite(client, sql, params);
+        recordQuery({ tool: 'insert_rows', database: dbName, sql, duration_ms: Date.now() - startTime, rows_affected: result.rowCount ?? undefined });
 
         return jsonResult({
           inserted: result.rowCount,
@@ -137,7 +141,9 @@ export function registerMutationTools(server: McpServer) {
 
       const client = await getClient(database);
       try {
+        const startTime = Date.now();
         const result = await executeWrite(client, sql, params);
+        recordQuery({ tool: 'update_rows', database: dbName, sql, duration_ms: Date.now() - startTime, rows_affected: result.rowCount ?? undefined });
 
         return jsonResult({
           updated: result.rowCount,
@@ -182,7 +188,10 @@ export function registerMutationTools(server: McpServer) {
 
       const client = await getClient(database);
       try {
+        const startTime = Date.now();
         const result = await executeWrite(client, sql, params);
+        const dbName = database || getActiveConnectionInfo().database;
+        recordQuery({ tool: 'delete_rows', database: dbName, sql, duration_ms: Date.now() - startTime, rows_affected: result.rowCount ?? undefined });
 
         return jsonResult({
           deleted: result.rowCount,
@@ -204,15 +213,16 @@ export function registerMutationTools(server: McpServer) {
       sql: z.string().describe('SQL query to execute'),
       database: z.string().optional().describe('Database name'),
       timeout_ms: z.number().default(60000).describe('Timeout in milliseconds (default: 60000)'),
+      dry_run: z.boolean().default(false).describe('If true, execute inside a transaction that is rolled back. Data is unchanged but you can see the result.'),
     },
-    async ({ sql, database, timeout_ms }) => {
+    async ({ sql, database, timeout_ms, dry_run }) => {
       // Request user confirmation
       const dbName = database || getActiveConnectionInfo().database;
       const approved = await requestConfirmation({
         tool: 'execute_write_query',
         database: dbName,
         sql,
-        description: `Execute write SQL query`,
+        description: dry_run ? `[DRY RUN] Execute write SQL query` : `Execute write SQL query`,
       });
       if (!approved) {
         return errorResult('Mutation refused by user');
@@ -221,8 +231,18 @@ export function registerMutationTools(server: McpServer) {
       const client = await getClient(database);
       try {
         const startTime = Date.now();
-        const result = await executeWrite(client, sql, undefined, timeout_ms);
+        const result = dry_run
+          ? await executeDryRun(client, sql, undefined, timeout_ms)
+          : await executeWrite(client, sql, undefined, timeout_ms);
         const duration = Date.now() - startTime;
+
+        recordQuery({
+          tool: 'execute_write_query',
+          database: dbName,
+          sql: dry_run ? `[DRY RUN] ${sql}` : sql,
+          duration_ms: duration,
+          rows_affected: result.rowCount ?? undefined,
+        });
 
         return jsonResult({
           rows: result.rows || [],
@@ -230,6 +250,8 @@ export function registerMutationTools(server: McpServer) {
           row_count: result.rows?.length || 0,
           affected_rows: result.rowCount,
           duration_ms: duration,
+          dry_run,
+          ...(dry_run ? { note: 'Transaction was rolled back. No data was modified.' } : {}),
         });
       } catch (err: any) {
         return errorResult(err.message);

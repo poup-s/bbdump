@@ -38,6 +38,7 @@ export interface ConnectionParams {
   password: string;
   database: string;
   ssl?: boolean;
+  sslRejectUnauthorized?: boolean;
 }
 
 function decryptPassword(encryptedText: string, key: Buffer): string {
