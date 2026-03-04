@@ -2,6 +2,7 @@ import { ipcMain, app, BrowserWindow, dialog } from 'electron';
 import { getErrorMessage } from '../utils';
 import * as fs from 'fs';
 import * as path from 'path';
+import { execSync } from 'child_process';
 import { logger } from '../logger';
 import { pathManager } from '../paths';
 import { fileEncryptionManager } from '../fileEncryption';
@@ -11,6 +12,23 @@ import { encryptionManager } from '../encryption';
 import { getConfig, saveConfig } from './configIpc';
 import { cronManager } from '../cron';
 import { resolveConfirmation } from '../mcpConfirmServer';
+
+function resolveNodePath(): string {
+    try {
+        if (process.platform === 'win32') {
+            const result = execSync('where node', { encoding: 'utf-8' }).trim().split('\n')[0].trim();
+            if (result && fs.existsSync(result)) return result;
+        } else {
+            // Source nvm if available to get the active node
+            const nvmInit = `[ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh"; which node 2>/dev/null`;
+            const result = execSync(nvmInit, { encoding: 'utf-8', shell: '/bin/bash' }).trim();
+            if (result && fs.existsSync(result)) return result;
+        }
+    } catch {
+        // fallback below
+    }
+    return 'node';
+}
 
 export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
 
@@ -421,7 +439,7 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
             };
 
             config.mcpServers['bbdump-postgres'] = {
-                command: 'node',
+                command: resolveNodePath(),
                 args: [serverPath],
                 env
             };
