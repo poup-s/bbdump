@@ -100,11 +100,11 @@ export async function downloadUpdate(): Promise<void> {
 export function quitAndInstall(): void {
   logger.info('Quitting and installing update...');
   
-  // On laisse le temps à l'IPC de retourner la réponse au renderer
-  // avant de déclencher la procédure de fermeture et mise à jour
+  // Allow time for IPC to return the response to the renderer
+  // before triggering the shutdown and update procedure
   setTimeout(() => {
-    // Nettoyage forcé pour s'assurer qu'Electron quitte bien
-    // (electron-updater peut parfois bloquer si des fenêtres restent actives)
+    // Force cleanup to ensure Electron quits properly
+    // (electron-updater can sometimes block if windows remain active)
     app.removeAllListeners('window-all-closed');
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(w => {

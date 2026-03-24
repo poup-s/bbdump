@@ -41,7 +41,7 @@ export const store = reactive({
     newlyAddedDbId: null as string | null,
     // Project mode
     projects: [] as Project[],
-    viewMode: 'list' as 'list' | 'project',
+    viewMode: 'project' as 'list' | 'project',
     showProjectModal: false,
     editingProject: null as Project | null,
     // Proxy statuses per project

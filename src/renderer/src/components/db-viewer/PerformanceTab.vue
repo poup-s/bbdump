@@ -35,7 +35,7 @@ const loadStats = async () => {
       dataDirectory.value = result.dataDirectory || '';
       
       if (isNotPreloaded.value) {
-        // Vérifier si c'est déjà dans la config mais pas encore pris en compte (ou absent)
+        // Check if it's already in the config but not yet applied (or absent)
         const configCheck = await ipcRenderer.invoke('check-postgres-config', 'pg_stat_statements');
         if (configCheck.success) {
           isConfigPresent.value = configCheck.isPresent;
@@ -95,7 +95,7 @@ const restartServer = async () => {
         const result = await ipcRenderer.invoke('restart-postgres');
         if (result.success) {
           addToast(t('viewer.restartSuccess'), 'success');
-          // Attendre un peu que le serveur redémarre avant de recharger
+          // Wait a bit for the server to restart before reloading
           setTimeout(() => {
             loadStats();
             isRestarting.value = false;

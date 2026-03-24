@@ -47,7 +47,7 @@ onMounted(() => {
 });
 
 const startCountdown = () => {
-  // Nettoyer l'intervalle existant avant d'en créer un nouveau
+  // Clear the existing interval before creating a new one
   if (countdownInterval) {
     clearInterval(countdownInterval);
     countdownInterval = null;

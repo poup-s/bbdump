@@ -20,8 +20,8 @@ export interface InstallationResult {
 }
 
 /**
- * Installe Homebrew sur macOS en ouvrant Terminal.app
- * (Homebrew necessite un TTY interactif pour sudo)
+ * Installs Homebrew on macOS by opening Terminal.app
+ * (Homebrew requires an interactive TTY for sudo)
  */
 export async function installHomebrew(
   onProgress: (progress: InstallationProgress) => void
@@ -35,7 +35,7 @@ export async function installHomebrew(
 
     const homebrewInstallCommand = '/bin/bash -c \\"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\\"';
 
-    // Utiliser osascript pour ouvrir Terminal.app avec la commande
+    // Use osascript to open Terminal.app with the command
     const appleScript = [
       'tell application "Terminal"',
       '  activate',
@@ -68,7 +68,7 @@ export async function installHomebrew(
 }
 
 /**
- * Installe PostgreSQL selon l'OS
+ * Installs PostgreSQL based on the OS
  */
 export async function installPostgreSQL(
   onProgress: (progress: InstallationProgress) => void,
@@ -89,7 +89,7 @@ export async function installPostgreSQL(
 }
 
 /**
- * Installe PostgreSQL sur macOS avec Homebrew (utilise le chemin complet de brew)
+ * Installs PostgreSQL on macOS with Homebrew (uses the full brew path)
  */
 async function installPostgresMacOS(
   onProgress: (progress: InstallationProgress) => void,
@@ -98,7 +98,7 @@ async function installPostgresMacOS(
   try {
     onProgress({ step: 'checking', message: 'Vérification de l\'installation de Homebrew...', progress: 10 });
 
-    // Résoudre le chemin de brew si non fourni
+    // Resolve the brew path if not provided
     if (!brewPath) {
       const { detectHomebrew } = await import('./toolDetector');
       const homebrewResult = await detectHomebrew();
@@ -116,14 +116,14 @@ async function installPostgresMacOS(
 
     logger.info(`Using Homebrew at: ${brewPath}`);
 
-    // Construire un env enrichi avec les chemins Homebrew
+    // Build an enhanced env with Homebrew paths
     const brewBinDir = brewPath.replace(/\/brew$/, '');
     const enhancedEnv = {
       ...process.env,
       PATH: `${brewBinDir}:/opt/homebrew/bin:/usr/local/bin:${process.env.PATH || ''}`
     };
 
-    // Installer PostgreSQL (essayer la version la plus récente d'abord)
+    // Install PostgreSQL (try the most recent version first)
     onProgress({ step: 'installing', message: 'Installation de PostgreSQL via Homebrew...', progress: 30 });
     logger.info(`Installation de PostgreSQL via Homebrew (using: ${brewPath})...`);
 
@@ -149,7 +149,7 @@ async function installPostgresMacOS(
           onProgress({ step: 'complete', message: 'PostgreSQL installé avec succès', progress: 100 });
           resolve({ success: true });
         } else {
-          // Essayer PostgreSQL 16 en fallback
+          // Try PostgreSQL 16 as fallback
           logger.info('PostgreSQL 17 non disponible, essai avec PostgreSQL 16...');
           onProgress({ step: 'installing', message: 'Essai avec PostgreSQL 16...', progress: 30 });
 
@@ -192,8 +192,8 @@ async function installPostgresMacOS(
 }
 
 /**
- * Installe PostgreSQL sur Linux en ouvrant un terminal
- * (nécessite sudo pour apt-get/yum/dnf)
+ * Installs PostgreSQL on Linux by opening a terminal
+ * (requires sudo for apt-get/yum/dnf)
  */
 async function installPostgresLinux(
   onProgress: (progress: InstallationProgress) => void
@@ -201,7 +201,7 @@ async function installPostgresLinux(
   try {
     onProgress({ step: 'detecting', message: 'Détection du gestionnaire de paquets...', progress: 10 });
 
-    // Détecter le gestionnaire de paquets
+    // Detect the package manager
     let installCommand: string;
     try {
       await execAsync('which apt-get');
@@ -225,7 +225,7 @@ async function installPostgresLinux(
 
     onProgress({ step: 'opening-terminal', message: 'Ouverture du terminal...', progress: 50 });
 
-    // Essayer d'ouvrir un terminal avec la commande
+    // Try to open a terminal with the command
     const terminals = [
       { cmd: 'gnome-terminal', args: ['--', 'bash', '-c', `${installCommand}; echo ""; echo "Installation terminée. Vous pouvez fermer cette fenêtre."; read -p "Appuyez sur Entrée pour fermer..."`] },
       { cmd: 'konsole', args: ['-e', 'bash', '-c', `${installCommand}; echo ""; echo "Installation terminée. Vous pouvez fermer cette fenêtre."; read -p "Appuyez sur Entrée pour fermer..."`] },
@@ -256,7 +256,7 @@ async function installPostgresLinux(
       }
     }
 
-    // Fallback : afficher la commande à copier-coller
+    // Fallback: show the command to copy-paste
     return {
       success: false,
       error: `Impossible d'ouvrir un terminal automatiquement. Veuillez exécuter cette commande manuellement :\n\n${installCommand}`

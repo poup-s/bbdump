@@ -14,7 +14,7 @@ interface ConnectionParams {
 }
 
 /**
- * Gestionnaire de pool de connexions pour optimiser les performances
+ * Connection pool manager to optimize performance
  */
 class ConnectionPoolManager {
   private pools: Map<string, Pool> = new Map();
@@ -24,13 +24,13 @@ class ConnectionPoolManager {
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
-    // Nettoyer les pools inutilisés périodiquement
+    // Clean up unused pools periodically
     this.cleanupTimer = setInterval(() => this.cleanup(), this.CLEANUP_INTERVAL);
   }
 
   /**
-   * Retire le paramètre sslmode de la connection string pour éviter les conflits
-   * avec l'option ssl explicite du pool (pg re-parse la string par client)
+   * Removes the sslmode parameter from the connection string to avoid conflicts
+   * with the pool's explicit ssl option (pg re-parses the string per client)
    */
   private stripSslMode(connectionString: string): string {
     try {
@@ -53,7 +53,7 @@ class ConnectionPoolManager {
   }
 
   /**
-   * Obtient un pool existant ou en crée un nouveau
+   * Gets an existing pool or creates a new one
    */
   public getPool(params: ConnectionParams): Pool {
     const key = this.getKey(params);
@@ -126,7 +126,7 @@ class ConnectionPoolManager {
   }
 
   /**
-   * Supprime un pool du cache (après une erreur, avant re-création avec d'autres params)
+   * Removes a pool from the cache (after an error, before re-creation with different params)
    */
   public removePool(params: ConnectionParams) {
     const key = this.getKey(params);
@@ -153,7 +153,7 @@ class ConnectionPoolManager {
   }
 
   /**
-   * Ferme tous les pools (à l'arrêt de l'application)
+   * Closes all pools (on application shutdown)
    */
   public async closeAll() {
     if (this.cleanupTimer) {
@@ -234,7 +234,7 @@ async function getClient(params: ConnectionParams): Promise<PoolClient> {
 }
 
 /**
- * Récupère la liste des tables d'une base de données de manière optimisée
+ * Retrieves the list of tables from a database in an optimized way
  */
 export async function getDatabaseTables(params: ConnectionParams) {
   const client = await getClient(params);
@@ -275,13 +275,13 @@ export async function getDatabaseTables(params: ConnectionParams) {
 }
 
 /**
- * Récupère le schéma d'une table
+ * Retrieves the schema of a table
  */
 export async function getTableSchema(params: ConnectionParams & { table: string }) {
   const client = await getClient(params);
 
   try {
-    // Récupérer les colonnes
+    // Retrieve columns
     const columnsQuery = `
       SELECT
         column_name,
@@ -300,7 +300,7 @@ export async function getTableSchema(params: ConnectionParams & { table: string 
 
     const columnsResult = await client.query(columnsQuery, [params.table]);
 
-    // Récupérer les clés primaires (avec gestion correcte de la casse)
+    // Retrieve primary keys (with correct case handling)
     const pkQuery = `
       SELECT a.attname as column_name
       FROM pg_index i
@@ -315,7 +315,7 @@ export async function getTableSchema(params: ConnectionParams & { table: string 
     const pkResult = await client.query(pkQuery, [params.table]);
     const primaryKeys = pkResult.rows.map(row => row.column_name);
 
-    // Récupérer les clés étrangères avec les tables référencées
+    // Retrieve foreign keys with referenced tables
     const fkQuery = `
       SELECT
         kcu.column_name,
@@ -336,7 +336,7 @@ export async function getTableSchema(params: ConnectionParams & { table: string 
     const fkResult = await client.query(fkQuery, [params.table]);
     const foreignKeys = fkResult.rows;
 
-    // Ajouter les informations de clés aux colonnes
+    // Add key information to columns
     const columns = columnsResult.rows.map(col => {
       const fkInfo = foreignKeys.find(fk => fk.column_name === col.column_name);
       return {
@@ -357,7 +357,7 @@ export async function getTableSchema(params: ConnectionParams & { table: string 
 }
 
 /**
- * Récupère les relations (foreign keys) d'une table
+ * Retrieves the relations (foreign keys) of a table
  */
 export async function getTableRelations(params: ConnectionParams & { table: string }) {
   const client = await getClient(params);
@@ -390,7 +390,7 @@ export async function getTableRelations(params: ConnectionParams & { table: stri
 }
 
 /**
- * Récupère les données d'une table avec LIMIT, OFFSET et recherche optionnelle
+ * Retrieves table data with LIMIT, OFFSET and optional search
  */
 export async function getTableData(params: ConnectionParams & {
   table: string;
@@ -415,7 +415,7 @@ export async function getTableData(params: ConnectionParams & {
     const orderByClause = params.sortBy ? format('ORDER BY %I %s', params.sortBy, sortOrder) : '';
 
     if (params.search && params.search.trim() !== '') {
-      // Si recherche active, construire une requête avec WHERE sur toutes les colonnes
+      // If search is active, build a query with WHERE on all columns
       const columnsQuery = `
         SELECT column_name
         FROM information_schema.columns
@@ -461,7 +461,7 @@ export async function getTableData(params: ConnectionParams & {
 }
 
 /**
- * Récupère une ligne liée par clé étrangère (exact match sur une colonne)
+ * Retrieves a related row by foreign key (exact match on a column)
  */
 export async function getFkRow(params: ConnectionParams & {
   table: string;
@@ -480,7 +480,7 @@ export async function getFkRow(params: ConnectionParams & {
 }
 
 /**
- * Met à jour les données d'une table
+ * Updates data in a table
  */
 export async function updateTableData(params: ConnectionParams & {
   table: string;
@@ -638,7 +638,7 @@ export async function insertTableRow(params: ConnectionParams & {
 }
 
 /**
- * Récupère les valeurs possibles d'un type ENUM
+ * Retrieves the possible values of an ENUM type
  */
 export async function getEnumValues(params: ConnectionParams & {
   typeName: string;
@@ -665,7 +665,7 @@ export async function getEnumValues(params: ConnectionParams & {
 }
 
 /**
- * Exécute une requête SQL en lecture seule avec timeout et limite de lignes
+ * Executes a read-only SQL query with timeout and row limit
  */
 export async function executeQuery(params: ConnectionParams & {
   sql: string;
@@ -706,7 +706,7 @@ export async function executeQuery(params: ConnectionParams & {
 }
 
 /**
- * Exécute une requête SQL en mode read-write (mutations autorisées) avec timeout
+ * Executes a read-write SQL query (mutations allowed) with timeout
  */
 export async function executeMutationQuery(params: ConnectionParams & {
   sql: string;
@@ -748,7 +748,7 @@ export async function executeMutationQuery(params: ConnectionParams & {
 }
 
 /**
- * Récupère le schéma complet de la base de données (tables, colonnes, relations)
+ * Retrieves the complete database schema (tables, columns, relations)
  */
 export async function getDatabaseFullSchema(params: ConnectionParams) {
   const client = await getClient(params);

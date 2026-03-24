@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
 import { store } from '../store';
@@ -48,6 +48,22 @@ const slugify = (s: string) => s.toLowerCase().normalize('NFD')
 
 const slugifiedName = computed(() => slugify(props.project.name));
 const effectivePort = computed(() => props.proxyStatus?.port || props.project.proxyPort || 0);
+
+// Proxy state: disabled | needs-target | running | stopped
+const proxyState = computed(() => {
+  if (!props.project.proxyEnabled) return 'disabled';
+  if (!props.project.proxyTargetDbId) return 'needs-target';
+  if (props.proxyStatus?.running) return 'running';
+  return 'stopped';
+});
+
+// Auto-expand panel and project when proxy is first enabled
+watch(() => props.project.proxyEnabled, (newVal, oldVal) => {
+  if (newVal && !oldVal) {
+    proxyPanelOpen.value = true;
+    collapsed.value = false;
+  }
+});
 
 const proxyConnectionString = () => {
   if (!effectivePort.value) return '';
@@ -141,7 +157,11 @@ const onDrop = (event: DragEvent) => {
     >
       <div class="flex items-center gap-3">
         <!-- Color dot -->
-        <div class="w-3 h-3 rounded-full shrink-0" :class="project.color" />
+        <div
+          class="w-3 h-3 rounded-full shrink-0"
+          :class="project.color.startsWith('custom:') ? '' : project.color"
+          :style="project.color.startsWith('custom:') ? { backgroundColor: project.color.replace('custom:', '') } : {}"
+        />
         <!-- Name -->
         <h3 class="text-lg font-semibold text-gray-700 dark:text-gray-300">{{ project.masked ? '••••••••' : project.name }}</h3>
         <!-- Mask toggle (right after name) -->
@@ -184,6 +204,8 @@ const onDrop = (event: DragEvent) => {
           :title="t('proxy.configureProxy')"
         >
           <span v-if="proxyStatus?.running" class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+          <span v-else-if="proxyState === 'needs-target'" class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+          <span v-else-if="project.proxyEnabled" class="w-1.5 h-1.5 rounded-full bg-gray-400" />
           <svg
             class="w-3.5 h-3.5 transition-transform duration-200"
             :class="proxyPanelOpen ? '' : '-rotate-90'"
@@ -246,12 +268,27 @@ const onDrop = (event: DragEvent) => {
       <div
         v-if="project.proxyEnabled && proxyPanelOpen"
         class="mx-4 mb-3 mt-1 rounded-xl border overflow-hidden"
-        :class="proxyStatus?.running
+        :class="proxyState === 'running'
           ? 'border-emerald-200 dark:border-emerald-800/40 bg-emerald-50/20 dark:bg-emerald-950/10'
-          : 'border-gray-200 dark:border-zinc-700 bg-gray-50/50 dark:bg-zinc-800/30'"
+          : proxyState === 'needs-target'
+            ? 'border-amber-200 dark:border-amber-800/40 bg-amber-50/20 dark:bg-amber-950/10'
+            : 'border-gray-200 dark:border-zinc-700 bg-gray-50/50 dark:bg-zinc-800/30'"
       >
-        <!-- Connection string + actions -->
-        <div class="px-4 py-2.5 flex items-center justify-between gap-3">
+        <!-- Guidance banner when no target selected -->
+        <div v-if="proxyState === 'needs-target'" class="px-4 py-3 flex items-start gap-3">
+          <div class="w-5 h-5 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center shrink-0 mt-0.5">
+            <svg class="w-3 h-3 text-amber-600 dark:text-amber-400" fill="currentColor" viewBox="0 0 20 20">
+              <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
+            </svg>
+          </div>
+          <div>
+            <p class="text-sm font-medium text-amber-800 dark:text-amber-300">{{ t('proxy.selectTargetFirst') }}</p>
+            <p class="text-xs text-amber-600/80 dark:text-amber-400/80 mt-0.5">{{ t('proxy.selectTargetHint') }}</p>
+          </div>
+        </div>
+
+        <!-- Connection string + actions (only when target is selected) -->
+        <div v-else class="px-4 py-2.5 flex items-center justify-between gap-3">
           <!-- URL display (clickable to copy) -->
           <button
             v-if="effectivePort"
@@ -358,6 +395,7 @@ const onDrop = (event: DragEvent) => {
           :size="dbSizes?.[db.id]"
           :proxy-enabled="project.proxyEnabled || false"
           :is-proxy-target="project.proxyTargetDbId === db.id"
+          :proxy-needs-target="proxyState === 'needs-target'"
           @backup="emit('backup', $event)"
           @view="emit('view', $event)"
           @duplicate="emit('duplicate', $event)"

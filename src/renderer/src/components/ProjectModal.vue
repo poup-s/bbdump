@@ -11,6 +11,7 @@ const { addToast } = useToast();
 
 const isEditing = computed(() => !!store.editingProject);
 const isLoading = ref(false);
+const customColorInput = ref<HTMLInputElement | null>(null);
 
 const colors = [
   'bg-blue-500',
@@ -22,6 +23,17 @@ const colors = [
   'bg-emerald-500',
   'bg-teal-500',
 ];
+
+const isCustomColor = computed(() => !colors.includes(form.value.color));
+
+const openColorPicker = () => {
+  customColorInput.value?.click();
+};
+
+const onCustomColorChange = (event: Event) => {
+  const hex = (event.target as HTMLInputElement).value;
+  form.value.color = `custom:${hex}`;
+};
 
 const form = ref({
   name: '',
@@ -115,7 +127,7 @@ const save = async () => {
         <!-- Color Picker -->
         <div>
           <label class="block text-sm font-medium mb-2">{{ t('project.color') }}</label>
-          <div class="flex gap-2 flex-wrap">
+          <div class="flex gap-2 flex-wrap items-center">
             <button
               v-for="color in colors"
               :key="color"
@@ -127,6 +139,27 @@ const save = async () => {
                   ? 'ring-2 ring-offset-2 ring-offset-white dark:ring-offset-zinc-900 ring-gray-900 dark:ring-white scale-110'
                   : 'opacity-60 hover:opacity-100'
               ]"
+            />
+            <!-- Custom color picker -->
+            <button
+              @click="openColorPicker"
+              class="w-8 h-8 rounded-full transition-all duration-200 hover:scale-110 border-2 border-dashed flex items-center justify-center"
+              :class="isCustomColor
+                ? 'ring-2 ring-offset-2 ring-offset-white dark:ring-offset-zinc-900 ring-gray-900 dark:ring-white scale-110 border-transparent'
+                : 'border-gray-300 dark:border-zinc-600 opacity-60 hover:opacity-100'"
+              :style="isCustomColor ? { backgroundColor: form.color.replace('custom:', '') } : {}"
+              :title="t('project.customColor')"
+            >
+              <svg v-if="!isCustomColor" class="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m6-6H6" />
+              </svg>
+            </button>
+            <input
+              ref="customColorInput"
+              type="color"
+              class="sr-only"
+              :value="isCustomColor ? form.color.replace('custom:', '') : '#6366f1'"
+              @input="onCustomColorChange"
             />
           </div>
         </div>

@@ -3,23 +3,23 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 /**
- * Gestion centralisée des chemins de l'application
- * Utilise app.getPath('userData') pour les applications packagées
- * et process.cwd() pour le développement
+ * Centralized application path management
+ * Uses app.getPath('userData') for packaged applications
+ * and process.cwd() for development
  */
 class PathManager {
   private _appDataPath: string;
 
   constructor() {
-    // En mode développement, utiliser le répertoire courant
-    // En mode production (packagé), utiliser userData
+    // In development mode, use the current directory
+    // In production mode (packaged), use userData
     if (app.isPackaged) {
       this._appDataPath = app.getPath('userData');
     } else {
       this._appDataPath = process.cwd();
     }
 
-    // Créer les dossiers nécessaires
+    // Create the necessary directories
     this.ensureDirectories();
   }
 

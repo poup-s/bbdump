@@ -17,6 +17,21 @@ const currentStep = ref(1);
 const connectionMode = ref<'manual' | 'url' | null>(null);
 const connectionUrl = ref('');
 
+// Cloud providers for quick connect
+const providers = [
+  { id: 'supabase', name: 'Supabase', color: '#3ECF8E',
+    placeholder: 'postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres',
+    defaults: { ssl: true, port: 6543 },
+    hint: 'database.providers.supabaseHint' },
+  { id: 'neon', name: 'Neon', color: '#00E599',
+    placeholder: 'postgresql://[user]:[password]@[host].neon.tech/neondb?sslmode=require',
+    defaults: { ssl: true, port: 5432 },
+    hint: 'database.providers.neonHint' },
+] as const;
+
+type Provider = typeof providers[number];
+const selectedProvider = ref<Provider | null>(null);
+
 const form = ref<Database>({
   id: '',
   name: '',
@@ -142,9 +157,19 @@ const selectOutput = async () => {
 
 const selectMode = (mode: 'url' | 'manual') => {
   connectionMode.value = mode;
+  selectedProvider.value = null;
   if (mode === 'url') {
     connectionUrl.value = '';
   }
+};
+
+const selectProvider = (provider: Provider) => {
+  selectedProvider.value = provider;
+  connectionMode.value = 'url';
+  connectionUrl.value = '';
+  form.value.ssl = provider.defaults.ssl;
+  form.value.port = provider.defaults.port;
+  currentStep.value = 2;
 };
 
 const nextStep = () => {
@@ -382,13 +407,33 @@ const scrollToSection = async (section: 'schedule') => {
                   </div>
                 </button>
               </div>
+
+              <!-- Quick connect providers -->
+              <div class="mt-6">
+                <div class="flex items-center gap-3 mb-3">
+                  <div class="h-px flex-1 bg-border"></div>
+                  <span class="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide">{{ t('database.providers.quickConnect') }}</span>
+                  <div class="h-px flex-1 bg-border"></div>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                  <button
+                    v-for="provider in providers"
+                    :key="provider.id"
+                    @click="selectProvider(provider)"
+                    class="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-border hover:border-foreground/30 hover:bg-surface transition-all text-left group"
+                  >
+                    <span class="w-3 h-3 rounded-full shrink-0" :style="{ backgroundColor: provider.color }"></span>
+                    <span class="text-sm font-medium text-gray-600 dark:text-gray-300 group-hover:text-foreground transition-colors">{{ provider.name }}</span>
+                  </button>
+                </div>
+              </div>
             </div>
 
             <!-- Step 2: Connection Details -->
             <div v-else-if="showWizard && currentStep === 2" key="step2" class="space-y-6">
               <div class="text-center space-y-2">
-                <h4 class="text-2xl font-bold">{{ t('database.wizard.step2Title') }}</h4>
-                <p class="text-gray-500 dark:text-gray-400">{{ t('database.wizard.step2Description') }}</p>
+                <h4 class="text-2xl font-bold">{{ selectedProvider ? selectedProvider.name : t('database.wizard.step2Title') }}</h4>
+                <p class="text-gray-500 dark:text-gray-400">{{ selectedProvider ? t(selectedProvider.hint) : t('database.wizard.step2Description') }}</p>
               </div>
 
               <Transition
@@ -411,7 +456,7 @@ const scrollToSection = async (section: 'schedule') => {
                         v-model="connectionUrl"
                         type="text"
                         class="w-full bg-surface border border-border rounded-xl pl-10 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all font-mono text-sm"
-                        :placeholder="t('database.urlPlaceholder')"
+                        :placeholder="selectedProvider ? selectedProvider.placeholder : t('database.urlPlaceholder')"
                       />
                       <div class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
                         <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">

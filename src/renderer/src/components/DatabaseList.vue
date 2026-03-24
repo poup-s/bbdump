@@ -7,7 +7,6 @@ import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { ipcRenderer } from '../electron';
 import { Database, Project, ProxyActivityEvent } from '../types';
-import DatabaseCard from './DatabaseCard.vue';
 import DatabaseCardCompact from './DatabaseCardCompact.vue';
 import DuplicateDatabaseModal from './DuplicateDatabaseModal.vue';
 import ProjectSection from './ProjectSection.vue';
@@ -50,7 +49,7 @@ const loadHiddenDatabasesCount = async () => {
   }
 };
 
-// Recharger le compteur quand les bases changent
+// Reload the count when databases change
 watch(() => store.databases.length, () => {
   loadHiddenDatabasesCount();
 });
@@ -247,13 +246,6 @@ const disconnectDatabase = async (db: Database) => {
   });
 };
 
-const scrollToExternal = () => {
-  const externalSection = document.querySelector('[data-external-connections]');
-  if (externalSection) {
-    externalSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
-};
-
 const toggleMask = async (db: Database) => {
   try {
     await ipcRenderer.invoke('toggle-mask', db.id, !db.masked);
@@ -284,15 +276,6 @@ const fetchDatabaseSizes = async () => {
 };
 
 // --- Project mode ---
-
-const setViewMode = async (mode: 'list' | 'project') => {
-  store.viewMode = mode;
-  try {
-    await ipcRenderer.invoke('save-view-mode', mode);
-  } catch (error) {
-    console.error('Error saving view mode:', error);
-  }
-};
 
 const getProjectDatabases = (project: Project): Database[] => {
   const idSet = new Set(project.databaseIds);
@@ -342,9 +325,6 @@ const dragOverProjectId = ref<string | null>(null);
 const dragOverPosition = ref<'above' | 'below' | null>(null);
 const ungroupedDragOver = ref(false);
 
-// List mode DnD reorder
-const listDragOverDbId = ref<string | null>(null);
-
 onMounted(() => {
   loadHiddenDatabasesCount();
   fetchDatabaseSizes();
@@ -359,49 +339,10 @@ onMounted(() => {
     dragOverProjectId.value = null;
     dragOverPosition.value = null;
     ungroupedDragOver.value = false;
-    listDragOverDbId.value = null;
   };
   document.addEventListener('dragstart', onDragStartGlobal);
   document.addEventListener('dragend', onDragEndGlobal);
 });
-
-// List mode reorder handlers
-const onListCardDragOver = (event: DragEvent, dbId: string) => {
-  if (!event.dataTransfer?.types.includes('application/x-bbdump-db-reorder')) return;
-  event.preventDefault();
-  event.dataTransfer.dropEffect = 'move';
-  listDragOverDbId.value = dbId;
-};
-
-const onListCardDragLeave = (event: DragEvent) => {
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-  const { clientX, clientY } = event;
-  if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
-    listDragOverDbId.value = null;
-  }
-};
-
-const onListCardDrop = async (event: DragEvent, targetDbId: string) => {
-  event.preventDefault();
-  const draggedDbId = event.dataTransfer?.getData('application/x-bbdump-db-reorder');
-  listDragOverDbId.value = null;
-  if (!draggedDbId || draggedDbId === targetDbId) return;
-
-  const ids = store.databases.map(d => d.id);
-  const fromIndex = ids.indexOf(draggedDbId);
-  const toIndex = ids.indexOf(targetDbId);
-  if (fromIndex === -1 || toIndex === -1) return;
-  ids.splice(fromIndex, 1);
-  const insertAt = ids.indexOf(targetDbId);
-  ids.splice(insertAt, 0, draggedDbId);
-
-  try {
-    const config = await ipcRenderer.invoke('reorder-databases', ids);
-    store.databases = config.databases;
-  } catch (error) {
-    addToast('Error reordering databases: ' + getErrorMessage(error), 'error');
-  }
-};
 
 const moveDatabaseToProject = async (databaseId: string, targetProjectId: string | null) => {
   try {
@@ -576,6 +517,8 @@ const handleProxyToggle = async (project: Project) => {
         } else {
           addToast(t('proxy.startError', { error: result.error }), 'error');
         }
+      } else {
+        addToast(t('proxy.selectTargetFirst'), 'info');
       }
       await refreshProxyStatuses();
     }
@@ -751,20 +694,9 @@ const formatLogTime = (timestamp: string) => {
   return new Date(timestamp).toLocaleTimeString();
 };
 
-// Start proxy status polling when in project mode
-watch(() => store.viewMode, (mode) => {
-  if (mode === 'project') {
-    refreshProxyStatuses();
-    if (!proxyStatusInterval) {
-      proxyStatusInterval = setInterval(refreshProxyStatuses, 5000);
-    }
-  } else {
-    if (proxyStatusInterval) {
-      clearInterval(proxyStatusInterval);
-      proxyStatusInterval = null;
-    }
-  }
-}, { immediate: true });
+// Start proxy status polling
+refreshProxyStatuses();
+proxyStatusInterval = setInterval(refreshProxyStatuses, 5000);
 
 onUnmounted(() => {
   if (proxyStatusInterval) {
@@ -787,7 +719,7 @@ onUnmounted(() => {
         <p class="text-gray-500 mt-1">{{ t('databases.configuredConnections', { count: store.databases.length }) }}</p>
       </div>
       <div class="flex gap-3">
-        <!-- Bouton Créer une base -->
+        <!-- Create database button -->
         <button
           @click="store.createDatabaseForProjectId = null; store.showCreateDatabaseModal = true"
           class="group relative overflow-hidden bg-gradient-to-br from-blue-600 via-blue-500 to-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-medium shadow-lg shadow-blue-500/30 hover:shadow-xl hover:shadow-blue-500/40 transition-all duration-300 flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
@@ -802,7 +734,7 @@ onUnmounted(() => {
           <div class="absolute inset-0 rounded-xl bg-gradient-to-r from-blue-400/0 via-blue-400/50 to-blue-400/0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 blur-sm"></div>
         </button>
 
-        <!-- Bouton Ajouter une connexion -->
+        <!-- Add connection button -->
         <button
           @click="openAddModal"
           class="group relative overflow-hidden bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 dark:from-gray-100 dark:via-gray-50 dark:to-gray-100 text-white dark:text-gray-900 px-4 py-2 rounded-xl text-sm font-medium shadow-lg shadow-gray-900/20 dark:shadow-gray-100/20 hover:shadow-xl hover:shadow-gray-900/30 dark:hover:shadow-gray-100/30 transition-all duration-300 flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98] border border-gray-700/20 dark:border-gray-300/20"
@@ -819,42 +751,9 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- View mode switch + New project button (own row) -->
+    <!-- New project button -->
     <div class="flex items-center gap-3 mb-6">
-      <div class="flex items-center bg-gray-100 dark:bg-zinc-800 rounded-xl p-1">
-        <button
-          @click="setViewMode('list')"
-          class="px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200"
-          :class="store.viewMode === 'list'
-            ? 'bg-white dark:bg-zinc-700 text-foreground shadow-sm'
-            : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'"
-        >
-          <div class="flex items-center gap-1.5">
-            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-            {{ t('project.modeList') }}
-          </div>
-        </button>
-        <button
-          @click="setViewMode('project')"
-          class="px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200"
-          :class="store.viewMode === 'project'
-            ? 'bg-white dark:bg-zinc-700 text-foreground shadow-sm'
-            : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'"
-        >
-          <div class="flex items-center gap-1.5">
-            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-            </svg>
-            {{ t('project.modeProject') }}
-          </div>
-        </button>
-      </div>
-
-      <!-- Bouton Nouveau projet (only in project mode) -->
       <button
-        v-if="store.viewMode === 'project'"
         @click="openProjectModal"
         class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-zinc-800 hover:bg-gray-200 dark:hover:bg-zinc-700 rounded-lg transition-colors"
       >
@@ -873,129 +772,6 @@ onUnmounted(() => {
       </div>
       <h3 class="text-xl font-medium mb-2">{{ t('db.noDatabases') }}</h3>
       <p class="text-gray-500 max-w-sm">{{ t('db.noDatabasesDesc') }}</p>
-    </div>
-
-    <!-- ========== LIST MODE ========== -->
-    <div v-else-if="store.viewMode === 'list'" class="space-y-8 pb-8">
-      <!-- Bases de données locales Bbdump -->
-      <div v-if="store.databases.filter(db => db.isLocalBbdump).length > 0">
-        <!-- Lien vers connexions externes si > 3 bases locales -->
-        <div v-if="store.databases.filter(db => db.isLocalBbdump).length > 3 && store.databases.filter(db => !db.isLocalBbdump).length > 0" class="flex justify-start mb-4">
-          <button
-            @click="scrollToExternal"
-            class="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1.5 group transition-colors px-1"
-          >
-            <span>{{ t('databases.scrollToExternal') }}</span>
-            <svg class="w-3.5 h-3.5 transform group-hover:translate-y-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-        </div>
-
-        <div class="flex items-center justify-between mb-4">
-          <div class="flex items-center gap-3">
-            <div class="flex items-center gap-2">
-              <svg class="w-5 h-5 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
-              </svg>
-              <h3 class="text-lg font-semibold text-gray-700 dark:text-gray-300">{{ t('databases.localDatabases') }}</h3>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="text-xs font-medium text-gray-600 dark:text-gray-400 bg-blue-50 dark:bg-blue-900/20 px-2.5 py-1 rounded-full border border-blue-200 dark:border-blue-800">
-                {{ store.databases.filter(db => db.isLocalBbdump).length }}
-              </span>
-              <button
-                @click="openPostgresSettings"
-                class="group relative p-2 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-all duration-200 hover:scale-110"
-                :title="t('databases.postgresSettings')"
-              >
-                <svg class="w-5 h-5 transition-transform duration-200 group-hover:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-              </button>
-              <button
-                v-if="hiddenDatabasesCount > 0"
-                @click="importAllHidden"
-                :disabled="isImportingHidden"
-                class="group inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-500/15 hover:bg-amber-200 dark:hover:bg-amber-500/25 border border-amber-200 dark:border-amber-500/30 rounded-full transition-all disabled:opacity-50 disabled:cursor-not-allowed ml-1"
-                :title="t('databases.importHidden')"
-              >
-                <svg v-if="isImportingHidden" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
-                  <path fill-rule="evenodd" d="m18.922 16.8l3.17 3.17l-1.06 1.061L4.06 4.061L5.12 3l2.74 2.738A11.9 11.9 0 0 1 12 5c4.808 0 8.972 2.848 11 7a12.66 12.66 0 0 1-4.078 4.8m-8.098-8.097l4.473 4.473a3.5 3.5 0 0 0-4.474-4.474zm5.317 9.56A11.9 11.9 0 0 1 12 19c-4.808 0-8.972-2.848-11-7a12.66 12.66 0 0 1 4.078-4.8l3.625 3.624a3.5 3.5 0 0 0 4.474 4.474l2.964 2.964z" />
-                </svg>
-                {{ hiddenDatabasesCount }} {{ t('databases.hiddenDatabases') }}
-              </button>
-            </div>
-          </div>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <div
-            v-for="db in store.databases.filter(db => db.isLocalBbdump)"
-            :key="db.id"
-            @dragover="onListCardDragOver($event, db.id)"
-            @dragleave="onListCardDragLeave"
-            @drop="onListCardDrop($event, db.id)"
-            class="rounded-2xl transition-all duration-200"
-            :class="{ 'ring-2 ring-blue-400 ring-offset-2 ring-offset-white dark:ring-offset-zinc-900': listDragOverDbId === db.id }"
-          >
-            <DatabaseCard
-              :db="db"
-              @backup="backupNow"
-              @view="openViewer"
-              @duplicate="openDuplicateModal"
-              @edit="editDatabase"
-              @delete="deleteDatabase"
-              @disconnect="disconnectDatabase"
-              @copy-url="copyConnectionUrl"
-              @addons="openExtensions"
-              @toggle-mask="toggleMask"
-            />
-          </div>
-        </div>
-      </div>
-
-      <!-- Connexions externes -->
-      <div v-if="store.databases.filter(db => !db.isLocalBbdump).length > 0" data-external-connections>
-        <div class="flex items-center gap-3 mb-4">
-          <div class="flex items-center gap-2">
-            <svg class="w-5 h-5 text-gray-600 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
-            </svg>
-            <h3 class="text-lg font-semibold text-gray-700 dark:text-gray-300">{{ t('databases.externalConnections') }}</h3>
-          </div>
-          <span class="text-xs text-gray-500 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-full">
-            {{ store.databases.filter(db => !db.isLocalBbdump).length }}
-          </span>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <div
-            v-for="db in store.databases.filter(db => !db.isLocalBbdump)"
-            :key="db.id"
-            @dragover="onListCardDragOver($event, db.id)"
-            @dragleave="onListCardDragLeave"
-            @drop="onListCardDrop($event, db.id)"
-            class="rounded-2xl transition-all duration-200"
-            :class="{ 'ring-2 ring-blue-400 ring-offset-2 ring-offset-white dark:ring-offset-zinc-900': listDragOverDbId === db.id }"
-          >
-            <DatabaseCard
-              :db="db"
-              @backup="backupNow"
-              @view="openViewer"
-              @duplicate="openDuplicateModal"
-              @edit="editDatabase"
-              @delete="deleteDatabase"
-              @disconnect="disconnectDatabase"
-              @copy-url="copyConnectionUrl"
-              @addons="openExtensions"
-              @toggle-mask="toggleMask"
-            />
-          </div>
-        </div>
-      </div>
     </div>
 
     <!-- ========== PROJECT MODE ========== -->

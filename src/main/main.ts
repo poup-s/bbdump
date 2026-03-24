@@ -25,7 +25,7 @@ let isQuitting = false;
 let mcpConfirmActive = false;
 const isMcpConfirmLaunch = process.argv.includes('--mcp-confirm');
 
-// Créer la fenêtre principale
+// Create the main window
 function createWindow(): void {
   const isMac = process.platform === 'darwin';
 
@@ -47,25 +47,25 @@ function createWindow(): void {
     }
   });
 
-  // En développement, charger depuis le serveur de dev
-  // En production, charger le fichier HTML
+  // In development, load from the dev server
+  // In production, load the HTML file
   const rendererPath = path.join(__dirname, '../renderer/index.html');
   if (fs.existsSync(rendererPath)) {
     mainWindow.loadFile(rendererPath);
   } else {
-    // Pour le développement, on utilisera un serveur local
+    // For development, use a local server
     mainWindow.loadFile(path.join(process.cwd(), 'src/renderer/index.html'));
   }
 
-  // Ouvrir les DevTools en développement
+  // Open DevTools in development
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
   }
 
-  // Configurer le backupManager avec la référence à mainWindow
+  // Configure backupManager with the mainWindow reference
   backupManager.setMainWindow(mainWindow);
 
-  // Initialiser l'auto-updater
+  // Initialize the auto-updater
   initAutoUpdater(mainWindow);
 
   mainWindow.on('close', (e) => {
@@ -89,10 +89,10 @@ function createWindow(): void {
     }
   });
 
-  // Passer la référence de la fenêtre au cron manager pour les notifications
+  // Pass the window reference to the cron manager for notifications
   cronManager.setMainWindow(mainWindow);
 
-  // Configurer le callback pour mettre à jour lastBackup
+  // Configure the callback to update lastBackup
   cronManager.setBackupCompleteCallback((dbId: string, timestamp: string) => {
     const config = getConfig();
     const db = config.databases.find(d => d.id === dbId);
@@ -228,10 +228,10 @@ function createTray(): void {
   });
 }
 
-// Initialisation de l'application
+// Application initialization
 app.whenReady().then(async () => {
-  // Fix PATH pour macOS/Linux : quand l'app est lancée depuis Finder/Dock,
-  // le PATH ne contient pas les chemins Homebrew/usr/local
+  // Fix PATH for macOS/Linux: when the app is launched from Finder/Dock,
+  // the PATH does not include Homebrew/usr/local paths
   if (process.platform === 'darwin') {
     const additionalPaths = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin', '/usr/local/sbin'];
     const currentPath = process.env.PATH || '';
@@ -248,10 +248,10 @@ app.whenReady().then(async () => {
     }
   }
 
-  // Charger la configuration
+  // Load the configuration
   const config = loadConfig();
 
-  // Initialiser le gestionnaire de tâches planifiées avec mots de passe déchiffrés
+  // Initialize the scheduled task manager with decrypted passwords
   const decryptedDatabases = (config.databases || []).map(db => {
     try {
       return {
@@ -260,7 +260,7 @@ app.whenReady().then(async () => {
       };
     } catch (error) {
       logger.error(`Failed to decrypt password for ${db.name} during startup: ${error}`);
-      return { ...db, enabled: false }; // Désactiver la DB si déchiffrement échoue
+      return { ...db, enabled: false }; // Disable the DB if decryption fails
     }
   });
   cronManager.rescheduleAll(decryptedDatabases);

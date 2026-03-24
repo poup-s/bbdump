@@ -30,16 +30,16 @@ interface CreateDatabaseResult {
 
 
 /**
- * Vérifie si PostgreSQL est accessible sur un port donné
- * Essaie plusieurs fois avec des délais pour laisser le temps à PostgreSQL de démarrer
+ * Checks if PostgreSQL is accessible on a given port
+ * Tries multiple times with delays to allow PostgreSQL time to start
  */
 async function checkPostgresServer(port: number, password?: string): Promise<{ available: boolean; error?: string }> {
-  // Essayer plusieurs fois avec des délais (au cas où PostgreSQL est en train de démarrer)
+  // Try multiple times with delays (in case PostgreSQL is starting up)
   const maxAttempts = 5;
-  const delayBetweenAttempts = 2000; // 2 secondes
+  const delayBetweenAttempts = 2000; // 2 seconds
   let lastError: string = '';
 
-  // Détecter l'utilisateur PostgreSQL à utiliser
+  // Detect the PostgreSQL user to use
   const os = await import('os');
   const currentUser = os.userInfo().username;
   const usersToTry = [currentUser, 'postgres', process.env.USER || '', process.env.USERNAME || ''];
@@ -96,14 +96,14 @@ async function checkPostgresServer(port: number, password?: string): Promise<{ a
       }
     }
 
-    // Si ce n'est pas le dernier essai, attendre avant de réessayer
+    // If this is not the last attempt, wait before retrying
     if (attempt < maxAttempts) {
       logger.info(`PostgreSQL not accessible yet, waiting ${delayBetweenAttempts}ms before retry (attempt ${attempt}/${maxAttempts})...`);
       await new Promise(resolve => setTimeout(resolve, delayBetweenAttempts));
     }
   }
 
-  // Vérifier si le port est ouvert (pour donner un meilleur message d'erreur)
+  // Check if the port is open (to provide a better error message)
   const portAvailable = await new Promise<boolean>((resolve) => {
     const server = net.createServer();
     server.listen(port, () => {
@@ -134,7 +134,7 @@ async function checkPostgresServer(port: number, password?: string): Promise<{ a
 }
 
 /**
- * Détecte l'utilisateur PostgreSQL à utiliser
+ * Detects the PostgreSQL user to use
  */
 async function detectPostgresUser(port: number, password?: string): Promise<string> {
   const currentUser = os.userInfo().username;
@@ -175,22 +175,22 @@ async function detectPostgresUser(port: number, password?: string): Promise<stri
     }
   }
 
-  // Par défaut, utiliser l'utilisateur système
+  // By default, use the system user
   logger.info(`Using system user as default: ${currentUser}`);
   return currentUser;
 }
 
 /**
- * Crée une connexion au serveur PostgreSQL (sans spécifier de base)
+ * Creates a connection to the PostgreSQL server (without specifying a database)
  */
 async function connectToPostgresServer(port: number, password?: string): Promise<Client> {
-  // Vérifier d'abord si le serveur est accessible
+  // First check if the server is accessible
   const check = await checkPostgresServer(port, password);
   if (!check.available) {
     throw new Error(check.error || `Cannot connect to PostgreSQL server on port ${port}`);
   }
 
-  // Détecter l'utilisateur PostgreSQL à utiliser
+  // Detect the PostgreSQL user to use
   const postgresUser = await detectPostgresUser(port, password);
   const isLinux = os.platform() === 'linux';
 
@@ -204,7 +204,7 @@ async function connectToPostgresServer(port: number, password?: string): Promise
     }
   }
 
-  // Essayer de se connecter avec différents mots de passe
+  // Try to connect with different passwords
   const passwords = isLinux ? ['postgres', 'admin', 'password'] : ['', 'postgres', 'admin', 'password'];
   if (password) {
     passwords.unshift(password);
@@ -236,7 +236,7 @@ async function connectToPostgresServer(port: number, password?: string): Promise
 }
 
 /**
- * Crée une base de données PostgreSQL locale
+ * Creates a local PostgreSQL database
  */
 export interface CreateDatabaseProgress {
   step: string;
@@ -259,7 +259,7 @@ export async function createLocalDatabase(
   };
 
   try {
-    // Valider le nom de la base
+    // Validate the database name
     if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(params.name)) {
       return {
         success: false,
@@ -267,7 +267,7 @@ export async function createLocalDatabase(
       };
     }
 
-    // S'assurer que PostgreSQL est installé et démarré
+    // Ensure PostgreSQL is installed and started
     reportProgress('preparing', 'Ensuring PostgreSQL is installed and running...', 10);
     const ensureResult = await postgresManager.ensurePostgreSQL(
       params.port,
@@ -283,7 +283,7 @@ export async function createLocalDatabase(
       };
     }
 
-    // Vérifier d'abord si PostgreSQL est accessible sur le port demandé
+    // First check if PostgreSQL is accessible on the requested port
     reportProgress('checking', `Checking PostgreSQL server accessibility on port ${params.port}...`, 50);
     logger.info(`Checking PostgreSQL server accessibility on port ${params.port}`);
     const check = await checkPostgresServer(params.port, params.password);
@@ -295,16 +295,16 @@ export async function createLocalDatabase(
       };
     }
 
-    // Utiliser le port demandé (il est déjà vérifié comme accessible)
+    // Use the requested port (already verified as accessible)
     const serverPort = params.port;
     reportProgress('connecting', `Connecting to PostgreSQL server on port ${serverPort}...`, 55);
     logger.info(`Connecting to PostgreSQL server on port ${serverPort} for database ${params.name}`);
 
-    // Se connecter au serveur PostgreSQL
+    // Connect to the PostgreSQL server
     client = await connectToPostgresServer(serverPort, params.password);
     logger.info(`Connected to PostgreSQL server on port ${serverPort}`);
 
-    // Vérifier si la base existe déjà
+    // Check if the database already exists
     reportProgress('checking', `Checking if database "${params.name}" already exists...`, 60);
     const checkQuery = `SELECT 1 FROM pg_database WHERE datname = $1`;
     const checkResult = await client.query(checkQuery, [params.name]);
@@ -317,7 +317,7 @@ export async function createLocalDatabase(
       };
     }
 
-    // Créer la base de données (utiliser pg-format pour échapper le nom)
+    // Create the database (use pg-format to escape the name)
     reportProgress('creating', `Creating database "${params.name}"...`, 70);
     const createQuery = format('CREATE DATABASE %I', params.name);
     await client.query(createQuery);
@@ -326,10 +326,10 @@ export async function createLocalDatabase(
     await client.end();
     reportProgress('complete', `Database "${params.name}" created successfully`, 100);
 
-    // Détecter l'utilisateur PostgreSQL utilisé pour cette connexion
+    // Detect the PostgreSQL user used for this connection
     const postgresUser = await detectPostgresUser(serverPort, params.password);
 
-    // Retourner les informations de connexion avec l'utilisateur détecté
+    // Return connection info with the detected user
     return {
       success: true,
       database: {
@@ -338,7 +338,7 @@ export async function createLocalDatabase(
         host: 'localhost',
         port: serverPort,
         user: postgresUser,
-        password: params.password || '' // Utiliser le mot de passe fourni ou vide
+        password: params.password || '' // Use the provided password or empty
       }
     };
   } catch (error) {
@@ -366,7 +366,7 @@ export interface DuplicateDatabaseProgress {
 }
 
 /**
- * Duplique une base de données externe vers une base locale
+ * Duplicates an external database to a local database
  */
 export async function duplicateExternalToLocal(
   _sourceDb: {
@@ -383,26 +383,26 @@ export async function duplicateExternalToLocal(
   _existingPorts: number[],
   _onProgress?: (progress: DuplicateDatabaseProgress) => void
 ): Promise<{ success: boolean; error?: string; database?: any }> {
-  // Cette fonction orchestre le backup et le restore
-  // Mais comme elle dépend de backupManager qui dépend de config... 
-  // Idéalement cette orchestration devrait être faite dans l'IPC handler ou un module supérieur.
-  // CEPENDANT, pour résoudre l'erreur de compilation rapidement :
-  // Je vais retourner une erreur disant que cette fonction doit être gérée par l'appelant pour l'instant
-  // OU MIEUX : je déplace la logique de "duplicate" de l'IPC vers ici ? Non, car ça dépend de `backupManager`.
+  // This function orchestrates backup and restore
+  // But since it depends on backupManager which depends on config...
+  // Ideally this orchestration should be done in the IPC handler or a higher-level module.
+  // HOWEVER, to resolve the compilation error quickly:
+  // We return an error saying this function must be handled by the caller for now
+  // OR BETTER: move the "duplicate" logic from IPC to here? No, because it depends on `backupManager`.
 
-  // Correction : L'erreur TS dit que `duplicateExternalToLocal` n'existe pas dans `databaseCreator`.
-  // C'est parce que j'ai laissé l'appel dans `databaseCreationIpc.ts` mais je n'ai pas implémenté la fonction.
-  // La logique était DANS `main.ts` auparavant.
-  // Je dois donc implémenter cette fonction ici, en important `backupManager`.
+  // Fix: The TS error says `duplicateExternalToLocal` doesn't exist in `databaseCreator`.
+  // That's because the call was left in `databaseCreationIpc.ts` but the function was not implemented.
+  // The logic was IN `main.ts` before.
+  // So this function needs to be implemented here, importing `backupManager`.
 
-  // Problème : Circular dependency probable si j'importe `backupManager` ici.
-  // `backupManager` est utilisé par `databaseCreator` ??? Non.
+  // Problem: Likely circular dependency if `backupManager` is imported here.
+  // Is `backupManager` used by `databaseCreator`??? No.
 
-  // Solution pour le refactoring :
-  // Je vais implémenter `duplicateExternalToLocal` DANS `databaseCreationIpc.ts` directement,
-  // au lieu d'appeler `databaseCreator`.
-  // `databaseCreator` ne devrait s'occuper que de CRÉER une base vide (ce qu'il fait déjà avec `createLocalDatabase`).
-  // L'orchestration (Backup -> Create -> Restore) est une logique "métier" supérieure.
+  // Refactoring solution:
+  // Implement `duplicateExternalToLocal` DIRECTLY IN `databaseCreationIpc.ts`,
+  // instead of calling `databaseCreator`.
+  // `databaseCreator` should only handle CREATING an empty database (which it already does with `createLocalDatabase`).
+  // The orchestration (Backup -> Create -> Restore) is higher-level "business" logic.
 
   return { success: false, error: "Not implemented in databaseCreator, logic moved to IPC" };
 }

@@ -42,7 +42,7 @@ interface McpConfirmRequest {
 
 const databases = ref<TrayDatabase[]>([]);
 const projects = ref<TrayProject[]>([]);
-const viewMode = ref<'list' | 'project'>('list');
+const viewMode = ref<'list' | 'project'>('project');
 const collapsedProjects = ref<Set<string>>(new Set());
 const backupStats = ref<TrayBackupStats>({ total: 0, totalSize: 0 });
 const loading = ref(true);
@@ -117,13 +117,6 @@ const denyConfirm = () => {
   ipcRenderer.send('mcp-confirm-done');
 };
 
-const toggleViewMode = async () => {
-  viewMode.value = viewMode.value === 'list' ? 'project' : 'list';
-  try {
-    await ipcRenderer.invoke('save-view-mode', viewMode.value);
-  } catch { /* ignore */ }
-};
-
 const toggleProject = (projectId: string) => {
   if (collapsedProjects.value.has(projectId)) {
     collapsedProjects.value.delete(projectId);
@@ -167,7 +160,7 @@ const loadData = async () => {
       databaseIds: Array.isArray(p.databaseIds) ? p.databaseIds : [],
       masked: p.masked
     }));
-    viewMode.value = config?.viewMode === 'project' ? 'project' : 'list';
+    viewMode.value = 'project';
 
     const backupsResult = await ipcRenderer.invoke('get-backups');
     if (backupsResult?.stats) {
@@ -346,64 +339,12 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- View mode toggle -->
-        <div v-if="!loading && databases.length > 0" class="px-3 py-1.5 flex items-center gap-1 border-b border-zinc-800">
-          <button
-            @click="toggleViewMode"
-            class="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium transition-colors"
-            :class="viewMode === 'list' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'"
-          >
-            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-            {{ t('project.modeList') }}
-          </button>
-          <button
-            @click="toggleViewMode"
-            class="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium transition-colors"
-            :class="viewMode === 'project' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'"
-          >
-            <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-            </svg>
-            {{ t('project.modeProject') }}
-          </button>
-        </div>
-
         <!-- Loading -->
         <div v-if="loading" class="px-4 py-8 flex items-center justify-center">
           <svg class="w-5 h-5 text-violet-400 animate-spin" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
           </svg>
-        </div>
-
-        <!-- ===== LIST MODE ===== -->
-        <div v-else-if="viewMode === 'list'" class="max-h-[260px] overflow-y-auto">
-          <div v-if="databases.length === 0" class="px-4 py-6 text-center text-xs text-zinc-500">
-            {{ t('tray.noDatabases') }}
-          </div>
-          <div
-            v-for="db in databases"
-            :key="db.id"
-            class="px-4 py-2.5 flex items-center gap-3 hover:bg-zinc-800/50 transition-colors border-b border-zinc-800/50 last:border-b-0"
-          >
-            <div class="shrink-0">
-              <div class="w-2 h-2 rounded-full" :class="statusColor(db.status)"></div>
-            </div>
-            <div class="flex-1 min-w-0">
-              <div class="text-[12px] font-semibold text-white truncate">{{ db.masked ? '••••••••' : (db.displayName || db.name) }}</div>
-            </div>
-            <button
-              @click.stop="openDbViewer(db.id)"
-              class="shrink-0 w-7 h-7 rounded-lg flex items-center justify-center transition-all bg-zinc-800 text-zinc-400 hover:bg-violet-500/20 hover:text-violet-400"
-              :title="t('tray.viewDb')"
-            >
-              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
-              </svg>
-            </button>
-          </div>
         </div>
 
         <!-- ===== PROJECT MODE ===== -->
@@ -419,7 +360,7 @@ onUnmounted(() => {
               class="px-4 py-2 flex items-center gap-2 cursor-pointer hover:bg-zinc-800/50 transition-colors"
               @click="toggleProject(project.id)"
             >
-              <div class="w-2 h-2 rounded-full shrink-0" :class="project.color"></div>
+              <div class="w-2 h-2 rounded-full shrink-0" :class="project.color.startsWith('custom:') ? '' : project.color" :style="project.color.startsWith('custom:') ? { backgroundColor: project.color.replace('custom:', '') } : {}"></div>
               <span class="text-[11px] font-bold text-zinc-300 flex-1 truncate">
                 {{ project.masked ? '••••••••' : project.name }}
               </span>

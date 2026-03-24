@@ -9,18 +9,18 @@ import { tcpProxyManager } from '../tcpProxy';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 
-// Variable locale pour stocker la configuration en mémoire
+// Local variable to store the configuration in memory
 let config: AppConfig = { databases: [] };
 const CONFIG_PATH = pathManager.configPath;
 
-// Charger la configuration
+// Load the configuration
 export function loadConfig(): AppConfig {
     try {
         if (fs.existsSync(CONFIG_PATH)) {
             const data = fs.readFileSync(CONFIG_PATH, 'utf8');
             let loadedConfig = JSON.parse(data);
 
-            // Migrer les mots de passe non chiffrés
+            // Migrate unencrypted passwords
             loadedConfig = encryptionManager.migrateConfig(loadedConfig);
 
             // Migrate: assign UUID to databases missing an id
@@ -37,7 +37,7 @@ export function loadConfig(): AppConfig {
             // Sanitize the entire configuration
             loadedConfig = sanitizeAppConfig(loadedConfig);
 
-            // Sauvegarder si migration effectuée
+            // Save if migration was performed
             const originalData = JSON.parse(data);
             const needsSave = uuidMigrated || JSON.stringify(loadedConfig) !== JSON.stringify(originalData);
             if (needsSave) {
@@ -72,7 +72,7 @@ export function loadConfig(): AppConfig {
     }
 }
 
-// Sauvegarder la configuration sur disque
+// Save the configuration to disk
 export function saveConfig(newConfig: AppConfig): void {
     try {
         const configToSave = sanitizeAppConfig(newConfig);
@@ -245,7 +245,7 @@ export function registerConfigHandlers() {
                     };
                 } catch (error) {
                     logger.error(`Failed to decrypt password for ${d.name}: ${error}`);
-                    return { ...d, enabled: false }; // Désactiver plutôt que passer un mot de passe chiffré
+                    return { ...d, enabled: false }; // Disable rather than passing an encrypted password
                 }
             });
             cronManager.rescheduleAll(decryptedDatabases);

@@ -19,13 +19,13 @@ const state = reactive({
     onConfirm: () => { }
 });
 
-// File d'attente pour les confirms en attente
+// Queue for pending confirms
 const pendingQueue: ConfirmOptions[] = [];
 
 export function useConfirm() {
     const showConfirm = (options: ConfirmOptions) => {
         if (state.show) {
-            // Si un confirm est déjà affiché, mettre en file d'attente
+            // If a confirm is already displayed, add to queue
             pendingQueue.push(options);
             return;
         }
@@ -45,10 +45,10 @@ export function useConfirm() {
     const hideConfirm = () => {
         state.show = false;
         state.onConfirm = () => { };
-        // Afficher le prochain confirm en attente
+        // Show the next pending confirm
         if (pendingQueue.length > 0) {
             const next = pendingQueue.shift()!;
-            // Utiliser nextTick via setTimeout pour laisser le DOM se mettre à jour
+            // Use nextTick via setTimeout to let the DOM update
             setTimeout(() => applyOptions(next), 100);
         }
     };

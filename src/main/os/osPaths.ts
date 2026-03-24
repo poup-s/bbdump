@@ -8,28 +8,28 @@ export interface ToolPaths {
   initdb: string[];
   postgres: string[];
   pg_ctl?: string[];
-  brew?: string[]; // macOS uniquement
+  brew?: string[]; // macOS only
 }
 
 /**
- * Retourne les chemins standards pour chaque outil selon l'OS et l'architecture
+ * Returns the standard paths for each tool based on the OS and architecture
  */
 export function getToolPaths(os: OSType, arch?: Architecture): ToolPaths {
   if (os === 'macos') {
     const isAppleSilicon = arch === 'arm64';
     const homebrewPrefix = isAppleSilicon ? '/opt/homebrew' : '/usr/local';
     
-    // Versions PostgreSQL courantes à vérifier
+    // Common PostgreSQL versions to check
     const postgresVersions = ['17', '16', '15', '14'];
     
-    // Chemins génériques (dans PATH après installation)
+    // Generic paths (in PATH after installation)
     const genericPaths = [
       `${homebrewPrefix}/bin`,
       '/usr/local/bin',
       '/usr/bin'
     ];
     
-    // Chemins spécifiques par version PostgreSQL
+    // Version-specific PostgreSQL paths
     const versionSpecificPaths: string[] = [];
     for (const version of postgresVersions) {
       versionSpecificPaths.push(
@@ -38,27 +38,27 @@ export function getToolPaths(os: OSType, arch?: Architecture): ToolPaths {
       );
     }
     
-    // Chemins pour EnterpriseDB et Postgres.app
+    // Paths for EnterpriseDB and Postgres.app
     const otherPaths = [
       '/Library/PostgreSQL/*/bin',
       '/Applications/Postgres.app/Contents/Versions/*/bin'
     ];
     
-    // Construire les chemins pour chaque outil
+    // Build paths for each tool
     const buildPaths = (tool: string): string[] => {
       const paths: string[] = [];
       
-      // D'abord les chemins spécifiques par version
+      // First the version-specific paths
       for (const versionPath of versionSpecificPaths) {
         paths.push(`${versionPath}/${tool}`);
       }
       
-      // Ensuite les chemins génériques
+      // Then the generic paths
       for (const genericPath of genericPaths) {
         paths.push(`${genericPath}/${tool}`);
       }
       
-      // Enfin les autres chemins (avec wildcard)
+      // Finally the other paths (with wildcard)
       for (const otherPath of otherPaths) {
         paths.push(`${otherPath}/${tool}`);
       }
@@ -140,7 +140,7 @@ export function getToolPaths(os: OSType, arch?: Architecture): ToolPaths {
 }
 
 /**
- * Retourne les répertoires de données PostgreSQL possibles selon l'OS et la version
+ * Returns the possible PostgreSQL data directories based on the OS and version
  */
 export function getPostgresDataDirs(os: OSType, version?: string, arch?: Architecture): string[] {
   if (os === 'macos') {
@@ -172,7 +172,7 @@ export function getPostgresDataDirs(os: OSType, version?: string, arch?: Archite
 }
 
 /**
- * Retourne les noms de services PostgreSQL possibles selon l'OS et la version
+ * Returns the possible PostgreSQL service names based on the OS and version
  */
 export function getPostgresServiceNames(os: OSType, version?: string): string[] {
   const majorVersion = version ? version.split('.')[0] : '17';

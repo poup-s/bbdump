@@ -21,11 +21,11 @@ export interface InstallationProgress {
 }
 
 /**
- * Détecte l'OS
- * Utilise le module centralisé osDetector
+ * Detects the OS
+ * Uses the centralized osDetector module
  */
 function getOS(): 'macos' | 'linux' | 'windows' {
-  // Import dynamique pour éviter les dépendances circulaires
+  // Dynamic import to avoid circular dependencies
   const { getOSType } = require('./os/osDetector');
   const osType = getOSType();
   return osType;
@@ -138,11 +138,11 @@ export async function getPgClient(port: number, user: string): Promise<import('p
 }
 
 /**
- * Trouve le chemin de Homebrew de manière robuste
+ * Finds the Homebrew path in a robust way
  */
 async function findBrewPath(): Promise<string | null> {
   try {
-    // Essayer d'abord avec la détection robuste
+    // Try first with robust detection
     const { detectHomebrew } = await import('./tools/toolDetector');
     const homebrewCheck = await detectHomebrew();
     if (homebrewCheck.installed && homebrewCheck.path) {
@@ -178,7 +178,7 @@ async function findBrewPath(): Promise<string | null> {
 }
 
 /**
- * Vérifie si PostgreSQL est installé
+ * Checks if PostgreSQL is installed
  */
 export async function checkPostgresInstalled(): Promise<{ installed: boolean; version?: string; path?: string; method?: 'brew' | 'system' | 'unknown'; hasServer?: boolean }> {
   try {
@@ -195,7 +195,7 @@ export async function checkPostgresInstalled(): Promise<{ installed: boolean; ve
       const { stdout: whichOutput } = await execAsync('which psql');
       path = whichOutput.trim();
 
-      // Déterminer la méthode d'installation
+      // Determine the installation method
       if (path.includes('/opt/homebrew') || path.includes('/usr/local/opt')) {
         method = 'brew';
       } else if (path.includes('/usr/bin') || path.includes('/usr/local/bin')) {
@@ -205,7 +205,7 @@ export async function checkPostgresInstalled(): Promise<{ installed: boolean; ve
       // Ignore
     }
 
-    // Vérifier si PostgreSQL SERVER est installé
+    // Check if PostgreSQL SERVER is installed
     const osType = getOS();
 
     if (osType === 'linux') {
@@ -261,7 +261,7 @@ export async function checkPostgresInstalled(): Promise<{ installed: boolean; ve
             hasServer = true;
             logger.info(`PostgreSQL server found via Homebrew: ${brewList.trim()}`);
           } else {
-            // Vérifier si seulement libpq est installé
+            // Check if only libpq is installed
             const { stdout: libpqCheck } = await execAsync(`"${brewPath}" list 2>/dev/null | grep "^libpq" || echo ""`);
             if (libpqCheck.trim()) {
               method = 'brew';
@@ -274,7 +274,7 @@ export async function checkPostgresInstalled(): Promise<{ installed: boolean; ve
         // Ignore
       }
 
-      // Vérifier si le serveur postgres existe dans les chemins Homebrew
+      // Check if the postgres server exists in Homebrew paths
       if (!hasServer && method === 'brew') {
         try {
           const { stdout: postgresPath } = await execAsync('find /opt/homebrew/opt/postgresql* /usr/local/opt/postgresql* -name postgres -type f 2>/dev/null | head -1 || echo ""');
@@ -290,7 +290,7 @@ export async function checkPostgresInstalled(): Promise<{ installed: boolean; ve
 
     return { installed: true, version, path, method, hasServer };
   } catch {
-    // Vérifier quand même si PostgreSQL est installé via brew mais pas dans le PATH
+    // Still check if PostgreSQL is installed via brew but not in PATH
     try {
       const brewPath = await findBrewPath();
       if (brewPath) {
@@ -309,14 +309,14 @@ export async function checkPostgresInstalled(): Promise<{ installed: boolean; ve
 }
 
 /**
- * Vérifie si PostgreSQL est en cours d'exécution
+ * Checks if PostgreSQL is running
  */
 export async function checkPostgresRunning(port: number = 5432): Promise<{ running: boolean; port?: number; details?: string }> {
   const osType = getOS();
 
   try {
     if (osType === 'macos') {
-      // Vérifier avec lsof d'abord (plus fiable)
+      // Check with lsof first (more reliable)
       try {
         const { stdout } = await execAsync(`lsof -i :${port} 2>/dev/null | grep LISTEN`);
         if (stdout.includes('postgres')) {
@@ -327,7 +327,7 @@ export async function checkPostgresRunning(port: number = 5432): Promise<{ runni
         // Port libre ou pas de PostgreSQL
       }
 
-      // Vérifier avec brew services
+      // Check with brew services
       try {
         const { stdout } = await execAsync('brew services list 2>/dev/null | grep postgresql');
         if (stdout.includes('started')) {
@@ -335,29 +335,29 @@ export async function checkPostgresRunning(port: number = 5432): Promise<{ runni
           return { running: true, port, details: 'detected via brew services' };
         }
       } catch {
-        // Ignore si brew n'est pas disponible ou si PostgreSQL n'est pas géré par brew
+        // Ignore if brew is not available or if PostgreSQL is not managed by brew
       }
 
-      // Vérifier avec ps pour les processus postgres
+      // Check with ps for postgres processes
       try {
         const { stdout } = await execAsync('ps aux | grep "[p]ostgres"');
         if (stdout.includes('postgres')) {
           logger.info(`PostgreSQL process found (detected via ps)`);
-          // Mais vérifier si le port est bien en écoute
+          // But check if the port is actually listening
           try {
             const { stdout: lsofOut } = await execAsync(`lsof -i :${port} 2>/dev/null | grep LISTEN`);
             if (lsofOut.includes('postgres')) {
               return { running: true, port, details: 'detected via ps and lsof' };
             }
           } catch {
-            // Processus existe mais port pas en écoute
+            // Process exists but port not listening
           }
         }
       } catch {
         // Pas de processus postgres
       }
     } else if (osType === 'linux') {
-      // Vérifier avec lsof d'abord
+      // Check with lsof first
       try {
         const { stdout } = await execAsync(`lsof -i :${port} 2>/dev/null | grep LISTEN`);
         if (stdout.includes('postgres')) {
@@ -377,7 +377,7 @@ export async function checkPostgresRunning(port: number = 5432): Promise<{ runni
         // Ignore
       }
 
-      // Vérifier avec systemctl (try versioned service names too)
+      // Check with systemctl (try versioned service names too)
       try {
         const serviceNames = await detectLinuxServiceName();
         for (const svc of serviceNames) {
@@ -394,7 +394,7 @@ export async function checkPostgresRunning(port: number = 5432): Promise<{ runni
         // Ignore
       }
     } else if (osType === 'windows') {
-      // Vérifier avec sc query
+      // Check with sc query
       try {
         const { stdout } = await execAsync('sc query postgresql-x64-* 2>/dev/null');
         if (stdout.includes('RUNNING')) {
@@ -419,7 +419,7 @@ async function installPostgresMacOS(
   onProgress: (progress: InstallationProgress) => void
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Vérifier si Homebrew est installé en utilisant la détection robuste
+    // Check if Homebrew is installed using robust detection
     onProgress({ step: 'checking', message: 'Checking Homebrew installation...', progress: 10 });
 
     const brewPath = await findBrewPath();
@@ -433,12 +433,12 @@ async function installPostgresMacOS(
 
     logger.info(`Homebrew found at: ${brewPath}`);
 
-    // Installer PostgreSQL
+    // Install PostgreSQL
     onProgress({ step: 'installing', message: 'Installing PostgreSQL via Homebrew...', progress: 30 });
     logger.info(`Installing PostgreSQL via Homebrew (using: ${brewPath || 'brew'})...`);
 
     return new Promise((resolve) => {
-      // Utiliser le chemin complet de brew si trouvé, sinon utiliser 'brew' (sera résolu via PATH)
+      // Use the full brew path if found, otherwise use 'brew' (will be resolved via PATH)
       const brewCommand = brewPath || 'brew';
       const brewProcess = spawn(brewCommand, ['install', 'postgresql@16'], {
         stdio: ['ignore', 'pipe', 'pipe']
@@ -459,10 +459,10 @@ async function installPostgresMacOS(
         if (code === 0) {
           onProgress({ step: 'installing', message: 'PostgreSQL installed successfully', progress: 80 });
 
-          // Créer le répertoire de données (Homebrew le fait généralement automatiquement)
+          // Create the data directory (Homebrew usually does this automatically)
           onProgress({ step: 'initdb', message: 'Initializing PostgreSQL database...', progress: 85 });
           try {
-            // Essayer différents chemins possibles pour initdb
+            // Try different possible paths for initdb
             const possiblePaths = [
               '/usr/local/opt/postgresql@16/bin/initdb',
               '/opt/homebrew/opt/postgresql@16/bin/initdb',
@@ -494,13 +494,13 @@ async function installPostgresMacOS(
                   logger.info(`Database initialized at ${dataDir}`);
                   break;
                 } catch (error) {
-                  // Ignore si déjà initialisé ou si le répertoire n'existe pas
+                  // Ignore if already initialized or if directory doesn't exist
                   logger.info(`Initdb skipped for ${dataDir}: ${getErrorMessage(error)}`);
                 }
               }
             }
           } catch {
-            // Ignore si déjà initialisé
+            // Ignore if already initialized
             logger.info('Database may already be initialized or initialization skipped');
           }
 
@@ -528,7 +528,7 @@ async function installPostgresLinux(
   onProgress: (progress: InstallationProgress) => void
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Détecter le gestionnaire de paquets
+    // Detect the package manager
     onProgress({ step: 'checking', message: 'Detecting package manager...', progress: 10 });
 
     let installCommand: string[];
@@ -553,18 +553,18 @@ async function installPostgresLinux(
       }
     }
 
-    // Mettre à jour les paquets si nécessaire
+    // Update packages if necessary
     if (updateCommand.length > 0) {
       onProgress({ step: 'updating', message: 'Updating package list...', progress: 20 });
       await execAsync(updateCommand.join(' '));
     }
 
-    // Installer PostgreSQL
+    // Install PostgreSQL
     onProgress({ step: 'installing', message: 'Installing PostgreSQL...', progress: 40 });
     logger.info(`Installing PostgreSQL with: ${installCommand.join(' ')}`);
     await execAsync(installCommand.join(' '));
 
-    // Initialiser la base de données
+    // Initialize the database
     onProgress({ step: 'initdb', message: 'Initializing PostgreSQL database...', progress: 80 });
     try {
       await execAsync('postgresql-setup --initdb || /usr/pgsql-*/bin/postgresql-setup --initdb');
@@ -583,7 +583,7 @@ async function installPostgresLinux(
 }
 
 /**
- * Installe PostgreSQL (gère tous les OS)
+ * Installs PostgreSQL (handles all OSes)
  */
 export async function installPostgreSQL(
   onProgress: (progress: InstallationProgress) => void
@@ -1008,7 +1008,7 @@ async function initPostgresDatabase(
       }
     }
 
-    // Initialiser la base de données
+    // Initialize the database
     logger.info(`Running: ${initdbPath} -D "${dataDir}"`);
     try {
       const { stdout, stderr } = await execAsync(`${initdbPath} -D "${dataDir}" 2>&1`);
@@ -1017,7 +1017,7 @@ async function initPostgresDatabase(
         logger.warn(`initdb stderr: ${stderr}`);
       }
 
-      // Vérifier que le répertoire existe maintenant
+      // Check that the directory now exists
       try {
         await execAsync(`test -d "${dataDir}" && test -f "${dataDir}/postgresql.conf"`);
         logger.info(`PostgreSQL database initialized successfully at ${dataDir}`);
@@ -1073,7 +1073,7 @@ async function findBrewPostgresService(): Promise<string | null> {
     logger.warn(`Failed to list brew services: ${getErrorMessage(error)}`);
   }
 
-  // Si aucun service n'est trouvé dans brew services, essayer de trouver via brew list
+  // If no service is found in brew services, try to find via brew list
   try {
     const brewPath = await findBrewPath();
     if (!brewPath) {
@@ -1082,12 +1082,12 @@ async function findBrewPostgresService(): Promise<string | null> {
 
     const { stdout: brewList } = await execAsync(`"${brewPath}" list 2>/dev/null | grep postgresql || echo ""`);
     if (brewList.trim()) {
-      // Extraire le nom du package PostgreSQL installé
+      // Extract the name of the installed PostgreSQL package
       const packages = brewList.trim().split('\n').filter(p => p.includes('postgresql'));
       if (packages.length > 0) {
         const packageName = packages[0].trim();
         logger.info(`Found PostgreSQL package: ${packageName}`);
-        // Retourner le nom du package comme service potentiel
+        // Return the package name as a potential service
         return packageName;
       }
     }
@@ -1141,7 +1141,7 @@ async function detectLinuxServiceName(): Promise<string[]> {
 }
 
 /**
- * Démarre PostgreSQL
+ * Starts PostgreSQL
  */
 export async function startPostgreSQL(
   port: number = 5432,
@@ -1152,7 +1152,7 @@ export async function startPostgreSQL(
 
   try {
     if (osType === 'macos') {
-      // Vérifier d'abord si PostgreSQL est déjà en cours d'exécution
+      // First check if PostgreSQL is already running
       const alreadyRunning = await checkPostgresRunning(port);
       if (alreadyRunning.running) {
         logger.info('PostgreSQL is already running');
@@ -1161,7 +1161,7 @@ export async function startPostgreSQL(
 
       onProgress({ step: 'starting', message: 'Checking PostgreSQL services...', progress: 50 });
 
-      // Trouver le service PostgreSQL installé
+      // Find the installed PostgreSQL service
       const brewService = await findBrewPostgresService();
 
       if (brewService) {
@@ -1176,7 +1176,7 @@ export async function startPostgreSQL(
           logger.info(`Starting PostgreSQL service: ${brewService}`);
           await execAsync(`"${brewPath}" services start ${brewService}`);
 
-          // Attendre et vérifier plusieurs fois (jusqu'à 10 secondes)
+          // Wait and check multiple times (up to 10 seconds)
           for (let i = 0; i < 5; i++) {
             await new Promise(resolve => setTimeout(resolve, 2000));
             const running = await checkPostgresRunning(port);
@@ -1190,10 +1190,10 @@ export async function startPostgreSQL(
           logger.warn(`Brew services start failed: ${getErrorMessage(error)}`);
         }
       } else {
-        // Essayer les services PostgreSQL courants en fonction de la version installée
+        // Try common PostgreSQL services based on the installed version
         onProgress({ step: 'starting', message: 'Starting PostgreSQL service...', progress: 60 });
 
-        // Déterminer la version installée
+        // Determine the installed version
         const installed = await checkPostgresInstalled();
         let majorVersion = '16';
         if (installed.version) {
@@ -1201,14 +1201,14 @@ export async function startPostgreSQL(
           majorVersion = versionMatch ? versionMatch[1] : '16';
         }
 
-        // Construire la liste des services à essayer selon la version
+        // Build the list of services to try based on the version
         const servicesToTry = [
-          `postgresql@${majorVersion}`, // Version exacte détectée
+          `postgresql@${majorVersion}`, // Exact detected version
           'postgresql@17', // PostgreSQL 17
           'postgresql@16', // PostgreSQL 16
           'postgresql@15', // PostgreSQL 15
           'postgresql@14', // PostgreSQL 14
-          'postgresql' // Version générique
+          'postgresql' // Generic version
         ];
 
         const brewPath = await findBrewPath();
@@ -1234,11 +1234,11 @@ export async function startPostgreSQL(
         }
       }
 
-      // Essayer de démarrer manuellement avec pg_ctl
+      // Try to start manually with pg_ctl
       onProgress({ step: 'starting', message: 'Trying manual start...', progress: 70 });
       let dataDir = await findPostgresDataDir();
 
-      // Si le répertoire n'existe pas, essayer de l'initialiser
+      // If the directory doesn't exist, try to initialize it
       if (!dataDir) {
         onProgress({ step: 'initdb', message: 'PostgreSQL data directory not found. Initializing...', progress: 75 });
         const dataDirToCreate = await findPostgresDataDirToCreate();
@@ -1258,27 +1258,27 @@ export async function startPostgreSQL(
         try {
           logger.info(`Attempting manual start with pg_ctl at ${dataDir}`);
 
-          // Vérifier d'abord si PostgreSQL n'est pas déjà en cours d'exécution
+          // First check if PostgreSQL is not already running
           const alreadyRunning = await checkPostgresRunning(port);
           if (alreadyRunning.running) {
             logger.info('PostgreSQL is already running');
             return { success: true };
           }
 
-          // Démarrer PostgreSQL
+          // Start PostgreSQL
           const { stdout, stderr } = await execAsync(`pg_ctl -D "${dataDir}" start 2>&1`);
           logger.info(`pg_ctl start output: ${stdout}${stderr ? `\nstderr: ${stderr}` : ''}`);
 
-          // Attendre et vérifier plusieurs fois
+          // Wait and check multiple times
           for (let i = 0; i < 10; i++) {
             await new Promise(resolve => setTimeout(resolve, 2000));
 
-            // Vérifier avec checkPostgresRunning
+            // Check with checkPostgresRunning
             const running = await checkPostgresRunning(port);
             if (running.running) {
               logger.info(`PostgreSQL started successfully manually at ${dataDir} (verified after ${i + 1} attempts)`);
 
-              // Vérifier aussi avec une connexion directe
+              // Also check with a direct connection
               try {
                 const currentUser = os.userInfo().username;
                 await tryPgConnect(port, currentUser);
@@ -1286,14 +1286,14 @@ export async function startPostgreSQL(
                 return { success: true };
               } catch (connError) {
                 logger.warn(`PostgreSQL process detected but connection test failed: ${getErrorMessage(connError)}`);
-                // Continuer à attendre
+                // Continue waiting
               }
             }
 
             logger.info(`Waiting for PostgreSQL to be ready... (attempt ${i + 1}/10)`);
           }
 
-          // Dernière vérification
+          // Final verification
           const finalRunning = await checkPostgresRunning(port);
           if (finalRunning.running) {
             logger.info('PostgreSQL is running (final check)');
@@ -1311,16 +1311,16 @@ export async function startPostgreSQL(
         logger.warn('Could not find or create PostgreSQL data directory');
       }
 
-      // Dernière tentative : vérifier si PostgreSQL est maintenant en cours d'exécution
+      // Last attempt: check if PostgreSQL is now running
       const finalCheck = await checkPostgresRunning(port);
       if (finalCheck.running) {
         logger.info('PostgreSQL is now running');
         return { success: true };
       }
 
-      // Note: L'initialisation est maintenant gérée avant cette étape
+      // Note: Initialization is now handled before this step
 
-      // Vérifier les erreurs de démarrage possibles
+      // Check for possible startup errors
       try {
         // Essayer de voir les logs de PostgreSQL
         const logFile = `${dataDir}/log/postgresql-*.log`;
@@ -1334,11 +1334,11 @@ export async function startPostgreSQL(
         // Ignore
       }
 
-      // Construire un message d'erreur détaillé avec diagnostic
+      // Build a detailed error message with diagnostics
       let errorMsg = 'Failed to start PostgreSQL automatically.\n\n';
       errorMsg += 'Diagnostic information:\n';
 
-      // Vérifier l'installation
+      // Check the installation
       const installedCheck = await checkPostgresInstalled();
       if (installedCheck.installed) {
         errorMsg += `- PostgreSQL ${installedCheck.version || 'unknown version'} is installed`;
@@ -1362,7 +1362,7 @@ export async function startPostgreSQL(
         errorMsg += '- Data directory: Not found\n';
       }
 
-      // Vérifier si PostgreSQL est peut-être déjà en cours d'exécution
+      // Check if PostgreSQL is perhaps already running
       const finalRunningCheck = await checkPostgresRunning(port);
       if (finalRunningCheck.running) {
         errorMsg += `- PostgreSQL appears to be running on port ${port}\n`;
@@ -1370,8 +1370,8 @@ export async function startPostgreSQL(
 
       errorMsg += '\nPlease try manually:\n';
 
-      // Déterminer la version pour les instructions (une seule fois)
-      let versionForInstructions = '17'; // Par défaut PostgreSQL 17
+      // Determine the version for instructions (once only)
+      let versionForInstructions = '17'; // Default PostgreSQL 17
       if (installedCheck.version) {
         const versionMatch = installedCheck.version.match(/(\d+)\./);
         versionForInstructions = versionMatch ? versionMatch[1] : '17';
@@ -1547,14 +1547,14 @@ async function createLinuxUserRole(
 }
 
 /**
- * Vérifie et prépare PostgreSQL (installe et démarre si nécessaire)
+ * Checks and prepares PostgreSQL (installs and starts if needed)
  */
 export async function ensurePostgreSQL(
   port: number = 5432,
   onProgress: (progress: InstallationProgress) => void
 ): Promise<{ success: boolean; error?: string; status?: PostgresStatus }> {
   try {
-    // Vérifier si installé
+    // Check if installed
     onProgress({ step: 'checking', message: 'Checking PostgreSQL installation...', progress: 5 });
     const installed = await checkPostgresInstalled();
 
@@ -1567,7 +1567,7 @@ export async function ensurePostgreSQL(
     } else {
       logger.info(`PostgreSQL ${installed.version || 'unknown version'} is installed${installed.method ? ` (via ${installed.method})` : ''}${installed.hasServer === false ? ' (client only, no server)' : ''}`);
 
-      // Vérifier si seulement le client est installé (libpq) mais pas le serveur
+      // Check if only the client is installed (libpq) but not the server
       if (installed.hasServer === false) {
         logger.warn('Only PostgreSQL client (libpq) is installed, not the server. Installing PostgreSQL server...');
         onProgress({ step: 'installing', message: 'Installing PostgreSQL server (only client found)...', progress: 10 });
@@ -1581,7 +1581,7 @@ export async function ensurePostgreSQL(
             error: `Only PostgreSQL client (libpq) is installed, but server is required.\n\n${installResult.error}\n\nPlease install PostgreSQL server manually:\n${installHint}`
           };
         }
-        // Re-vérifier après installation
+        // Re-check after installation
         const reinstalled = await checkPostgresInstalled();
         if (reinstalled.hasServer === false) {
           return {
@@ -1591,13 +1591,13 @@ export async function ensurePostgreSQL(
         }
       }
 
-      // Si PostgreSQL est installé mais pas via brew, on peut quand même essayer de le démarrer
+      // If PostgreSQL is installed but not via brew, we can still try to start it
       if (installed.method !== 'brew') {
         logger.info('PostgreSQL is installed but not via Homebrew. Will try to start it directly.');
       }
     }
 
-    // Vérifier si le répertoire de données existe, sinon l'initialiser
+    // Check if the data directory exists, otherwise initialize it
     onProgress({ step: 'checking', message: 'Checking PostgreSQL data directory...', progress: 70 });
     let dataDir = await findPostgresDataDir();
 
@@ -1611,20 +1611,20 @@ export async function ensurePostgreSQL(
         const initResult = await initPostgresDatabase(dataDirToCreate, onProgress);
 
         if (initResult.success) {
-          // Vérifier que le répertoire existe maintenant
+          // Check that the directory now exists
           await new Promise(resolve => setTimeout(resolve, 1000)); // Attendre un peu
           const verifyDir = await findPostgresDataDir();
           if (verifyDir) {
             dataDir = verifyDir;
             logger.info(`PostgreSQL database initialized successfully at ${dataDir}`);
           } else {
-            // Le répertoire devrait exister maintenant, utiliser celui qu'on a créé
+            // The directory should exist now, use the one we created
             dataDir = dataDirToCreate;
             logger.info(`PostgreSQL database initialized at ${dataDir} (verification pending)`);
           }
         } else {
           logger.error(`Failed to initialize database: ${initResult.error}`);
-          // Retourner l'erreur d'initialisation plutôt que de continuer
+          // Return the initialization error rather than continuing
           return {
             success: false,
             error: `Failed to initialize PostgreSQL database: ${initResult.error}\n\nPlease try manually:\n1. initdb ${dataDirToCreate}\n2. ${getOS() === 'linux' ? 'sudo systemctl start postgresql' : 'brew services start postgresql@17'}`
@@ -1643,20 +1643,20 @@ export async function ensurePostgreSQL(
       logger.info(`PostgreSQL data directory found: ${dataDir}`);
     }
 
-    // Vérifier si en cours d'exécution
+    // Check if running
     onProgress({ step: 'checking', message: 'Checking if PostgreSQL is running...', progress: 90 });
     let running = await checkPostgresRunning(port);
 
     if (!running.running) {
       onProgress({ step: 'starting', message: 'PostgreSQL is not running. Starting...', progress: 95 });
 
-      // Si on a un répertoire de données, passer cette information à startPostgreSQL
+      // If we have a data directory, pass this information to startPostgreSQL
       const startResult = await startPostgreSQL(port, onProgress);
 
-      // Attendre un peu pour que PostgreSQL démarre
+      // Wait a bit for PostgreSQL to start
       await new Promise(resolve => setTimeout(resolve, 3000));
 
-      // Vérifier plusieurs fois si PostgreSQL est maintenant en cours d'exécution
+      // Check multiple times if PostgreSQL is now running
       for (let i = 0; i < 5; i++) {
         running = await checkPostgresRunning(port);
         if (running.running) {
@@ -1667,7 +1667,7 @@ export async function ensurePostgreSQL(
         logger.info(`Waiting for PostgreSQL to start... (attempt ${i + 1}/5)`);
       }
 
-      // Si toujours pas en cours d'exécution, essayer de se connecter directement avec différents utilisateurs
+      // If still not running, try to connect directly with different users
       if (!running.running) {
         logger.warn('PostgreSQL start may have failed, trying direct connection with different users...');
         const currentUser = os.userInfo().username;
@@ -1712,7 +1712,7 @@ export async function ensurePostgreSQL(
       };
     }
 
-    // Vérification finale : s'assurer que PostgreSQL est vraiment accessible
+    // Final check: ensure PostgreSQL is truly accessible
     onProgress({ step: 'verifying', message: 'Verifying PostgreSQL connection...', progress: 98 });
 
     // On Linux, ensure the current OS user has a PostgreSQL role (peer auth requires it)
@@ -1720,12 +1720,12 @@ export async function ensurePostgreSQL(
       await createLinuxUserRole(onProgress);
     }
 
-    // Détecter l'utilisateur PostgreSQL à utiliser
+    // Detect the PostgreSQL user to use
     let postgresUser = 'postgres';
     const currentUser = os.userInfo().username;
 
-    // Sur macOS avec Homebrew, l'utilisateur par défaut est souvent l'utilisateur système
-    // Essayer d'abord avec l'utilisateur système actuel
+    // On macOS with Homebrew, the default user is often the system user
+    // Try first with the current system user
     const usersToTry = [currentUser, 'postgres', process.env.USER || '', process.env.USERNAME || ''];
 
     let connected = false;
@@ -1747,22 +1747,22 @@ export async function ensurePostgreSQL(
       }
     }
 
-    // Si la connexion a échoué avec "postgres" mais réussit avec l'utilisateur système, créer postgres
+    // If connection failed with "postgres" but succeeds with the system user, create postgres
     if (!connected && (connectionError.includes('does not exist') || connectionError.includes('role'))) {
       logger.info('PostgreSQL user "postgres" does not exist, attempting to create it...');
       onProgress({ step: 'creating_user', message: 'Creating PostgreSQL user "postgres"...', progress: 99 });
 
-      // Essayer de se connecter avec l'utilisateur système pour créer postgres
+      // Try to connect with the system user to create postgres
       try {
         const adminClient = await getPgClient(port, currentUser);
         logger.info(`Connected as ${currentUser}, creating postgres user...`);
 
-        // Créer l'utilisateur postgres s'il n'existe pas
+        // Create the postgres user if it doesn't exist
         try {
           await adminClient.query(`CREATE ROLE postgres WITH SUPERUSER LOGIN;`);
           logger.info('Successfully created PostgreSQL user "postgres"');
 
-          // Tester la connexion avec postgres
+          // Test the connection with postgres
           await adminClient.end();
 
           try {
@@ -1776,7 +1776,7 @@ export async function ensurePostgreSQL(
             logger.info(`Will use system user ${currentUser} for PostgreSQL connections`);
           }
         } catch (createError) {
-          // L'utilisateur existe peut-être déjà ou erreur de permissions
+          // The user may already exist or permission error
           if (getErrorMessage(createError).includes('already exists')) {
             logger.info('PostgreSQL user "postgres" already exists');
             await adminClient.end();
@@ -1786,7 +1786,7 @@ export async function ensurePostgreSQL(
               connected = true;
               logger.info('PostgreSQL connection verified with existing postgres user');
             } catch {
-              // Utiliser l'utilisateur système
+              // Use the system user
               postgresUser = currentUser;
               connected = true;
               logger.info(`Will use system user ${currentUser} for PostgreSQL connections`);
@@ -1800,7 +1800,7 @@ export async function ensurePostgreSQL(
         }
       } catch (adminError) {
         logger.warn(`Could not connect as ${currentUser} to create postgres user: ${getErrorMessage(adminError)}`);
-        // Si on ne peut pas créer postgres, utiliser l'utilisateur système
+        // If we can't create postgres, use the system user
         postgresUser = currentUser;
         connected = true;
         logger.info(`Will use system user ${currentUser} for PostgreSQL connections`);
@@ -1821,7 +1821,7 @@ export async function ensurePostgreSQL(
       };
     }
 
-    // Stocker l'utilisateur à utiliser pour les futures connexions
+    // Store the user to use for future connections
     logger.info(`PostgreSQL ready, will use user: ${postgresUser}`);
 
     onProgress({ step: 'complete', message: 'PostgreSQL is ready', progress: 100 });
@@ -1843,7 +1843,7 @@ export async function ensurePostgreSQL(
   }
 }
 /**
- * Redémarre le service PostgreSQL
+ * Restarts the PostgreSQL service
  */
 export async function restartPostgresService(): Promise<{ success: boolean; error?: string }> {
   try {
@@ -1861,7 +1861,7 @@ export async function restartPostgresService(): Promise<{ success: boolean; erro
       } else {
         // Fallback: essayer pg_ctl si possible
         logger.warn('No brew service found for PostgreSQL restart fallback to pg_ctl');
-        // On ne va pas implémenter un pg_ctl complexe ici car brew est le cas nominal sur macOS bbdump
+        // We won't implement complex pg_ctl here as brew is the standard case on macOS bbdump
         return { success: false, error: 'Could not find a PostgreSQL service to restart' };
       }
     } else if (osType === 'linux') {
@@ -1896,7 +1896,7 @@ export async function restartPostgresService(): Promise<{ success: boolean; erro
   }
 }
 /**
- * Met à jour le fichier postgresql.conf pour ajouter/supprimer une bibliothèque dans shared_preload_libraries
+ * Updates the postgresql.conf file to add/remove a library from shared_preload_libraries
  */
 export async function updateSharedPreloadLibraries(libName: string, action: 'add' | 'remove'): Promise<{ success: boolean; error?: string }> {
   try {
@@ -1922,7 +1922,7 @@ export async function updateSharedPreloadLibraries(libName: string, action: 'add
     let found = false;
     let modified = false;
 
-    // Pattern pour trouver shared_preload_libraries, même commenté
+    // Pattern to find shared_preload_libraries, even if commented out
     const regex = /^\s*#?\s*shared_preload_libraries\s*=\s*'([^']*)'/;
 
     for (let i = 0; i < lines.length; i++) {
@@ -1972,7 +1972,7 @@ export async function updateSharedPreloadLibraries(libName: string, action: 'add
 }
 
 /**
- * Vérifie si une bibliothèque est présente dans shared_preload_libraries
+ * Checks if a library is present in shared_preload_libraries
  */
 export async function checkSharedPreloadLibraries(libName: string): Promise<{ success: boolean; isPresent: boolean; error?: string }> {
   try {
@@ -1984,7 +1984,7 @@ export async function checkSharedPreloadLibraries(libName: string): Promise<{ su
     const configPath = path.join(dataDir, 'postgresql.conf');
 
     const content = await fs.readFile(configPath, 'utf-8');
-    // Regex multiline pour trouver la ligne active (non commentée)
+    // Multiline regex to find the active line (not commented out)
     const regex = /^\s*shared_preload_libraries\s*=\s*'([^']*)'/m;
     const match = content.match(regex);
 

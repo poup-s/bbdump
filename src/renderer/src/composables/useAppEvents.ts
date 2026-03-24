@@ -14,7 +14,7 @@ export function useAppEvents() {
             const config = await ipcRenderer.invoke('get-config');
             store.databases = config.databases;
             store.projects = config.projects || [];
-            store.viewMode = config.viewMode || 'list';
+            store.viewMode = 'project';
             store.onboardingCompleted = config.onboardingCompleted || false;
             if (config.language) {
                 store.language = config.language;

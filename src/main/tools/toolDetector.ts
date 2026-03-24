@@ -17,7 +17,7 @@ export interface ToolDetectionResult {
 }
 
 /**
- * Résout un chemin avec wildcard en cherchant les fichiers correspondants
+ * Resolves a wildcard path by searching for matching files
  */
 async function resolveWildcardPath(wildcardPath: string): Promise<string[]> {
   if (!wildcardPath.includes('*')) {
@@ -27,7 +27,7 @@ async function resolveWildcardPath(wildcardPath: string): Promise<string[]> {
   const resolved: string[] = [];
 
   try {
-    // Extraire le répertoire parent et le pattern
+    // Extract the parent directory and pattern
     const parts = wildcardPath.split('*');
     const baseDir = parts[0].substring(0, parts[0].lastIndexOf('/'));
     const suffix = parts[parts.length - 1];
@@ -49,14 +49,14 @@ async function resolveWildcardPath(wildcardPath: string): Promise<string[]> {
       }
     }
   } catch {
-    // Ignore les erreurs de résolution
+    // Ignore resolution errors
   }
 
   return resolved;
 }
 
 /**
- * Détecte un outil en utilisant which d'abord, puis les chemins standards
+ * Detects a tool using which first, then standard paths
  */
 export async function detectTool(
   toolName: string,
@@ -69,7 +69,7 @@ export async function detectTool(
   // version (v17) may be installed at /usr/lib/postgresql/17/bin/pg_dump.
   // On macOS, `which` is fine because Homebrew manages PATH correctly.
   if (!isLinux) {
-    // Étape 1 (macOS/Windows) : Essayer which
+    // Step 1 (macOS/Windows): Try which
     try {
       const { stdout } = await execAsync(`which ${toolName} 2>/dev/null || echo ""`);
       const whichPath = stdout.trim();
@@ -92,30 +92,30 @@ export async function detectTool(
         };
       }
     } catch {
-      // Continue avec les chemins standards
+      // Continue with standard paths
     }
   }
 
-  // Étape 2 : Vérifier les chemins standards fournis (version-specific first on Linux)
+  // Step 2: Check the provided standard paths (version-specific first on Linux)
   if (possiblePaths && possiblePaths.length > 0) {
     for (const testPath of possiblePaths) {
-      // Résoudre les wildcards
+      // Resolve wildcards
       const resolvedPaths = await resolveWildcardPath(testPath);
       
       for (const resolvedPath of resolvedPaths) {
         if (fs.existsSync(resolvedPath)) {
-          // Vérifier que c'est exécutable (ou au moins un fichier)
+          // Check that it's executable (or at least a file)
           try {
             await execAsync(`test -x "${resolvedPath}" || test -f "${resolvedPath}"`);
             
-            // Vérifier la version si possible
+            // Check the version if possible
             let version: string | undefined;
             try {
               const { stdout: versionOutput } = await execAsync(`${resolvedPath} --version 2>/dev/null || echo ""`);
               const versionMatch = versionOutput.match(/(\d+\.\d+)/);
               version = versionMatch ? versionMatch[1] : undefined;
             } catch {
-              // Ignore les erreurs de version
+              // Ignore version errors
             }
             
             return {
@@ -125,7 +125,7 @@ export async function detectTool(
               version
             };
           } catch {
-            // Continue avec le prochain chemin
+            // Continue with the next path
             continue;
           }
         }
@@ -161,7 +161,7 @@ export async function detectTool(
     }
   }
 
-  // Si rien n'est trouvé
+  // If nothing is found
   return {
     installed: false,
     error: `${toolName} not found`
@@ -169,7 +169,7 @@ export async function detectTool(
 }
 
 /**
- * Détecte tous les outils PostgreSQL
+ * Detects all PostgreSQL tools
  */
 export async function detectPostgresTools(): Promise<{
   pgDump: ToolDetectionResult;
@@ -202,14 +202,14 @@ export async function detectPostgresTools(): Promise<{
 }
 
 /**
- * Détecte Homebrew (macOS uniquement)
+ * Detects Homebrew (macOS only)
  */
 export async function detectHomebrew(): Promise<ToolDetectionResult> {
   const os = getOSType();
   
   if (os !== 'macos') {
     return {
-      installed: true, // Non requis sur Linux/Windows
+      installed: true, // Not required on Linux/Windows
       method: 'unknown'
     };
   }
@@ -221,7 +221,7 @@ export async function detectHomebrew(): Promise<ToolDetectionResult> {
 }
 
 /**
- * Trouve le chemin d'un outil PostgreSQL (pour compatibilité avec backup.ts)
+ * Finds the path of a PostgreSQL tool (for compatibility with backup.ts)
  */
 export async function findPostgresCommand(command: string): Promise<string> {
   const os = detectOS();
@@ -261,7 +261,7 @@ export async function findPostgresCommand(command: string): Promise<string> {
     return result.path;
   }
   
-  // Fallback : retourner le nom de la commande pour utiliser le PATH système
+  // Fallback: return the command name to use the system PATH
   logger.warn(`${command} not found in standard locations, using system PATH`);
   return command;
 }

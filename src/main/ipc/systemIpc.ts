@@ -82,7 +82,7 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
             const { installPostgreSQL } = await import('../tools/toolInstaller');
             const { detectHomebrew } = await import('../tools/toolDetector');
 
-            // Détecter le chemin complet de brew pour le passer à l'installateur
+            // Detect the full brew path to pass to the installer
             let brewPath: string | undefined;
             const homebrewResult = await detectHomebrew();
             if (homebrewResult.installed && homebrewResult.path) {

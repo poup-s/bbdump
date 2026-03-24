@@ -3,25 +3,25 @@ export interface DatabaseConfig {
   isLocalBbdump?: boolean;
   name: string;
   displayName?: string;
-  // Connection string PostgreSQL (ex: postgresql://user:pass@host:port/db?sslmode=require)
-  // Si fourni, il sera utilisé à la place de host, port, user, password
+  // PostgreSQL connection string (e.g. postgresql://user:pass@host:port/db?sslmode=require)
+  // If provided, takes precedence over host, port, user, password
   connectionString?: string;
   host: string;
   port: number;
   user: string;
   password: string;
-  encrypted?: boolean; // Si true, le mot de passe est chiffré (par défaut true)
-  encryptBackups?: boolean; // Si true, les fichiers de backup sont chiffrés (par défaut false)
+  encrypted?: boolean; // If true, password is encrypted (default: true)
+  encryptBackups?: boolean; // If true, backup files are encrypted (default: false)
   cron: string;
   output: string;
-  enabled?: boolean; // Si false, les tâches planifiées sont en pause
+  enabled?: boolean; // If false, scheduled tasks are paused
   lastBackup?: string;
   status?: 'success' | 'error' | 'running' | 'idle';
-  compressionLevel?: number; // Niveau de compression pg_dump (0-9, défaut: 6)
-  jobs?: number; // Nombre de jobs parallèles pour pg_dump (défaut: 1)
-  backupTimeout?: number; // Timeout en millisecondes (défaut: 30 minutes)
-  ssl?: boolean; // Si true, force l'utilisation de SSL (sslmode=require)
-  masked?: boolean; // Si true, le nom de la DB est masqué dans l'UI (screen sharing)
+  compressionLevel?: number; // pg_dump compression level (0-9, default: 6)
+  jobs?: number; // Number of parallel pg_dump jobs (default: 1)
+  backupTimeout?: number; // Timeout in milliseconds (default: 30 minutes)
+  ssl?: boolean; // If true, force SSL usage (sslmode=require)
+  masked?: boolean; // If true, DB name is hidden in the UI (screen sharing)
 }
 
 export interface ProjectConfig {

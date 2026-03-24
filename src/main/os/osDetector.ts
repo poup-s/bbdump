@@ -7,11 +7,11 @@ export interface OSInfo {
   type: OSType;
   platform: string; // 'darwin', 'linux', 'win32'
   architecture: Architecture;
-  isAppleSilicon: boolean; // Pour macOS uniquement
+  isAppleSilicon: boolean; // For macOS only
 }
 
 /**
- * Détecte le type d'OS à partir de process.platform
+ * Detects the OS type from process.platform
  */
 export function detectOS(): OSInfo {
   const platform = os.platform();
@@ -26,7 +26,7 @@ export function detectOS(): OSInfo {
     type = 'linux';
   }
   
-  // Déterminer l'architecture
+  // Determine the architecture
   let architecture: Architecture;
   if (arch === 'arm64' || arch === 'aarch64') {
     architecture = 'arm64';
@@ -36,7 +36,7 @@ export function detectOS(): OSInfo {
     architecture = 'ia32';
   }
   
-  // Pour macOS, vérifier si c'est Apple Silicon
+  // For macOS, check if it's Apple Silicon
   const isAppleSilicon = type === 'macos' && architecture === 'arm64';
   
   return {
@@ -48,28 +48,28 @@ export function detectOS(): OSInfo {
 }
 
 /**
- * Vérifie si l'OS actuel est macOS
+ * Checks if the current OS is macOS
  */
 export function isMacOS(): boolean {
   return detectOS().type === 'macos';
 }
 
 /**
- * Vérifie si l'OS actuel est Linux
+ * Checks if the current OS is Linux
  */
 export function isLinux(): boolean {
   return detectOS().type === 'linux';
 }
 
 /**
- * Vérifie si l'OS actuel est Windows
+ * Checks if the current OS is Windows
  */
 export function isWindows(): boolean {
   return detectOS().type === 'windows';
 }
 
 /**
- * Retourne le type d'OS actuel
+ * Returns the current OS type
  */
 export function getOSType(): OSType {
   return detectOS().type;

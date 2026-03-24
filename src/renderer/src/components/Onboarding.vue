@@ -52,10 +52,10 @@ const mcpInstalled = ref(false);
 const mcpLoading = ref(false);
 const claudeDesktopDetected = ref(false);
 
-// État de l'accordéon
+// Accordion state
 const expandedTools = ref(false);
 
-// Étapes de vérification
+// Verification steps
 const verificationSteps = ref<Array<{ name: string; status: 'pending' | 'checking' | 'done' | 'error' }>>([
   { name: 'pg_dump', status: 'pending' },
   { name: 'psql', status: 'pending' },
@@ -80,7 +80,7 @@ onMounted(async () => {
     console.error(e);
   }
 
-  // Écouter les événements de progression d'installation
+  // Listen for installation progress events
   ipcRenderer.on('install-progress', (_, progress: { step: string; message: string; progress: number }) => {
     installProgress.value = progress;
   });
@@ -159,36 +159,36 @@ const checkPrerequisites = async () => {
   checkingPrerequisites.value = true;
   installError.value = null;
 
-  // Réinitialiser les étapes
+  // Reset the steps
   verificationSteps.value.forEach(s => s.status = 'pending');
 
   try {
-    // Vérifier pg_dump
+    // Check pg_dump
     verificationSteps.value[0].status = 'checking';
     await new Promise(resolve => setTimeout(resolve, 300));
 
-    // Vérifier psql
+    // Check psql
     verificationSteps.value[1].status = 'checking';
     await new Promise(resolve => setTimeout(resolve, 300));
 
-    // Vérifier homebrew
+    // Check homebrew
     verificationSteps.value[2].status = 'checking';
     await new Promise(resolve => setTimeout(resolve, 300));
 
-    // Vérifier postgresServer
+    // Check postgresServer
     verificationSteps.value[3].status = 'checking';
     await new Promise(resolve => setTimeout(resolve, 300));
 
     const result = await ipcRenderer.invoke('check-prerequisites');
     prerequisites.value = result;
 
-    // Mettre à jour les statuts
+    // Update the statuses
     verificationSteps.value[0].status = result.pgDump.installed ? 'done' : 'error';
     verificationSteps.value[1].status = result.psql.installed ? 'done' : 'error';
     verificationSteps.value[2].status = result.homebrew?.installed ? 'done' : 'error';
     verificationSteps.value[3].status = result.postgresServer.installed && result.postgresServer.hasServer ? 'done' : 'error';
 
-    // Réinitialiser les états d'attente externe si les outils sont maintenant installés
+    // Reset external waiting states if tools are now installed
     if (result.homebrew?.installed) {
       waitingForExternal.value.homebrew = false;
     }
@@ -196,7 +196,7 @@ const checkPrerequisites = async () => {
       waitingForExternal.value.postgresql = false;
     }
 
-    // Ouvrir automatiquement la section si des outils manquent
+    // Automatically expand the section if tools are missing
     if (!result.pgDump.installed || !result.psql.installed || !result.homebrew?.installed || !(result.postgresServer.installed && result.postgresServer.hasServer)) {
       expandedTools.value = true;
     }

@@ -24,24 +24,24 @@ export class CronManager {
   }
 
   scheduleBackup(db: DatabaseConfig): void {
-    // Si une tâche existe déjà pour cette base, la supprimer
+    // If a task already exists for this database, remove it
     if (this.tasks.has(db.id)) {
       this.cancelBackup(db.id);
     }
 
-    // Si les tâches planifiées sont désactivées pour cette DB, ne rien faire
+    // If scheduled tasks are disabled for this DB, do nothing
     if (db.enabled === false) {
       logger.info(`Scheduled tasks paused for ${db.name}`, db.name);
       return;
     }
 
-    // Si pas de cron défini, ne rien faire (seulement sauvegardes manuelles)
+    // If no cron is defined, do nothing (manual backups only)
     if (!db.cron || db.cron.trim() === '') {
       logger.info(`No automatic scheduling for ${db.name} (manual backups only)`, db.name);
       return;
     }
 
-    // Valider l'expression cron
+    // Validate the cron expression
     if (!cron.validate(db.cron)) {
       logger.error(`Invalid cron expression for ${db.name}: ${db.cron}`, db.name);
       return;
@@ -52,22 +52,22 @@ export class CronManager {
         try {
           logger.info(`Executing scheduled backup`, db.name);
 
-          // Notifier le début du backup
+          // Notify the backup start
           if (this.mainWindow && !this.mainWindow.isDestroyed()) {
             this.mainWindow.webContents.send('scheduled-backup-started', {
               databaseId: db.id
             });
           }
 
-          // Exécuter le backup
+          // Execute the backup
           const result = await backupManager.backupDatabase(db);
 
-          // Mettre à jour la date du dernier backup si succès
+          // Update the last backup date on success
           if (result.success && this.onBackupComplete) {
             this.onBackupComplete(db.id, result.timestamp);
           }
 
-          // Notifier la fin du backup
+          // Notify the backup completion
           if (this.mainWindow && !this.mainWindow.isDestroyed()) {
             this.mainWindow.webContents.send('scheduled-backup-completed', {
               databaseId: db.id,
@@ -124,10 +124,10 @@ export class CronManager {
   }
 
   rescheduleAll(databases: DatabaseConfig[]): void {
-    // Annuler toutes les tâches existantes
+    // Cancel all existing tasks
     this.cancelAllBackups();
 
-    // Planifier les nouvelles tâches
+    // Schedule the new tasks
     if (databases && Array.isArray(databases)) {
       databases.forEach(db => {
         if (db.cron) {

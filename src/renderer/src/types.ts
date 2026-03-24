@@ -44,12 +44,12 @@ export interface Project {
     id: string;
     name: string;
     color: string; // Tailwind class, ex: "bg-blue-500"
-    databaseIds: string[]; // IDs des DB liées
-    collapsed?: boolean; // État replié dans l'UI
+    databaseIds: string[]; // IDs of linked DBs
+    collapsed?: boolean; // Collapsed state in the UI
     masked?: boolean; // True if name should be hidden in UI
-    proxyEnabled?: boolean; // Proxy TCP activé
-    proxyPort?: number; // Port local du proxy
-    proxyTargetDbId?: string; // ID de la DB cible du proxy
+    proxyEnabled?: boolean; // TCP proxy enabled
+    proxyPort?: number; // Local proxy port
+    proxyTargetDbId?: string; // ID of the proxy target DB
     proxyUser?: string; // Custom proxy URL user (default: slugified project name)
     proxyPassword?: string; // Custom proxy URL password (default: slugified project name)
     proxyDbName?: string; // Custom proxy URL database name (default: slugified project name)

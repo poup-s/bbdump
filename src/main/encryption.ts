@@ -19,70 +19,70 @@ class EncryptionManager {
   private initializeKey(): void {
     try {
       if (fs.existsSync(KEY_FILE)) {
-        // Charger la clé existante
+        // Load the existing key
         const keyData = fs.readFileSync(KEY_FILE, 'utf8');
         this.encryptionKey = Buffer.from(keyData, 'hex');
-        logger.info('Clé de chiffrement chargée');
+        logger.info('Encryption key loaded');
       } else {
-        // Générer une nouvelle clé
+        // Generate a new key
         this.encryptionKey = crypto.randomBytes(KEY_LENGTH);
         fs.writeFileSync(KEY_FILE, this.encryptionKey.toString('hex'), 'utf8');
-        // Permissions restrictives (lecture/écriture pour le propriétaire seulement)
+        // Restrictive permissions (read/write for the owner only)
         try {
           fs.chmodSync(KEY_FILE, 0o600);
         } catch (error) {
-          logger.warn(`Impossible de définir les permissions du fichier de clé: ${error}`);
+          logger.warn(`Unable to set key file permissions: ${error}`);
         }
-        logger.info('Nouvelle clé de chiffrement générée et sauvegardée');
+        logger.info('New encryption key generated and saved');
       }
     } catch (error) {
-      logger.error(`Erreur lors de l'initialisation de la clé de chiffrement: ${error}`);
-      // Générer une clé temporaire en mémoire
+      logger.error(`Error initializing the encryption key: ${error}`);
+      // Generate a temporary key in memory
       this.encryptionKey = crypto.randomBytes(KEY_LENGTH);
-      logger.warn('Utilisation d\'une clé de chiffrement temporaire (non persistante)');
+      logger.warn('Using a temporary encryption key (non-persistent)');
     }
   }
 
   encrypt(text: string): string {
     if (!this.encryptionKey) {
-      throw new Error('Clé de chiffrement non initialisée');
+      throw new Error('Encryption key not initialized');
     }
 
     try {
-      // Générer un IV (Initialization Vector) aléatoire
+      // Generate a random IV (Initialization Vector)
       const iv = crypto.randomBytes(IV_LENGTH);
 
-      // Créer le cipher
+      // Create the cipher
       const cipher = crypto.createCipheriv(ALGORITHM, this.encryptionKey, iv);
 
-      // Chiffrer le texte
+      // Encrypt the text
       let encrypted = cipher.update(text, 'utf8', 'hex');
       encrypted += cipher.final('hex');
 
-      // Récupérer l'auth tag
+      // Retrieve the auth tag
       const authTag = cipher.getAuthTag();
 
-      // Combiner IV + authTag + texte chiffré
+      // Combine IV + authTag + encrypted text
       const result = iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
 
       return result;
     } catch (error) {
-      logger.error(`Erreur lors du chiffrement: ${error}`);
+      logger.error(`Error during encryption: ${error}`);
       throw error;
     }
   }
 
   decrypt(encryptedText: string): string {
     if (!this.encryptionKey) {
-      throw new Error('Clé de chiffrement non initialisée');
+      throw new Error('Encryption key not initialized');
     }
 
     try {
-      // Séparer IV, authTag et texte chiffré
+      // Separate IV, authTag and encrypted text
       const parts = encryptedText.split(':');
       if (parts.length !== 3) {
-        // Format ancien ou invalide - retourner tel quel
-        // (pour compatibilité avec anciennes configs non chiffrées)
+        // Old or invalid format - return as is
+        // (for compatibility with old unencrypted configs)
         return encryptedText;
       }
 
@@ -90,24 +90,24 @@ class EncryptionManager {
       const authTag = Buffer.from(parts[1], 'hex');
       const encrypted = parts[2];
 
-      // Créer le decipher
+      // Create the decipher
       const decipher = crypto.createDecipheriv(ALGORITHM, this.encryptionKey, iv);
       decipher.setAuthTag(authTag);
 
-      // Déchiffrer
+      // Decrypt
       let decrypted = decipher.update(encrypted, 'hex', 'utf8');
       decrypted += decipher.final('utf8');
 
       return decrypted;
     } catch (error) {
-      logger.error(`Erreur lors du déchiffrement: ${error}`);
+      logger.error(`Error during decryption: ${error}`);
       // Throw error to let the caller know decryption failed
       throw new Error(`Decryption failed: ${error}`);
     }
   }
 
   isEncrypted(text: string): boolean {
-    // Vérifier si le texte est au format chiffré (iv:authTag:encrypted)
+    // Check if the text is in encrypted format (iv:authTag:encrypted)
     // IV = 32 hex chars, authTag = 32 hex chars, encrypted = hex string
     const parts = text.split(':');
     if (parts.length !== 3) return false;
@@ -120,7 +120,7 @@ class EncryptionManager {
       && parts[2].length > 0;
   }
 
-  // Migrer une configuration non chiffrée vers chiffrée
+  // Migrate an unencrypted configuration to encrypted
   migrateConfig(config: any): any {
     if (!config.databases || !Array.isArray(config.databases)) {
       return config;
@@ -132,7 +132,7 @@ class EncryptionManager {
       databases: config.databases.map((db: any) => {
         if (db.password && !this.isEncrypted(db.password)) {
           migrated = true;
-          logger.info(`Migration du mot de passe chiffré pour ${db.name}`);
+          logger.info(`Migrating encrypted password for ${db.name}`);
           return {
             ...db,
             password: this.encrypt(db.password)
@@ -143,7 +143,7 @@ class EncryptionManager {
     };
 
     if (migrated) {
-      logger.info('Configuration migrée vers des mots de passe chiffrés');
+      logger.info('Configuration migrated to encrypted passwords');
     }
 
     return migratedConfig;

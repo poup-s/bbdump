@@ -8,7 +8,7 @@ import { logger } from '../logger';
 export interface PrerequisitesResult {
   pgDump: ToolDetectionResult;
   psql: ToolDetectionResult;
-  homebrew?: ToolDetectionResult; // macOS uniquement
+  homebrew?: ToolDetectionResult; // macOS only
   postgresServer: {
     installed: boolean;
     version?: string;
@@ -18,24 +18,24 @@ export interface PrerequisitesResult {
 }
 
 /**
- * Vérifie tous les prérequis nécessaires pour utiliser l'application
+ * Checks all prerequisites needed to use the application
  */
 export async function checkPrerequisites(): Promise<PrerequisitesResult> {
   const os = detectOS();
   const _toolPaths = getToolPaths(os.type, os.architecture);
   
-  logger.info(`Vérification des prérequis sur ${os.type} (${os.architecture})`);
+  logger.info(`Checking prerequisites on ${os.type} (${os.architecture})`);
   
-  // Détecter les outils PostgreSQL
+  // Detect PostgreSQL tools
   const postgresTools = await detectPostgresTools();
   
-  // Détecter Homebrew (macOS uniquement)
+  // Detect Homebrew (macOS only)
   let homebrew: ToolDetectionResult | undefined;
   if (os.type === 'macos') {
     homebrew = await detectHomebrew();
   }
   
-  // Vérifier PostgreSQL Server
+  // Check PostgreSQL Server
   let postgresServer: PrerequisitesResult['postgresServer'] = {
     installed: false
   };
@@ -49,10 +49,10 @@ export async function checkPrerequisites(): Promise<PrerequisitesResult> {
         hasServer: postgresCheck.hasServer
       };
     } else {
-      postgresServer.error = 'Serveur PostgreSQL non trouvé';
+      postgresServer.error = 'PostgreSQL server not found';
     }
   } catch (error) {
-    postgresServer.error = getErrorMessage(error) || 'Échec de la vérification de PostgreSQL';
+    postgresServer.error = getErrorMessage(error) || 'PostgreSQL verification failed';
   }
   
   return {
@@ -64,7 +64,7 @@ export async function checkPrerequisites(): Promise<PrerequisitesResult> {
 }
 
 /**
- * Vérifie si tous les prérequis requis sont installés
+ * Checks if all required prerequisites are installed
  */
 export function areRequiredPrerequisitesInstalled(prerequisites: PrerequisitesResult): boolean {
   // pg_dump et psql sont requis
@@ -72,15 +72,15 @@ export function areRequiredPrerequisitesInstalled(prerequisites: PrerequisitesRe
     return false;
   }
   
-  // Sur macOS, si on veut créer des DB locales, Homebrew et PostgreSQL Server sont requis
-  // Mais pour l'instant, on considère qu'ils sont optionnels
-  // (l'utilisateur peut toujours se connecter à des DB distantes)
+  // On macOS, if we want to create local DBs, Homebrew and PostgreSQL Server are required
+  // But for now, we consider them optional
+  // (the user can still connect to remote DBs)
   
   return true;
 }
 
 /**
- * Retourne la liste des outils manquants
+ * Returns the list of missing tools
  */
 export function getMissingPrerequisites(prerequisites: PrerequisitesResult): string[] {
   const missing: string[] = [];

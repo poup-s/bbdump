@@ -29,7 +29,7 @@ class Logger {
   }
 
   /**
-   * Rotation des logs si le fichier dépasse MAX_LOG_SIZE
+   * Log rotation if the file exceeds MAX_LOG_SIZE
    */
   private rotateIfNeeded(): void {
     try {
@@ -38,13 +38,13 @@ class Logger {
       const stats = fs.statSync(LOG_FILE);
       if (stats.size < MAX_LOG_SIZE) return;
 
-      // Supprimer le plus ancien fichier roté
+      // Delete the oldest rotated file
       const oldestRotated = `${LOG_FILE}.${MAX_ROTATED_FILES}`;
       if (fs.existsSync(oldestRotated)) {
         fs.unlinkSync(oldestRotated);
       }
 
-      // Décaler les fichiers rotés existants
+      // Shift existing rotated files
       for (let i = MAX_ROTATED_FILES - 1; i >= 1; i--) {
         const from = `${LOG_FILE}.${i}`;
         const to = `${LOG_FILE}.${i + 1}`;
@@ -53,7 +53,7 @@ class Logger {
         }
       }
 
-      // Roter le fichier courant
+      // Rotate the current file
       fs.renameSync(LOG_FILE, `${LOG_FILE}.1`);
     } catch (error) {
       console.error('Error rotating log file:', error);
@@ -81,14 +81,14 @@ class Logger {
         return [];
       }
 
-      // Lire seulement les dernières lignes pour limiter l'usage mémoire
-      // On lit au maximum 10000 lignes (ou limit si spécifié et plus petit)
+      // Read only the last lines to limit memory usage
+      // Read at most 10000 lines (or limit if specified and smaller)
       const maxLines = limit ? Math.min(limit, 10000) : 10000;
       const lines = this.readLastLines(LOG_FILE, maxLines);
 
       const logs: LogEntry[] = lines.map(line => {
         return this.parseLine(line);
-      }).reverse(); // Les plus récents en premier
+      }).reverse(); // Most recent first
 
       return limit ? logs.slice(0, limit) : logs;
     } catch (error) {
@@ -98,19 +98,19 @@ class Logger {
   }
 
   /**
-   * Lit les N dernières lignes d'un fichier sans charger tout en mémoire
+   * Reads the last N lines of a file without loading everything into memory
    */
   private readLastLines(filePath: string, maxLines: number): string[] {
     const stats = fs.statSync(filePath);
     const fileSize = stats.size;
 
-    // Pour les petits fichiers (< 1MB), lire tout d'un coup
+    // For small files (< 1MB), read all at once
     if (fileSize < 1024 * 1024) {
       const content = fs.readFileSync(filePath, 'utf8');
       return content.trim().split('\n').filter(line => line.length > 0).slice(-maxLines);
     }
 
-    // Pour les gros fichiers, lire par blocs depuis la fin
+    // For large files, read in chunks from the end
     const CHUNK_SIZE = 64 * 1024; // 64KB
     const fd = fs.openSync(filePath, 'r');
     const lines: string[] = [];
@@ -127,9 +127,9 @@ class Logger {
         const chunk = buffer.toString('utf8') + remainder;
 
         const parts = chunk.split('\n');
-        remainder = parts[0]; // La première partie est potentiellement incomplète
+        remainder = parts[0]; // The first part is potentially incomplete
 
-        // Ajouter les lignes complètes (du plus récent au plus ancien)
+        // Add complete lines (from most recent to oldest)
         for (let i = parts.length - 1; i >= 1; i--) {
           if (parts[i].length > 0) {
             lines.unshift(parts[i]);
@@ -138,7 +138,7 @@ class Logger {
         }
       }
 
-      // Ajouter le reste si on a atteint le début du fichier
+      // Add the remainder if we reached the beginning of the file
       if (position === 0 && remainder.length > 0 && lines.length < maxLines) {
         lines.unshift(remainder);
       }
@@ -150,8 +150,8 @@ class Logger {
   }
 
   private parseLine(line: string): LogEntry {
-    // Format attendu: [timestamp] [LEVEL] [database] message
-    // ou: [timestamp] [LEVEL] message (si pas de database)
+    // Expected format: [timestamp] [LEVEL] [database] message
+    // or: [timestamp] [LEVEL] message (if no database)
     const logPattern = /^\[([^\]]+)\]\s+\[(INFO|ERROR|WARN|info|error|warn)\]\s+(?:\[([a-zA-Z0-9_][a-zA-Z0-9_.-]*)\]\s+)?(.+)$/;
     const match = line.match(logPattern);
 
@@ -169,7 +169,7 @@ class Logger {
       database = match[3] ? match[3] : undefined;
       message = match[4].trim();
     } else {
-      // Fallback pour les anciens formats ou formats non standard
+      // Fallback for old formats or non-standard formats
       const bracketMatches = line.match(/\[([^\]]+)\]/g);
       if (bracketMatches && bracketMatches.length >= 2) {
         timestamp = bracketMatches[0].replace(/[[\]]/g, '');

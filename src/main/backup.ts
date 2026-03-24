@@ -24,32 +24,32 @@ export class BackupManager {
   private pgRestorePath: string;
   private mainWindow: Electron.BrowserWindow | null = null;
   private pgDumpVersionsCache: Map<string, PgDumpVersion[]> = new Map(); // Cache par version majeure
-  private allPgDumpVersions: PgDumpVersion[] = []; // Toutes les versions trouvées
+  private allPgDumpVersions: PgDumpVersion[] = []; // All versions found
   private pgRestoreVersionsCache: Map<string, PgDumpVersion[]> = new Map(); // Cache par version majeure pour pg_restore
-  private allPgRestoreVersions: PgDumpVersion[] = []; // Toutes les versions de pg_restore trouvées
+  private allPgRestoreVersions: PgDumpVersion[] = []; // All pg_restore versions found
   private versionsDetected: boolean = false;
   private pgRestoreVersionsDetected: boolean = false;
   private activeProcesses: Set<ChildProcess> = new Set();
 
   constructor() {
     this.backupDir = pathManager.backupsPath;
-    // Les chemins seront résolus de manière asynchrone lors de la première utilisation
-    // Pour l'instant, utiliser les noms de commandes (seront résolus via PATH)
+    // Paths will be resolved asynchronously on first use
+    // For now, use the command names (will be resolved via PATH)
     this.pgDumpPath = 'pg_dump';
     this.pgRestorePath = 'pg_restore';
     this.ensureBackupDir();
 
-    // Initialiser les chemins de manière asynchrone (ne pas attendre)
+    // Initialize paths asynchronously (don't await)
     this.initializePaths().catch((error) => {
       logger.warn(`Failed to initialize PostgreSQL paths: ${error.message}`);
     });
 
-    // Détecter toutes les versions disponibles au démarrage
+    // Detect all available versions at startup
     this.detectAllPgDumpVersions().catch((error) => {
       logger.warn(`Failed to detect all pg_dump versions: ${error.message}`);
     });
 
-    // Détecter toutes les versions de pg_restore disponibles au démarrage
+    // Detect all available pg_restore versions at startup
     this.detectAllPgRestoreVersions().catch((error) => {
       logger.warn(`Failed to detect all pg_restore versions: ${error.message}`);
     });
@@ -67,11 +67,11 @@ export class BackupManager {
   }
 
   /**
-   * Détecte toutes les versions de pg_dump disponibles sur le système
+   * Detects all available pg_dump versions on the system
    */
   private async detectAllPgDumpVersions(): Promise<void> {
     if (this.versionsDetected) {
-      return; // Déjà détecté
+      return; // Already detected
     }
 
     try {
@@ -87,7 +87,7 @@ export class BackupManager {
         await this.detectLinuxVersions(versions);
       }
 
-      // Ajouter aussi la version système (dans PATH)
+      // Also add the system version (in PATH)
       try {
         const { stdout } = await execAsync('which pg_dump 2>/dev/null || echo ""');
         if (stdout.trim()) {
@@ -130,11 +130,11 @@ export class BackupManager {
   }
 
   /**
-   * Détecte toutes les versions de pg_restore disponibles sur le système
+   * Detects all available pg_restore versions on the system
    */
   private async detectAllPgRestoreVersions(): Promise<void> {
     if (this.pgRestoreVersionsDetected) {
-      return; // Déjà détecté
+      return; // Already detected
     }
 
     try {
@@ -150,7 +150,7 @@ export class BackupManager {
         await this.detectLinuxPgRestoreVersions(versions);
       }
 
-      // Ajouter aussi la version système (dans PATH)
+      // Also add the system version (in PATH)
       try {
         const { stdout } = await execAsync('which pg_restore 2>/dev/null || echo ""');
         if (stdout.trim()) {
@@ -193,13 +193,13 @@ export class BackupManager {
   }
 
   /**
-   * Détecte les versions de pg_restore dans Homebrew (macOS)
+   * Detects pg_restore versions in Homebrew (macOS)
    */
   private async detectHomebrewPgRestoreVersions(versions: PgDumpVersion[]): Promise<void> {
     const homebrewPrefixes = ['/opt/homebrew', '/usr/local'];
 
     for (const prefix of homebrewPrefixes) {
-      // Chercher dans libpq (client)
+      // Search in libpq (client)
       const libpqPath = `${prefix}/Cellar/libpq`;
       if (fs.existsSync(libpqPath)) {
         try {
@@ -223,7 +223,7 @@ export class BackupManager {
         }
       }
 
-      // Chercher dans postgresql@* (serveur complet)
+      // Search in postgresql@* (full server)
       const cellarPath = `${prefix}/Cellar`;
       if (fs.existsSync(cellarPath)) {
         try {
@@ -253,7 +253,7 @@ export class BackupManager {
         }
       }
 
-      // Chercher aussi dans /opt (liens symboliques)
+      // Also search in /opt (symbolic links)
       const optPath = `${prefix}/opt`;
       if (fs.existsSync(optPath)) {
         try {
@@ -263,7 +263,7 @@ export class BackupManager {
             if (fs.existsSync(pgRestorePath)) {
               const version = await this.getPgRestoreVersion(pgRestorePath);
               if (version) {
-                // Vérifier si on ne l'a pas déjà ajouté
+                // Check if we haven't already added it
                 if (!versions.some(v => v.path === pgRestorePath)) {
                   versions.push({
                     path: pgRestorePath,
@@ -283,7 +283,7 @@ export class BackupManager {
   }
 
   /**
-   * Détecte les versions de pg_restore sur Linux
+   * Detects pg_restore versions on Linux
    */
   private async detectLinuxPgRestoreVersions(versions: PgDumpVersion[]): Promise<void> {
     const possiblePaths = [
@@ -318,13 +318,13 @@ export class BackupManager {
   }
 
   /**
-   * Détecte les versions dans Homebrew (macOS)
+   * Detects versions in Homebrew (macOS)
    */
   private async detectHomebrewVersions(versions: PgDumpVersion[]): Promise<void> {
     const homebrewPrefixes = ['/opt/homebrew', '/usr/local'];
 
     for (const prefix of homebrewPrefixes) {
-      // Chercher dans libpq (client)
+      // Search in libpq (client)
       const libpqPath = `${prefix}/Cellar/libpq`;
       if (fs.existsSync(libpqPath)) {
         try {
@@ -348,7 +348,7 @@ export class BackupManager {
         }
       }
 
-      // Chercher dans postgresql@* (serveur complet)
+      // Search in postgresql@* (full server)
       const cellarPath = `${prefix}/Cellar`;
       if (fs.existsSync(cellarPath)) {
         try {
@@ -378,7 +378,7 @@ export class BackupManager {
         }
       }
 
-      // Chercher aussi dans /opt (liens symboliques)
+      // Also search in /opt (symbolic links)
       const optPath = `${prefix}/opt`;
       if (fs.existsSync(optPath)) {
         try {
@@ -388,7 +388,7 @@ export class BackupManager {
             if (fs.existsSync(pgDumpPath)) {
               const version = await this.getPgDumpVersion(pgDumpPath);
               if (version) {
-                // Vérifier si on ne l'a pas déjà ajouté
+                // Check if we haven't already added it
                 if (!versions.some(v => v.path === pgDumpPath)) {
                   versions.push({
                     path: pgDumpPath,
@@ -408,7 +408,7 @@ export class BackupManager {
   }
 
   /**
-   * Détecte les versions sur Linux
+   * Detects versions on Linux
    */
   private async detectLinuxVersions(versions: PgDumpVersion[]): Promise<void> {
     const possiblePaths = [
@@ -463,7 +463,7 @@ export class BackupManager {
   }
 
   /**
-   * Obtient la version d'un pg_dump en l'exécutant
+   * Gets the version of a pg_dump by executing it
    */
   private async getPgDumpVersion(pgDumpPath: string): Promise<string | null> {
     try {
@@ -476,7 +476,7 @@ export class BackupManager {
   }
 
   /**
-   * Obtient la version d'un pg_restore en l'exécutant
+   * Gets the version of a pg_restore by executing it
    */
   private async getPgRestoreVersion(pgRestorePath: string): Promise<string | null> {
     try {
@@ -489,7 +489,7 @@ export class BackupManager {
   }
 
   /**
-   * Détecte la version d'un fichier de backup PostgreSQL
+   * Detects the version of a PostgreSQL backup file
    * Le format custom commence par "PGDMP" suivi de la version majeure et mineure
    */
   private detectBackupVersion(backupPath: string): { major: number; minor: number } | null {
@@ -499,13 +499,13 @@ export class BackupManager {
       fs.readSync(fd, buffer, 0, 10, 0);
       fs.closeSync(fd);
 
-      // Vérifier le magic number "PGDMP"
+      // Check the magic number "PGDMP"
       const magic = buffer.toString('ascii', 0, 5);
       if (magic !== 'PGDMP') {
         return null; // Pas un fichier de backup custom
       }
 
-      // Lire la version majeure et mineure (octets 5 et 6)
+      // Read the major and minor version (bytes 5 and 6)
       const major = buffer.readUInt8(5);
       const minor = buffer.readUInt8(6);
 
@@ -531,11 +531,11 @@ export class BackupManager {
   }
 
   /**
-   * Nettoie la connection string en retirant les paramètres non supportés par pg_dump
+   * Cleans the connection string by removing parameters unsupported by pg_dump
    */
   private cleanConnectionString(connectionString: string): string {
     try {
-      // Liste des paramètres non supportés ou problématiques avec pg_dump
+      // List of unsupported or problematic parameters with pg_dump
       const unsupportedParams = [
         'channel_binding',
         'target_session_attrs'
@@ -544,7 +544,7 @@ export class BackupManager {
       // Parser l'URL
       const url = new URL(connectionString);
 
-      // Nettoyer les paramètres
+      // Clean up the parameters
       let cleaned = false;
       unsupportedParams.forEach(param => {
         if (url.searchParams.has(param)) {
@@ -569,14 +569,14 @@ export class BackupManager {
   }
 
   private async findPostgresCommand(command: string): Promise<string> {
-    // Utiliser le module centralisé toolDetector
+    // Use the centralized toolDetector module
     const { findPostgresCommand: findCommand } = await import('./tools/toolDetector');
     return findCommand(command);
   }
 
   /**
-   * Détecte la version du serveur PostgreSQL et trouve le pg_dump correspondant
-   * Utilise le cache des versions détectées pour une recherche rapide
+   * Detects the PostgreSQL server version and finds the corresponding pg_dump
+   * Uses the detected versions cache for a fast lookup
    */
   /**
    * Connects to a database to detect the server version.
@@ -770,13 +770,13 @@ apt-get install -y postgresql-client-${majorVersion}
   private async findCompatiblePgDump(db: DatabaseConfig): Promise<string> {
     logger.info(`Finding compatible pg_dump for database: ${db.name}`, db.name);
 
-    // S'assurer que les versions sont détectées
+    // Ensure versions are detected
     if (!this.versionsDetected) {
       await this.detectAllPgDumpVersions();
     }
 
     try {
-      // Détecter la version du serveur PostgreSQL (with Linux socket support)
+      // Detect the PostgreSQL server version (with Linux socket support)
       const serverInfo = await this.detectServerVersion(db);
       const serverVersion = serverInfo?.version || null;
       const serverMajorVersion = serverInfo?.majorVersion || null;
@@ -787,27 +787,27 @@ apt-get install -y postgresql-client-${majorVersion}
         logger.warn(`Could not detect server version`, db.name);
       }
 
-      // Si on a détecté une version, utiliser le cache pour trouver le pg_dump compatible
+      // If we detected a version, use the cache to find the compatible pg_dump
       if (serverMajorVersion && this.pgDumpVersionsCache.has(serverMajorVersion)) {
         const compatibleVersions = this.pgDumpVersionsCache.get(serverMajorVersion)!;
 
-        // Préférer les versions exactes ou les plus proches
-        // Trier par préférence : postgresql > libpq > system
+        // Prefer exact or closest versions
+        // Sort by preference: postgresql > libpq > system
         const sortedVersions = compatibleVersions.sort((a, b) => {
           const sourcePriority = { 'postgresql': 1, 'libpq': 2, 'system': 3 };
           return (sourcePriority[a.source] || 99) - (sourcePriority[b.source] || 99);
         });
 
-        // Prendre la première version compatible (meilleure correspondance)
+        // Take the first compatible version (best match)
         const bestMatch = sortedVersions[0];
         logger.info(`Found compatible pg_dump ${bestMatch.version} for PostgreSQL ${serverVersion}: ${bestMatch.path} (${bestMatch.source})`, db.name);
         return bestMatch.path;
       }
 
-      // Si pas trouvé dans le cache, essayer une recherche dynamique (fallback)
+      // If not found in cache, try a dynamic search (fallback)
       if (serverMajorVersion) {
         logger.warn(`No cached pg_dump found for PostgreSQL ${serverVersion}, performing dynamic search...`, db.name);
-        // Re-détecter les versions au cas où de nouvelles versions auraient été installées
+        // Re-detect versions in case new versions have been installed
         this.versionsDetected = false;
         await this.detectAllPgDumpVersions();
 
@@ -855,21 +855,21 @@ apt-get install -y postgresql-client-${majorVersion}
       logger.error(`Error finding compatible pg_dump: ${getErrorMessage(error)}`, db.name);
     }
 
-    // Fallback: utiliser le pg_dump par défaut
+    // Fallback: use the default pg_dump
     logger.info(`Using default pg_dump: ${this.pgDumpPath}`, db.name);
     return this.pgDumpPath;
   }
 
   /**
-   * Trouve une version compatible de pg_restore basée sur la version du backup
+   * Finds a compatible pg_restore version based on the backup version
    */
   private async findCompatiblePgRestore(backupPath: string): Promise<string> {
-    // S'assurer que les versions sont détectées
+    // Ensure versions are detected
     if (!this.pgRestoreVersionsDetected) {
       await this.detectAllPgRestoreVersions();
     }
 
-    // Détecter la version du backup
+    // Detect the backup version
     const backupVersion = this.detectBackupVersion(backupPath);
     if (!backupVersion) {
       logger.warn(`Could not detect backup version, using default pg_restore: ${this.pgRestorePath}`);
@@ -878,14 +878,14 @@ apt-get install -y postgresql-client-${majorVersion}
 
     logger.info(`Detected backup version: ${backupVersion.major}.${backupVersion.minor}`);
 
-    // Chercher une version compatible de pg_restore
-    // pg_restore peut lire les backups créés avec la même version majeure ou supérieure
+    // Search for a compatible pg_restore version
+    // pg_restore can read backups created with the same or higher major version
     const _backupMajorVersion = backupVersion.major.toString();
 
-    // Chercher d'abord une version exacte ou supérieure
+    // First look for an exact or higher version
     const compatibleVersions: PgDumpVersion[] = [];
 
-    // Parcourir toutes les versions majeures >= à la version du backup
+    // Iterate over all major versions >= the backup version
     for (const [majorVersion, versions] of this.pgRestoreVersionsCache.entries()) {
       const major = parseInt(majorVersion, 10);
       if (major >= backupVersion.major) {
@@ -894,22 +894,22 @@ apt-get install -y postgresql-client-${majorVersion}
     }
 
     if (compatibleVersions.length > 0) {
-      // Trier par version décroissante (la plus récente d'abord)
-      // pg_restore est rétro-compatible, donc la version la plus récente est toujours le meilleur choix
+      // Sort by version descending (most recent first)
+      // pg_restore is backward-compatible, so the most recent version is always the best choice
       compatibleVersions.sort((a, b) => {
         // Comparer les versions majeures
         const aMajor = parseInt(a.majorVersion, 10);
         const bMajor = parseInt(b.majorVersion, 10);
         if (aMajor !== bMajor) {
-          return bMajor - aMajor; // Décroissant
+          return bMajor - aMajor; // Descending
         }
 
-        // Si même version majeure, comparer les versions complètes (approximatif mais suffisant)
+        // If same major version, compare full versions (approximate but sufficient)
         if (a.version !== b.version) {
           return b.version.localeCompare(a.version, undefined, { numeric: true });
         }
 
-        // Si même version, préférer postgresql > libpq > system
+        // If same version, prefer postgresql > libpq > system
         const sourcePriority = { 'postgresql': 1, 'libpq': 2, 'system': 3 };
         return (sourcePriority[a.source] || 99) - (sourcePriority[b.source] || 99);
       });
@@ -919,7 +919,7 @@ apt-get install -y postgresql-client-${majorVersion}
       return bestMatch.path;
     }
 
-    // Si aucune version compatible trouvée, utiliser le défaut
+    // If no compatible version found, use the default
     logger.warn(`No compatible pg_restore found for backup version ${backupVersion.major}.${backupVersion.minor}, using default: ${this.pgRestorePath}`);
     logger.warn(`Available pg_restore versions: ${Array.from(this.pgRestoreVersionsCache.keys()).join(', ') || 'none'}`);
     return this.pgRestorePath;
@@ -934,7 +934,7 @@ apt-get install -y postgresql-client-${majorVersion}
 
   private verifyPgDumpExecutable(): { valid: boolean; error?: string } {
     try {
-      // Vérifier que le fichier existe
+      // Check that the file exists
       if (!fs.existsSync(this.pgDumpPath)) {
         return {
           valid: false,
@@ -942,7 +942,7 @@ apt-get install -y postgresql-client-${majorVersion}
         };
       }
 
-      // Vérifier que le fichier est exécutable
+      // Check that the file is executable
       try {
         fs.accessSync(this.pgDumpPath, fs.constants.X_OK);
       } catch {
@@ -963,17 +963,17 @@ apt-get install -y postgresql-client-${majorVersion}
 
   private async checkDiskSpace(targetPath: string): Promise<{ available: number; total: number } | null> {
     try {
-      // Résoudre le chemin absolu
+      // Resolve the absolute path
       const absolutePath = path.isAbsolute(targetPath)
         ? targetPath
         : path.join(pathManager.appDataPath, targetPath);
 
-      // Obtenir le répertoire parent si c'est un fichier
+      // Get the parent directory if it's a file
       const dirPath = fs.existsSync(absolutePath) && fs.statSync(absolutePath).isDirectory()
         ? absolutePath
         : path.dirname(absolutePath);
 
-      // Utiliser df pour obtenir l'espace disque (compatible macOS et Linux)
+      // Use df to get disk space (compatible with macOS and Linux)
       const { stdout } = await execAsync(`df -k "${dirPath}" | tail -1`);
 
       // Parser la sortie de df
@@ -997,13 +997,13 @@ apt-get install -y postgresql-client-${majorVersion}
 
   private async estimateDatabaseSize(db: DatabaseConfig): Promise<number | null> {
     try {
-      // Utiliser psql pour obtenir la taille de la base de données
+      // Use psql to get the database size
       const args = [
-        '-t', // Mode tuples seulement (sans en-têtes)
+        '-t', // Tuples-only mode (no headers)
         '-c', `SELECT pg_database_size('${db.name.replace(/'/g, "''")}');`
       ];
 
-      // Si une connection string est fournie, l'utiliser
+      // If a connection string is provided, use it
       if (db.connectionString) {
         const cleanedConnectionString = this.cleanConnectionString(db.connectionString);
         args.unshift('-d', cleanedConnectionString);
@@ -1031,8 +1031,8 @@ apt-get install -y postgresql-client-${majorVersion}
         env.PGSSLMODE = 'require';
       }
 
-      // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string et si un mot de passe est fourni
-      // Pour les bases locales (isLocalBbdump), le mot de passe peut être vide (authentification peer/ident)
+      // Add PGPASSWORD only if not using a connection string and if a password is provided
+      // For local databases (isLocalBbdump), the password can be empty (peer/ident authentication)
       if (!db.connectionString && db.password && db.password.trim().length > 0) {
         env.PGPASSWORD = db.password;
       }
@@ -1062,42 +1062,42 @@ apt-get install -y postgresql-client-${majorVersion}
 
   private async verifyDiskSpace(db: DatabaseConfig, outputPath: string): Promise<{ valid: boolean; error?: string }> {
     try {
-      // Vérifier l'espace disque disponible
+      // Check available disk space
       const diskSpace = await this.checkDiskSpace(outputPath);
 
       if (!diskSpace) {
-        // Si on ne peut pas vérifier l'espace, on continue avec un warning
+        // If we can't check the space, continue with a warning
         logger.warn('Unable to verify disk space, proceeding with backup', db.name);
         return { valid: true };
       }
 
       logger.info(`Disk space available: ${this.formatBytes(diskSpace.available)} / ${this.formatBytes(diskSpace.total)}`, db.name);
 
-      // Essayer d'estimer la taille de la base de données
+      // Try to estimate the database size
       const estimatedSize = await this.estimateDatabaseSize(db);
 
       if (estimatedSize) {
         logger.info(`Estimated database size: ${this.formatBytes(estimatedSize)}`, db.name);
 
-        // Calculer l'espace nécessaire avec une marge de sécurité
-        // pg_dump avec compression produit généralement des fichiers entre 5% et 20% de la taille originale
-        // Utiliser la même logique que executeBackup pour le niveau de compression
-        const compressionLevel = db.compressionLevel ?? 6; // Par défaut niveau 6, comme dans executeBackup
+        // Calculate the required space with a safety margin
+        // pg_dump with compression generally produces files between 5% and 20% of the original size
+        // Use the same logic as executeBackup for the compression level
+        const compressionLevel = db.compressionLevel ?? 6; // Default level 6, same as executeBackup
 
         let compressionFactor: number;
 
         if (compressionLevel > 0) {
           // Avec compression (format custom -F c -Z N)
-          // Facteur de compression observé : ~8-15% pour des données textuelles
+          // Observed compression factor: ~8-15% for text data
           // On utilise 15% comme estimation conservatrice
           compressionFactor = 0.15;
         } else {
           // Sans compression explicite (niveau 0)
-          // Le format custom compresse quand même légèrement
+          // The custom format still compresses slightly
           compressionFactor = 0.35;
         }
 
-        // Ajouter une marge de sécurité supplémentaire de 50%
+        // Add an additional 50% safety margin
         const requiredSpace = estimatedSize * compressionFactor * 1.5;
 
         logger.info(`Compression level: ${compressionLevel}, factor: ${compressionFactor * 100}%, required space (with 50% margin): ${this.formatBytes(requiredSpace)}`, db.name);
@@ -1109,7 +1109,7 @@ apt-get install -y postgresql-client-${majorVersion}
           };
         }
       } else {
-        // Si on ne peut pas estimer la taille, vérifier qu'il y a au moins 1 Go disponible
+        // If we can't estimate the size, check that at least 1 GB is available
         const minRequiredSpace = 1024 * 1024 * 1024; // 1 Go
 
         if (diskSpace.available < minRequiredSpace) {
@@ -1125,7 +1125,7 @@ apt-get install -y postgresql-client-${majorVersion}
       return { valid: true };
     } catch (error) {
       logger.warn(`Error verifying disk space: ${error}`, db.name);
-      // En cas d'erreur, on continue avec un warning plutôt que de bloquer
+      // In case of error, continue with a warning rather than blocking
       return { valid: true };
     }
   }
@@ -1166,7 +1166,7 @@ apt-get install -y postgresql-client-${majorVersion}
       };
     }
 
-    // Validation du nom de la base de données (pas de caractères dangereux)
+    // Validate the database name (no dangerous characters)
     const dangerousChars = /[;&|`$(){}[\]<>\\]/;
     if (dangerousChars.test(db.name)) {
       return {
@@ -1183,7 +1183,7 @@ apt-get install -y postgresql-client-${majorVersion}
       };
     }
 
-    // Validation du host (bloquer les caractères suspects)
+    // Validate the host (block suspicious characters)
     if (dangerousChars.test(db.host)) {
       return {
         valid: false,
@@ -1192,9 +1192,9 @@ apt-get install -y postgresql-client-${majorVersion}
     }
 
     // Validation du chemin de sortie contre path traversal
-    // db.output peut être absent (géré plus bas dans executeBackup avec le chemin par défaut)
+    // db.output may be absent (handled below in executeBackup with the default path)
     if (!db.output || db.output.trim().length === 0) {
-      return { valid: true }; // Le chemin par défaut sera utilisé dans executeBackup
+      return { valid: true }; // The default path will be used in executeBackup
     }
 
     const normalizedPath = path.normalize(db.output);
@@ -1207,14 +1207,14 @@ apt-get install -y postgresql-client-${majorVersion}
       };
     }
 
-    // Bloquer les chemins absolus suspects (sauf s'ils sont dans des répertoires autorisés)
+    // Block suspicious absolute paths (unless they are in authorized directories)
     if (path.isAbsolute(db.output)) {
       const outputDir = path.dirname(db.output);
       const appDataPath = pathManager.appDataPath;
       const backupsPath = pathManager.backupsPath;
       const homeDir = require('os').homedir();
 
-      // Vérifier que le chemin absolu commence par un répertoire autorisé
+      // Check that the absolute path starts with an authorized directory
       if (!outputDir.startsWith(appDataPath) &&
         !outputDir.startsWith(backupsPath) &&
         !outputDir.startsWith(homeDir) &&
@@ -1227,7 +1227,7 @@ apt-get install -y postgresql-client-${majorVersion}
       }
     }
 
-    // Vérifier que le nom de fichier ne contient pas de caractères null
+    // Check that the filename doesn't contain null characters
     if (db.output.includes('\0')) {
       return {
         valid: false,
@@ -1254,7 +1254,7 @@ apt-get install -y postgresql-client-${majorVersion}
         };
       }
 
-      // Limiter le nombre de jobs à un maximum raisonnable
+      // Limit the number of jobs to a reasonable maximum
       if (db.jobs > 32) {
         return {
           valid: false,
@@ -1272,7 +1272,7 @@ apt-get install -y postgresql-client-${majorVersion}
         };
       }
 
-      // Limiter le timeout à 24 heures maximum
+      // Limit the timeout to 24 hours maximum
       const maxTimeout = 24 * 60 * 60 * 1000; // 24 heures
       if (db.backupTimeout > maxTimeout) {
         return {
@@ -1289,7 +1289,7 @@ apt-get install -y postgresql-client-${majorVersion}
     const timestamp = new Date().toISOString();
     logger.info(`Starting backup`, db.name);
 
-    // Valider la configuration de la base de données
+    // Validate the database configuration
     const validation = this.validateDatabaseConfig(db);
     if (!validation.valid) {
       const errorMsg = validation.error || 'Database configuration validation failed';
@@ -1302,7 +1302,7 @@ apt-get install -y postgresql-client-${majorVersion}
       };
     }
 
-    // Vérifier que pg_dump est disponible et exécutable
+    // Check that pg_dump is available and executable
     const verification = this.verifyPgDumpExecutable();
     if (!verification.valid) {
       const errorMsg = verification.error || 'pg_dump verification failed';
@@ -1315,21 +1315,21 @@ apt-get install -y postgresql-client-${majorVersion}
       };
     }
 
-    // Construire le chemin de sortie
-    // Si db.output n'est pas défini ou vide, utiliser le chemin par défaut
+    // Build the output path
+    // If db.output is not defined or empty, use the default path
     let outputPath: string;
     if (!db.output || db.output.trim() === '') {
-      // Utiliser le chemin par défaut des backups
+      // Use the default backup path
       outputPath = path.join(pathManager.backupsPath, `${db.id}.backup`);
     } else if (path.isAbsolute(db.output)) {
-      // Si c'est un chemin absolu, vérifier s'il pointe vers un dossier ou un fichier
-      // Utiliser l'extension du dernier segment (pas includes('.') qui matche .config, .local, etc.)
+      // If it's an absolute path, check if it points to a directory or a file
+      // Use the extension of the last segment (not includes('.') which matches .config, .local, etc.)
       const lastSegment = path.basename(db.output);
       if (lastSegment.includes('.') && !lastSegment.startsWith('.')) {
-        // Le dernier segment a une extension (ex: backup.backup) — c'est un fichier
+        // The last segment has an extension (e.g., backup.backup) — it's a file
         outputPath = db.output;
       } else {
-        // C'est un dossier (ou un dossier caché comme .config), ajouter le nom du fichier
+        // It's a directory (or a hidden directory like .config), add the filename
         outputPath = path.join(db.output, `${db.id}.backup`);
       }
     } else {
@@ -1351,7 +1351,7 @@ apt-get install -y postgresql-client-${majorVersion}
       fs.mkdirSync(outputDir, { recursive: true });
     }
 
-    // Vérifier l'espace disque disponible
+    // Check available disk space
     const diskSpaceCheck = await this.verifyDiskSpace(db, outputPath);
     if (!diskSpaceCheck.valid) {
       const errorMsg = diskSpaceCheck.error || 'Disk space verification failed';
@@ -1364,7 +1364,7 @@ apt-get install -y postgresql-client-${majorVersion}
       };
     }
 
-    // Ajouter un timestamp au nom du fichier
+    // Add a timestamp to the filename
     const ext = path.extname(outputPath);
     const basename = path.basename(outputPath, ext);
     const dirname = path.dirname(outputPath);
@@ -1373,15 +1373,15 @@ apt-get install -y postgresql-client-${majorVersion}
       `${basename}_${new Date().toISOString().replace(/[:.]/g, '-')}${ext}`
     );
 
-    // Configuration par défaut
+    // Default configuration
     const compressionLevel = db.compressionLevel ?? 6;
     const jobs = db.jobs ?? 1;
-    const timeout = db.backupTimeout ?? 30 * 60 * 1000; // 30 minutes par défaut
+    const timeout = db.backupTimeout ?? 30 * 60 * 1000; // 30 minutes by default
 
     // Trouver le pg_dump compatible avec la version du serveur
     const compatiblePgDump = await this.findCompatiblePgDump(db);
 
-    // Vérifier la version de pg_dump pour s'assurer qu'elle correspond
+    // Check the pg_dump version to ensure it matches
     try {
       const { stdout } = await execAsync(`"${compatiblePgDump}" --version`);
       const versionMatch = stdout.match(/(\d+\.\d+)/);
@@ -1394,7 +1394,7 @@ apt-get install -y postgresql-client-${majorVersion}
     }
 
     return new Promise((resolve) => {
-      // Construire les arguments pg_dump
+      // Build the pg_dump arguments
       const args = [
         '-F', 'c',
         '-b',
@@ -1402,7 +1402,7 @@ apt-get install -y postgresql-client-${majorVersion}
         '-f', timestampedPath,
       ];
 
-      // Si une connection string est fournie, l'utiliser
+      // If a connection string is provided, use it
       if (db.connectionString) {
         const cleanedConnectionString = this.cleanConnectionString(db.connectionString);
         args.push('-d', cleanedConnectionString);
@@ -1423,12 +1423,12 @@ apt-get install -y postgresql-client-${majorVersion}
         args.push(db.name);
       }
 
-      // Ajouter le niveau de compression si > 0
+      // Add the compression level if > 0
       if (compressionLevel > 0) {
         args.push('-Z', compressionLevel.toString());
       }
 
-      // Ajouter la parallélisation si > 1
+      // Add parallelization if > 1
       if (jobs > 1) {
         args.push('--jobs', jobs.toString());
       }
@@ -1446,8 +1446,8 @@ apt-get install -y postgresql-client-${majorVersion}
         env.PGSSLCERT = 'disable'; // Accept self-signed certificates
       }
 
-      // Ajouter PGPASSWORD uniquement si on n'utilise pas de connection string et si un mot de passe est fourni
-      // Pour les bases locales (isLocalBbdump), le mot de passe peut être vide (authentification peer/ident)
+      // Add PGPASSWORD only if not using a connection string and if a password is provided
+      // For local databases (isLocalBbdump), the password can be empty (peer/ident authentication)
       if (!db.connectionString && db.password && db.password.trim().length > 0) {
         env.PGPASSWORD = db.password;
       }
@@ -1494,7 +1494,7 @@ apt-get install -y postgresql-client-${majorVersion}
           logger.warn(`Backup timeout reached (${timeout}ms), killing pg_dump...`, db.name);
           pgDump.kill('SIGTERM');
 
-          // Si SIGTERM ne fonctionne pas après 5 secondes, utiliser SIGKILL
+          // If SIGTERM doesn't work after 5 seconds, use SIGKILL
           setTimeout(() => {
             if (!pgDump.killed) {
               logger.warn(`SIGTERM failed, using SIGKILL...`, db.name);
@@ -1504,7 +1504,7 @@ apt-get install -y postgresql-client-${majorVersion}
         }
       }, timeout);
 
-      // Safety timeout: garantit le cleanup même si close ne se déclenche jamais
+      // Safety timeout: ensures cleanup even if close never fires
       const safetyTimeoutHandle = setTimeout(() => {
         if (!cleanedUp) {
           logger.warn(`Safety timeout: cleaning up signal handlers for backup of ${db.name}`);
@@ -1521,7 +1521,7 @@ apt-get install -y postgresql-client-${majorVersion}
         }
       }, timeout + 30000);
 
-      // Écouter les signaux
+      // Listen for signals
       process.on('SIGTERM', signalHandler);
       process.on('SIGINT', signalHandler);
 
@@ -1550,7 +1550,7 @@ apt-get install -y postgresql-client-${majorVersion}
       pgDump.on('close', async (code) => {
         cleanup();
 
-        // Vérifier si le processus a été tué par timeout ou signal
+        // Check if the process was killed by timeout or signal
         if (isTimedOut) {
           const errorMsg = `Backup timeout reached (${timeout}ms)`;
           logger.error(errorMsg, db.name);
@@ -1576,25 +1576,25 @@ apt-get install -y postgresql-client-${majorVersion}
         }
 
         if (code === 0) {
-          // Si le chiffrement est activé, chiffrer le fichier
+          // If encryption is enabled, encrypt the file
           if (db.encryptBackups) {
             const encryptedPath = timestampedPath + '.encrypted';
 
             try {
               logger.info(`Encrypting backup file...`, db.name);
 
-              // Chiffrer le fichier
+              // Encrypt the file
               await fileEncryptionManager.encryptFile(timestampedPath, encryptedPath);
 
-              // Supprimer le fichier non chiffré
+              // Delete the unencrypted file
               try {
                 fs.unlinkSync(timestampedPath);
               } catch (unlinkError) {
                 logger.warn(`Failed to delete unencrypted backup: ${unlinkError}`, db.name);
-                // Continue quand même pour renommer le fichier chiffré
+                // Continue anyway to rename the encrypted file
               }
 
-              // Renommer le fichier chiffré
+              // Rename the encrypted file
               try {
                 fs.renameSync(encryptedPath, timestampedPath);
               } catch (renameError) {
@@ -1617,13 +1617,13 @@ apt-get install -y postgresql-client-${majorVersion}
 
               // Nettoyage des fichiers en cas d'erreur
               try {
-                // Supprimer le fichier chiffré partiel s'il existe
+                // Delete the partial encrypted file if it exists
                 if (fs.existsSync(encryptedPath)) {
                   fs.unlinkSync(encryptedPath);
                   logger.info(`Cleaned up partial encrypted file: ${encryptedPath}`, db.name);
                 }
 
-                // Supprimer le fichier non chiffré également
+                // Also delete the unencrypted file
                 if (fs.existsSync(timestampedPath)) {
                   fs.unlinkSync(timestampedPath);
                   logger.info(`Cleaned up unencrypted backup file: ${timestampedPath}`, db.name);
@@ -1768,7 +1768,7 @@ apt-get install -y postgresql-client-${majorVersion}
     // Accept both absolute paths and filenames (relative to backupsPath)
     const backupPath = path.isAbsolute(backupFile) ? backupFile : path.join(pathManager.backupsPath, backupFile);
 
-    // Vérifier que le fichier existe
+    // Check that the file exists
     if (!fs.existsSync(backupPath)) {
       const errorMsg = `Backup file not found: ${backupPath}`;
       logger.error(errorMsg, target.name);
@@ -1780,7 +1780,7 @@ apt-get install -y postgresql-client-${majorVersion}
       };
     }
 
-    // Vérifier si le fichier est chiffré et le déchiffrer si nécessaire
+    // Check if the file is encrypted and decrypt it if needed
     let actualBackupPath = backupPath;
     let tempDecryptedPath: string | null = null;
 
@@ -1795,7 +1795,7 @@ apt-get install -y postgresql-client-${majorVersion}
         const errorMsg = `Error during decryption: ${decryptError}`;
         logger.error(errorMsg, target.name);
 
-        // Nettoyer le fichier temporaire partiel si nécessaire
+        // Clean up the partial temporary file if needed
         if (tempDecryptedPath && fs.existsSync(tempDecryptedPath)) {
           try {
             fs.unlinkSync(tempDecryptedPath);
@@ -1814,7 +1814,7 @@ apt-get install -y postgresql-client-${majorVersion}
       }
     }
 
-    // Fonction de nettoyage centralisée pour le fichier temporaire
+    // Centralized cleanup function for the temporary file
     const cleanupTempFile = () => {
       if (tempDecryptedPath && fs.existsSync(tempDecryptedPath)) {
         try {

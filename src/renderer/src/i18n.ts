@@ -98,6 +98,11 @@ export const translations = {
                 modeManualTitle: 'Manual Entry',
                 modeManualDesc: 'Enter connection details manually',
                 stepIndicator: 'Step {current} of {total}'
+            },
+            providers: {
+                quickConnect: 'Quick connect',
+                supabaseHint: 'Paste your connection string from Project Settings > Database > Connection string',
+                neonHint: 'Paste your connection string from the Neon dashboard > Connection Details'
             }
         },
         proxy: {
@@ -1031,7 +1036,8 @@ export const translations = {
             updated: 'Project "{name}" updated',
             deleted: 'Project "{name}" deleted',
             databaseMoved: 'Database moved successfully',
-            addDb: 'Add DB'
+            addDb: 'Add DB',
+            customColor: 'Custom color'
         }
     },
     fr: {
@@ -1133,6 +1139,11 @@ export const translations = {
                 modeManualTitle: 'Saisie manuelle',
                 modeManualDesc: 'Entrez les détails de connexion manuellement',
                 stepIndicator: 'Étape {current} sur {total}'
+            },
+            providers: {
+                quickConnect: 'Connexion rapide',
+                supabaseHint: 'Collez votre chaîne de connexion depuis Project Settings > Database > Connection string',
+                neonHint: 'Collez votre chaîne de connexion depuis le dashboard Neon > Connection Details'
             }
         },
         proxy: {
@@ -2065,7 +2076,8 @@ export const translations = {
             updated: 'Projet "{name}" mis à jour',
             deleted: 'Projet "{name}" supprimé',
             databaseMoved: 'Base de données déplacée',
-            addDb: 'Ajouter'
+            addDb: 'Ajouter',
+            customColor: 'Couleur personnalisée'
         }
     }
 };

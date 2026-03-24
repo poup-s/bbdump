@@ -2,7 +2,7 @@
   "databases": [
     {
       "name": "test",
-      "displayName": "Base de Test",
+      "displayName": "Test Database",
       "host": "127.0.0.1",
       "port": 5432,
       "user": "postgres",
@@ -13,7 +13,7 @@
     },
     {
       "name": "db1",
-      "displayName": "Base de Production",
+      "displayName": "Production Database",
       "host": "127.0.0.1",
       "port": 5432,
       "user": "postgres",
