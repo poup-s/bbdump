@@ -23,6 +23,9 @@ interface TrayProject {
   color: string;
   databaseIds: string[];
   masked?: boolean;
+  proxyEnabled?: boolean;
+  proxyTargetDbId?: string | null;
+  proxyPort?: number;
 }
 
 interface TrayBackupStats {
@@ -45,6 +48,7 @@ const projects = ref<TrayProject[]>([]);
 const viewMode = ref<'list' | 'project'>('project');
 const collapsedProjects = ref<Set<string>>(new Set());
 const backupStats = ref<TrayBackupStats>({ total: 0, totalSize: 0 });
+const proxyStatuses = ref<Record<string, { running: boolean; port: number; activeConnections: number }>>({});
 const loading = ref(true);
 
 // MCP Confirmation state
@@ -158,18 +162,41 @@ const loadData = async () => {
       name: p.name,
       color: p.color || 'bg-blue-500',
       databaseIds: Array.isArray(p.databaseIds) ? p.databaseIds : [],
-      masked: p.masked
+      masked: p.masked,
+      proxyEnabled: p.proxyEnabled || false,
+      proxyTargetDbId: p.proxyTargetDbId || null,
+      proxyPort: p.proxyPort || 0,
     }));
     viewMode.value = 'project';
 
-    const backupsResult = await ipcRenderer.invoke('get-backups');
+    const [backupsResult, statuses] = await Promise.all([
+      ipcRenderer.invoke('get-backups'),
+      ipcRenderer.invoke('proxy-status-all'),
+    ]);
     if (backupsResult?.stats) {
       backupStats.value = backupsResult.stats;
     }
+    proxyStatuses.value = statuses || {};
   } catch (err) {
     console.error('Tray: failed to load data', err);
   } finally {
     loading.value = false;
+  }
+};
+
+const switchProxyTarget = async (projectId: string, dbId: string, dbName: string) => {
+  // Skip if already the target
+  const project = projects.value.find(p => p.id === projectId);
+  if (project?.proxyTargetDbId === dbId) return;
+
+  const confirmed = window.confirm(t('proxy.confirmTarget', { name: dbName }));
+  if (!confirmed) return;
+
+  try {
+    await ipcRenderer.invoke('proxy-switch-target', projectId, dbId);
+    await loadData();
+  } catch (err) {
+    console.error('Tray: failed to switch proxy target', err);
   }
 };
 
@@ -365,6 +392,13 @@ onUnmounted(() => {
                 {{ project.masked ? '••••••••' : project.name }}
               </span>
               <span class="text-[9px] text-zinc-600 font-medium">{{ getProjectDatabases(project).length }}</span>
+              <!-- Proxy status indicator -->
+              <template v-if="project.proxyEnabled">
+                <span v-if="proxyStatuses[project.id]?.running" class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                <span v-else-if="!project.proxyTargetDbId" class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                <span v-else class="w-1.5 h-1.5 rounded-full bg-zinc-500 shrink-0" />
+                <span class="text-[8px] text-zinc-500 font-mono">:{{ proxyStatuses[project.id]?.port || project.proxyPort }}</span>
+              </template>
               <svg
                 class="w-3 h-3 text-zinc-600 transition-transform duration-200"
                 :class="{ '-rotate-90': collapsedProjects.has(project.id) }"
@@ -380,7 +414,21 @@ onUnmounted(() => {
                 :key="db.id"
                 class="pl-8 pr-4 py-2 flex items-center gap-3 hover:bg-zinc-800/50 transition-colors border-b border-zinc-800/30 last:border-b-0"
               >
-                <div class="shrink-0">
+                <!-- Proxy target radio (replaces status dot when proxy enabled) -->
+                <button
+                  v-if="project.proxyEnabled"
+                  @click.stop="switchProxyTarget(project.id, db.id, db.displayName || db.name)"
+                  class="w-3 h-3 rounded-full border-[1.5px] shrink-0 flex items-center justify-center transition-colors"
+                  :class="project.proxyTargetDbId === db.id
+                    ? 'border-emerald-500 bg-emerald-500'
+                    : !project.proxyTargetDbId
+                      ? 'border-amber-400 animate-pulse'
+                      : 'border-zinc-600 hover:border-emerald-500'"
+                  :title="project.proxyTargetDbId === db.id ? t('proxy.activeTarget') : t('proxy.setTarget')"
+                >
+                  <div v-if="project.proxyTargetDbId === db.id" class="w-1 h-1 rounded-full bg-white" />
+                </button>
+                <div v-else class="shrink-0">
                   <div class="w-1.5 h-1.5 rounded-full" :class="statusColor(db.status)"></div>
                 </div>
                 <div class="flex-1 min-w-0">
