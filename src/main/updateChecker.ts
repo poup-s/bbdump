@@ -78,7 +78,7 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
     return {
       updateAvailable,
       version: info.version,
-      url: `https://github.com/poup-s/bbDump-app/releases/tag/v${info.version}`,
+      url: `https://github.com/poup-s/bbdump/releases/tag/v${info.version}`,
       releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
     };
   } catch (error) {

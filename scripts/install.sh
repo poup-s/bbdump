@@ -2,13 +2,13 @@
 set -e
 
 # bbdump installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/poup-s/bbDump-app/main/scripts/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/poup-s/bbdump/main/scripts/install.sh | bash
 # Override: BBDUMP_VERSION=1.0.9 curl -fsSL ... | bash
 # Skip deps: BBDUMP_NO_DEPS=1 curl -fsSL ... | bash
 #        or: curl -fsSL ... | bash -s -- --no-deps
 # Uninstall: curl -fsSL ... | bash -s -- --uninstall
 
-REPO="poup-s/bbDump-app"
+REPO="poup-s/bbdump"
 APP_NAME="bbdump"
 GITHUB_API="https://api.github.com/repos/${REPO}/releases/latest"
 GITHUB_DL="https://github.com/${REPO}/releases/download"

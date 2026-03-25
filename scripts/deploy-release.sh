@@ -9,7 +9,7 @@ set -e
 #   npm run deploy:release --skip-win     → skip Windows build
 #   npm run deploy:release minor --skip-win
 
-RELEASE_REPO="poup-s/bbDump-app"
+RELEASE_REPO="poup-s/bbdump"
 BUMP="patch"
 SKIP_WIN=0
 

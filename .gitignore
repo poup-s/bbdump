@@ -98,6 +98,9 @@ coverage/
 *.tar
 *.zip
 
+# Dist artifacts
+.dist/
+
 # Electron builder
 electron-builder.yml
 

@@ -23,7 +23,7 @@ Built with Electron, Vue 3, and Tailwind CSS.
 
 ### From Release (recommended)
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/poup-s/bbDump-app/releases):
+Download the latest release for your platform from [GitHub Releases](https://github.com/poup-s/bbdump/releases):
 
 | Platform | File |
 |----------|------|
@@ -41,8 +41,8 @@ xattr -cr /Applications/bbdump.app
 ### From Source
 
 ```bash
-git clone https://github.com/poup-s/bbDump-app.git
-cd bbDump-app
+git clone https://github.com/poup-s/bbdump.git
+cd bbdump
 npm install
 npm run dev
 ```
