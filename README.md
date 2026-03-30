@@ -4,7 +4,11 @@
 
 A desktop application for managing PostgreSQL databases — backups, restores, scheduling, encryption, data browsing, and more.
 
-**[poups.dev/bbdump](https://poups.dev/bbdump)**
+<p align="center">
+  <a href="https://poups.dev/bbdump">Website</a> &middot;
+  <a href="https://github.com/poup-s/bbdump/releases">Download</a> &middot;
+  <a href="https://github.com/poup-s/bbdump/issues">Report a bug</a>
+</p>
 
 ![Dashboard](captures/dashboard.png)
 
