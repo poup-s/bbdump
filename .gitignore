@@ -49,6 +49,10 @@ $RECYCLE.BIN/
 .directory
 .Trash-*
 
+# Claude Code
+CLAUDE.md
+.claude/
+
 # IDE
 .vscode/
 .idea/
