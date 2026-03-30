@@ -1,8 +1,13 @@
-# bbdump
+<p align="center">
+  <img src="logo.png" alt="bbdump logo" width="120">
+</p>
 
-<img src="logo.png" alt="bbdump logo" width="80">
+<h1 align="center">bbdump</h1>
 
-A desktop application for managing PostgreSQL databases — backups, restores, scheduling, encryption, data browsing, and more.
+<p align="center">
+  A desktop application for managing PostgreSQL databases —<br>
+  backups, restores, scheduling, encryption, data browsing, and more.
+</p>
 
 <p align="center">
   <a href="https://poups.dev/bbdump">Website</a> &middot;
