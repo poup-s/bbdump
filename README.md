@@ -50,6 +50,10 @@ Visual cron editor with presets and per-database controls. Automate backups, vac
 
 ![Tasks](captures/tasks.png)
 
+### MCP Server (Claude Desktop)
+
+bbdump includes a built-in PostgreSQL MCP server that connects Claude to your databases. Install it in one click from Settings — Claude can then explore schemas, read data, run queries, and execute mutations with confirmation prompts. 31 tools exposed including schema inspection, full-text search, query explain, and more.
+
 ### System Tray
 
 Quick access to your projects and databases from the menu bar. Trigger backups and monitor status without opening the full app.
