@@ -2,9 +2,7 @@
 
 <img src="logo.png" alt="bbdump logo" width="80">
 
-A cross-platform desktop application for managing PostgreSQL databases — backups, restores, scheduling, encryption, data browsing, and more.
-
-Built with Electron, Vue 3, and Tailwind CSS.
+A desktop application for managing PostgreSQL databases — backups, restores, scheduling, encryption, data browsing, and more.
 
 ![Dashboard](captures/dashboard.png)
 
@@ -71,7 +69,6 @@ Download the latest release from [GitHub Releases](https://github.com/poup-s/bbd
 |----------|------|
 | macOS (Apple Silicon) | `bbdump-*-arm64.dmg` |
 | macOS (Intel) | `bbdump-*.dmg` |
-| Windows | `bbdump-*.exe` |
 | Linux | `bbdump-*.AppImage` or `bbdump-*.deb` |
 
 **macOS note:** The app is not code-signed. On first launch, right-click the app and select "Open", then confirm. Alternatively:
@@ -97,7 +94,6 @@ npm run dev
 npm run build          # Compile TypeScript + Vite
 npm run dist           # Build + package for current platform
 npm run dist:mac       # macOS (DMG)
-npm run dist:win       # Windows (NSIS + Portable)
 npm run dist:linux     # Linux (AppImage + deb)
 ```
 

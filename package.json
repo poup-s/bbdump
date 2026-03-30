@@ -10,7 +10,6 @@
     "dev": "npm run build && electron .",
     "dist": "npm run build && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac",
-    "dist:win": "npm run build && electron-builder --win",
     "dist:linux": "npm run build && electron-builder --linux",
     "start": "electron .",
     "lint": "eslint src/",
@@ -158,27 +157,6 @@
         "height": 380
       },
       "format": "UDZO"
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64",
-            "ia32"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "logo.png",
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
-      "sign": null,
-      "verifyUpdateCodeSignature": false
     },
     "linux": {
       "target": [
