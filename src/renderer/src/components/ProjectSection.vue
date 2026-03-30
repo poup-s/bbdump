@@ -386,7 +386,7 @@ const onDrop = (event: DragEvent) => {
           </div>
         </div>
       </div>
-      <div v-if="databases.length > 0" class="flex flex-col gap-1.5 mt-3 px-1">
+      <div v-if="databases.length > 0" class="flex flex-col gap-1.5 mt-3 pl-6 pr-1">
         <DatabaseCardCompact
           v-for="db in databases"
           :key="db.id"

@@ -764,7 +764,7 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <div v-if="store.databases.length === 0" class="flex-1 flex flex-col items-center justify-center text-center opacity-60">
+    <div v-if="store.databases.length === 0 && store.projects.length === 0" class="flex-1 flex flex-col items-center justify-center text-center opacity-60">
       <div class="w-24 h-24 bg-surface rounded-full flex items-center justify-center mb-4">
         <svg class="w-12 h-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
