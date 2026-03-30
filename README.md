@@ -33,9 +33,16 @@ Manual and scheduled backups using `pg_dump`/`pg_restore`. Supports custom forma
 
 ### Database Viewer
 
-Browse tables, inspect data, edit rows inline, and search across your database.
+Browse tables, inspect data, search across columns, and inspect row details.
 
 ![Viewer](captures/viewer-data.png)
+
+![Search](captures/viewer-search.png)
+
+Click any row to open the detail panel. Edit fields inline — modified values are highlighted, save or discard with one click.
+
+![Row Detail](captures/viewer-row.png)
+![Edit Row](captures/viewer-edit-row.png)
 
 ### Schema Visualizer
 
@@ -45,9 +52,11 @@ Interactive graph of your database schema — tables, columns, and foreign key r
 
 ### SQL Builder
 
-Visual query builder with SELECT, FROM, WHERE, JOIN, and LIMIT clauses. Write and execute raw SQL queries directly.
+Visual query builder with SELECT, FROM, WHERE, JOIN, and LIMIT clauses. Build queries visually or switch to raw SQL mode.
 
 ![SQL](captures/viewer-sql.png)
+![SQL with results](captures/viewer-sql-2.png)
+![SQL raw mode](captures/viewer-sql-3.png)
 
 ### Proxy Server
 
@@ -60,6 +69,12 @@ Built-in TCP proxy per project to route local connections to any configured data
 Visual cron editor with presets and per-database controls. Automate backups, vacuum, reindex, and health checks.
 
 ![Tasks](captures/tasks.png)
+
+### Logs
+
+Real-time application logs with level and database filtering. Track every backup, restore, and operation.
+
+![Logs](captures/logs.png)
 
 ### MCP Server (Claude Desktop)
 
