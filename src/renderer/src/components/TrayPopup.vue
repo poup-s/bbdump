@@ -1,0 +1,518 @@
+<script setup lang="ts">
+import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ipcRenderer } from '../electron';
+import { useI18n } from '../composables/useI18n';
+
+const { t, setLanguage } = useI18n();
+
+interface TrayDatabase {
+  id: string;
+  name: string;
+  displayName?: string;
+  host: string;
+  enabled?: boolean;
+  lastBackup?: string;
+  status?: 'success' | 'error' | 'running' | 'idle';
+  cron?: string;
+  masked?: boolean;
+}
+
+interface TrayProject {
+  id: string;
+  name: string;
+  color: string;
+  databaseIds: string[];
+  masked?: boolean;
+  proxyEnabled?: boolean;
+  proxyTargetDbId?: string | null;
+  proxyPort?: number;
+}
+
+interface TrayBackupStats {
+  total: number;
+  totalSize: number;
+}
+
+interface McpConfirmRequest {
+  id: string;
+  tool: string;
+  database: string;
+  table?: string;
+  schema?: string;
+  sql: string;
+  description: string;
+}
+
+const databases = ref<TrayDatabase[]>([]);
+const projects = ref<TrayProject[]>([]);
+const viewMode = ref<'list' | 'project'>('project');
+const collapsedProjects = ref<Set<string>>(new Set());
+const backupStats = ref<TrayBackupStats>({ total: 0, totalSize: 0 });
+const proxyStatuses = ref<Record<string, { running: boolean; port: number; activeConnections: number }>>({});
+const loading = ref(true);
+
+// MCP Confirmation state
+const mcpConfirm = ref<McpConfirmRequest | null>(null);
+const countdown = ref(60);
+let countdownInterval: ReturnType<typeof setInterval> | null = null;
+
+const operationLabel = computed(() => {
+  const tool = mcpConfirm.value?.tool;
+  if (!tool) return '';
+  if (tool.includes('insert')) return t('mcp.insert');
+  if (tool.includes('update')) return t('mcp.update');
+  if (tool.includes('delete')) return t('mcp.delete');
+  return t('mcp.write');
+});
+
+const operationColorClass = computed(() => {
+  const tool = mcpConfirm.value?.tool;
+  if (!tool) return 'bg-amber-500/20 text-amber-400';
+  if (tool.includes('insert')) return 'bg-emerald-500/20 text-emerald-400';
+  if (tool.includes('delete')) return 'bg-red-500/20 text-red-400';
+  return 'bg-amber-500/20 text-amber-400';
+});
+
+function startCountdown() {
+  countdown.value = 60;
+  if (countdownInterval) clearInterval(countdownInterval);
+  countdownInterval = setInterval(() => {
+    countdown.value--;
+    if (countdown.value <= 0) {
+      stopCountdown();
+    }
+  }, 1000);
+}
+
+function stopCountdown() {
+  if (countdownInterval) {
+    clearInterval(countdownInterval);
+    countdownInterval = null;
+  }
+}
+
+const approveConfirm = () => {
+  if (!mcpConfirm.value) return;
+  ipcRenderer.invoke('mcp-confirm-response', { id: mcpConfirm.value.id, approved: true });
+  stopCountdown();
+  mcpConfirm.value = null;
+  ipcRenderer.send('mcp-confirm-done');
+};
+
+const alwaysAllowConfirm = async () => {
+  if (!mcpConfirm.value) return;
+  ipcRenderer.invoke('mcp-confirm-response', { id: mcpConfirm.value.id, approved: true });
+  stopCountdown();
+  mcpConfirm.value = null;
+  ipcRenderer.send('mcp-confirm-done');
+  // Save mcpSkipConfirmation setting
+  try {
+    await ipcRenderer.invoke('save-settings', { mcpSkipConfirmation: true });
+  } catch {
+    // Silently ignore — the setting will apply on next mutation
+  }
+};
+
+const denyConfirm = () => {
+  if (!mcpConfirm.value) return;
+  ipcRenderer.invoke('mcp-confirm-response', { id: mcpConfirm.value.id, approved: false });
+  stopCountdown();
+  mcpConfirm.value = null;
+  ipcRenderer.send('mcp-confirm-done');
+};
+
+const toggleProject = (projectId: string) => {
+  if (collapsedProjects.value.has(projectId)) {
+    collapsedProjects.value.delete(projectId);
+  } else {
+    collapsedProjects.value.add(projectId);
+  }
+};
+
+const getProjectDatabases = (project: TrayProject): TrayDatabase[] => {
+  const idSet = new Set(project.databaseIds);
+  return databases.value.filter(db => idSet.has(db.id));
+};
+
+const ungroupedDatabases = computed(() => {
+  const allProjectDbIds = new Set<string>();
+  for (const p of projects.value) {
+    for (const id of p.databaseIds) allProjectDbIds.add(id);
+  }
+  return databases.value.filter(db => !allProjectDbIds.has(db.id));
+});
+
+const loadData = async () => {
+  try {
+    const config = await ipcRenderer.invoke('get-config');
+    if (config?.language) setLanguage(config.language);
+    databases.value = (config?.databases || []).map((db: any) => ({
+      id: db.id,
+      name: db.name,
+      displayName: db.displayName,
+      host: db.host,
+      enabled: db.enabled,
+      lastBackup: db.lastBackup,
+      status: db.status || 'idle',
+      cron: db.cron,
+      masked: db.masked
+    }));
+    projects.value = (config?.projects || []).map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      color: p.color || 'bg-blue-500',
+      databaseIds: Array.isArray(p.databaseIds) ? p.databaseIds : [],
+      masked: p.masked,
+      proxyEnabled: p.proxyEnabled || false,
+      proxyTargetDbId: p.proxyTargetDbId || null,
+      proxyPort: p.proxyPort || 0,
+    }));
+    viewMode.value = 'project';
+
+    const [backupsResult, statuses] = await Promise.all([
+      ipcRenderer.invoke('get-backups'),
+      ipcRenderer.invoke('proxy-status-all'),
+    ]);
+    if (backupsResult?.stats) {
+      backupStats.value = backupsResult.stats;
+    }
+    proxyStatuses.value = statuses || {};
+  } catch (err) {
+    console.error('Tray: failed to load data', err);
+  } finally {
+    loading.value = false;
+  }
+};
+
+const switchProxyTarget = async (projectId: string, dbId: string, dbName: string) => {
+  // Skip if already the target
+  const project = projects.value.find(p => p.id === projectId);
+  if (project?.proxyTargetDbId === dbId) return;
+
+  const confirmed = window.confirm(t('proxy.confirmTarget', { name: dbName }));
+  if (!confirmed) return;
+
+  try {
+    await ipcRenderer.invoke('proxy-switch-target', projectId, dbId);
+    await loadData();
+  } catch (err) {
+    console.error('Tray: failed to switch proxy target', err);
+  }
+};
+
+const openDbViewer = (dbId: string) => {
+  ipcRenderer.send('tray-open-dbviewer', dbId);
+};
+
+const openApp = () => {
+  ipcRenderer.send('tray-open-app');
+};
+
+const formatSize = (bytes: number): string => {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0)} ${units[i]}`;
+};
+
+const statusColor = (status?: string) => {
+  switch (status) {
+    case 'success': return 'bg-emerald-400';
+    case 'error': return 'bg-red-400';
+    case 'running': return 'bg-amber-400 animate-pulse';
+    default: return 'bg-gray-400';
+  }
+};
+
+onMounted(() => {
+  loadData();
+  ipcRenderer.on('tray-refresh', loadData);
+
+  ipcRenderer.on('mcp-confirm-request', (_: any, data: McpConfirmRequest) => {
+    mcpConfirm.value = data;
+    startCountdown();
+  });
+
+  ipcRenderer.on('mcp-confirm-timeout', (_: any, id: string) => {
+    if (mcpConfirm.value?.id === id) {
+      stopCountdown();
+      mcpConfirm.value = null;
+      ipcRenderer.send('mcp-confirm-done');
+    }
+  });
+});
+
+onUnmounted(() => {
+  stopCountdown();
+  ipcRenderer.removeAllListeners('tray-refresh');
+  ipcRenderer.removeAllListeners('mcp-confirm-request');
+  ipcRenderer.removeAllListeners('mcp-confirm-timeout');
+});
+</script>
+
+<template>
+  <div class="w-[320px] select-none p-1">
+    <!-- Card -->
+    <div class="bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl overflow-hidden">
+
+      <!-- ===== MCP CONFIRMATION VIEW ===== -->
+      <template v-if="mcpConfirm">
+        <!-- Header -->
+        <div class="px-4 pt-3 pb-2 flex items-center gap-2 border-b border-zinc-800">
+          <div class="w-6 h-6 bg-amber-500/20 rounded-lg flex items-center justify-center">
+            <svg class="w-3.5 h-3.5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="text-xs font-bold text-white">{{ t('mcp.confirmTitle') }}</div>
+            <div class="text-[10px] text-zinc-400 truncate">{{ t('mcp.confirmMessage') }}</div>
+          </div>
+        </div>
+
+        <!-- Content -->
+        <div class="px-3 py-2.5 space-y-2.5 max-h-[360px] overflow-y-auto">
+          <!-- Operation badge -->
+          <div class="flex items-center gap-2">
+            <span class="px-2 py-0.5 text-[10px] font-bold rounded-md" :class="operationColorClass">
+              {{ operationLabel }}
+            </span>
+            <span class="text-[10px] text-zinc-500 font-mono truncate">{{ mcpConfirm.tool }}</span>
+          </div>
+
+          <!-- Database & Table -->
+          <div class="p-2 bg-zinc-800/50 rounded-lg border border-zinc-700/50 space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] text-zinc-500">{{ t('mcp.database') }}</span>
+              <span class="text-[11px] font-semibold text-white font-mono">{{ mcpConfirm.database }}</span>
+            </div>
+            <div v-if="mcpConfirm.table" class="flex items-center justify-between">
+              <span class="text-[10px] text-zinc-500">{{ t('mcp.table') }}</span>
+              <span class="text-[11px] font-semibold text-white font-mono">
+                {{ mcpConfirm.schema ? `${mcpConfirm.schema}.` : '' }}{{ mcpConfirm.table }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Description -->
+          <div v-if="mcpConfirm.description" class="text-[11px] text-zinc-300">
+            {{ mcpConfirm.description }}
+          </div>
+
+          <!-- SQL Preview -->
+          <div>
+            <div class="text-[10px] text-zinc-500 mb-1">{{ t('mcp.sql') }}</div>
+            <pre class="p-2 bg-black rounded-lg text-[10px] text-emerald-400 font-mono overflow-x-auto max-h-[120px] overflow-y-auto whitespace-pre-wrap break-all border border-zinc-800">{{ mcpConfirm.sql }}</pre>
+          </div>
+
+          <!-- Countdown -->
+          <div class="flex items-center gap-2">
+            <svg class="w-3 h-3 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span class="text-[10px] text-amber-400">{{ t('mcp.timeoutWarning', { seconds: countdown }) }}</span>
+            <div class="flex-1 h-1 bg-zinc-800 rounded-full overflow-hidden">
+              <div
+                class="h-full bg-amber-500 rounded-full transition-all duration-1000 ease-linear"
+                :style="{ width: `${(countdown / 60) * 100}%` }"
+              ></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Buttons -->
+        <div class="px-3 pb-3 pt-1 space-y-1.5">
+          <div class="flex gap-2">
+            <button
+              @click="denyConfirm"
+              class="flex-1 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl text-xs font-bold transition-colors"
+            >
+              {{ t('mcp.deny') }}
+            </button>
+            <button
+              @click="approveConfirm"
+              class="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-1.5"
+            >
+              <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+              </svg>
+              {{ t('mcp.approve') }}
+            </button>
+          </div>
+          <button
+            @click="alwaysAllowConfirm"
+            class="w-full py-1.5 text-[10px] text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50 rounded-lg transition-colors"
+          >
+            {{ t('mcp.alwaysAllow') }}
+          </button>
+        </div>
+      </template>
+
+      <!-- ===== NORMAL TRAY VIEW ===== -->
+      <template v-else>
+        <!-- Header -->
+        <div class="px-4 pt-3 pb-2 flex items-center justify-between border-b border-zinc-800">
+          <div class="flex items-center gap-2">
+            <div class="w-6 h-6 bg-violet-500/20 rounded-lg flex items-center justify-center">
+              <svg class="w-3.5 h-3.5 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
+              </svg>
+            </div>
+            <span class="text-sm font-bold text-white">bbdump</span>
+          </div>
+          <div class="flex items-center gap-1.5 text-[10px] text-zinc-500">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+            {{ databases.length }} {{ t('tray.databases') }}
+          </div>
+        </div>
+
+        <!-- Loading -->
+        <div v-if="loading" class="px-4 py-8 flex items-center justify-center">
+          <svg class="w-5 h-5 text-violet-400 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+        </div>
+
+        <!-- ===== PROJECT MODE ===== -->
+        <div v-else class="max-h-[260px] overflow-y-auto">
+          <div v-if="projects.length === 0 && ungroupedDatabases.length === 0" class="px-4 py-6 text-center text-xs text-zinc-500">
+            {{ t('tray.noDatabases') }}
+          </div>
+
+          <!-- Projects -->
+          <div v-for="project in projects" :key="project.id">
+            <!-- Project header -->
+            <div
+              class="px-4 py-2 flex items-center gap-2 cursor-pointer hover:bg-zinc-800/50 transition-colors"
+              @click="toggleProject(project.id)"
+            >
+              <div class="w-2 h-2 rounded-full shrink-0" :class="project.color.startsWith('custom:') ? '' : project.color" :style="project.color.startsWith('custom:') ? { backgroundColor: project.color.replace('custom:', '') } : {}"></div>
+              <span class="text-[11px] font-bold text-zinc-300 flex-1 truncate">
+                {{ project.masked ? '••••••••' : project.name }}
+              </span>
+              <span class="text-[9px] text-zinc-600 font-medium">{{ getProjectDatabases(project).length }}</span>
+              <!-- Proxy status indicator -->
+              <template v-if="project.proxyEnabled">
+                <span v-if="proxyStatuses[project.id]?.running" class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                <span v-else-if="!project.proxyTargetDbId" class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                <span v-else class="w-1.5 h-1.5 rounded-full bg-zinc-500 shrink-0" />
+                <span class="text-[8px] text-zinc-500 font-mono">:{{ proxyStatuses[project.id]?.port || project.proxyPort }}</span>
+              </template>
+              <svg
+                class="w-3 h-3 text-zinc-600 transition-transform duration-200"
+                :class="{ '-rotate-90': collapsedProjects.has(project.id) }"
+                fill="none" viewBox="0 0 24 24" stroke="currentColor"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+            <!-- Project databases -->
+            <template v-if="!collapsedProjects.has(project.id)">
+              <div
+                v-for="db in getProjectDatabases(project)"
+                :key="db.id"
+                class="pl-8 pr-4 py-2 flex items-center gap-3 hover:bg-zinc-800/50 transition-colors border-b border-zinc-800/30 last:border-b-0"
+              >
+                <!-- Proxy target radio (replaces status dot when proxy enabled) -->
+                <button
+                  v-if="project.proxyEnabled"
+                  @click.stop="switchProxyTarget(project.id, db.id, db.displayName || db.name)"
+                  class="w-3 h-3 rounded-full border-[1.5px] shrink-0 flex items-center justify-center transition-colors"
+                  :class="project.proxyTargetDbId === db.id
+                    ? 'border-emerald-500 bg-emerald-500'
+                    : !project.proxyTargetDbId
+                      ? 'border-amber-400 animate-pulse'
+                      : 'border-zinc-600 hover:border-emerald-500'"
+                  :title="project.proxyTargetDbId === db.id ? t('proxy.activeTarget') : t('proxy.setTarget')"
+                >
+                  <div v-if="project.proxyTargetDbId === db.id" class="w-1 h-1 rounded-full bg-white" />
+                </button>
+                <div v-else class="shrink-0">
+                  <div class="w-1.5 h-1.5 rounded-full" :class="statusColor(db.status)"></div>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-[11px] font-medium text-zinc-300 truncate">{{ db.masked ? '••••••••' : (db.displayName || db.name) }}</div>
+                </div>
+                <button
+                  @click.stop="openDbViewer(db.id)"
+                  class="shrink-0 w-6 h-6 rounded-md flex items-center justify-center transition-all bg-zinc-800 text-zinc-500 hover:bg-violet-500/20 hover:text-violet-400"
+                  :title="t('tray.viewDb')"
+                >
+                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                  </svg>
+                </button>
+              </div>
+            </template>
+            <div class="border-b border-zinc-800/50"></div>
+          </div>
+
+          <!-- Ungrouped databases -->
+          <div v-if="ungroupedDatabases.length > 0">
+            <div
+              v-if="projects.length > 0"
+              class="px-4 py-2 flex items-center gap-2 cursor-pointer hover:bg-zinc-800/50 transition-colors"
+              @click="toggleProject('__ungrouped__')"
+            >
+              <div class="w-2 h-2 rounded-full bg-zinc-500 shrink-0"></div>
+              <span class="text-[11px] font-bold text-zinc-500 flex-1">{{ t('project.ungrouped') }}</span>
+              <span class="text-[9px] text-zinc-600 font-medium">{{ ungroupedDatabases.length }}</span>
+              <svg
+                class="w-3 h-3 text-zinc-600 transition-transform duration-200"
+                :class="{ '-rotate-90': collapsedProjects.has('__ungrouped__') }"
+                fill="none" viewBox="0 0 24 24" stroke="currentColor"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+            <template v-if="!collapsedProjects.has('__ungrouped__')">
+              <div
+                v-for="db in ungroupedDatabases"
+                :key="db.id"
+                class="px-4 py-2.5 flex items-center gap-3 hover:bg-zinc-800/50 transition-colors border-b border-zinc-800/30 last:border-b-0"
+                :class="{ 'pl-8': projects.length > 0 }"
+              >
+                <div class="shrink-0">
+                  <div class="w-1.5 h-1.5 rounded-full" :class="statusColor(db.status)"></div>
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-[11px] font-medium text-zinc-300 truncate">{{ db.masked ? '••••••••' : (db.displayName || db.name) }}</div>
+                </div>
+                <button
+                  @click.stop="openDbViewer(db.id)"
+                  class="shrink-0 w-6 h-6 rounded-md flex items-center justify-center transition-all bg-zinc-800 text-zinc-500 hover:bg-violet-500/20 hover:text-violet-400"
+                  :title="t('tray.viewDb')"
+                >
+                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                  </svg>
+                </button>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- Stats footer -->
+        <div v-if="!loading" class="px-4 py-2 border-t border-zinc-800 flex items-center justify-between text-[10px] text-zinc-500">
+          <span>{{ backupStats.total }} {{ t('tray.totalBackups') }}</span>
+          <span>{{ formatSize(backupStats.totalSize) }}</span>
+        </div>
+
+        <!-- Open app button -->
+        <div class="px-3 pb-3 pt-1">
+          <button
+            @click="openApp"
+            class="w-full py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2 shadow-lg shadow-violet-500/20"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+            {{ t('tray.openApp') }}
+          </button>
+        </div>
+      </template>
+
+    </div>
+  </div>
+</template>

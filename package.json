@@ -1,0 +1,179 @@
+{
+  "name": "bbdump",
+  "version": "1.0.2",
+  "description": "Cross-platform PostgreSQL manager with automated scheduling, encryption, and modern UI",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "build": "tsc && npm run copy:assets && npm run build:renderer",
+    "copy:assets": "mkdir -p dist/main/assets && cp src/main/assets/* dist/main/assets/",
+    "build:renderer": "vite build",
+    "dev": "npm run build && electron .",
+    "dist": "npm run build && electron-builder",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "start": "electron .",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix"
+  },
+  "keywords": [
+    "electron",
+    "postgresql",
+    "backup",
+    "pg_dump",
+    "database",
+    "automation",
+    "cron",
+    "encryption",
+    "cross-platform",
+    "bbdump"
+  ],
+  "author": "Poups <bonjour@poups.dev>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/poup-s/bbdump.git"
+  },
+  "bugs": {
+    "url": "https://github.com/poup-s/bbdump/issues"
+  },
+  "homepage": "https://github.com/poup-s/bbdump#readme",
+  "devDependencies": {
+    "@eslint/js": "^9.39.3",
+    "@tailwindcss/postcss": "^4.1.17",
+    "@types/node": "^20.10.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/pg-format": "^1.0.5",
+    "@vitejs/plugin-vue": "^6.0.2",
+    "autoprefixer": "^10.4.22",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1",
+    "eslint": "^9.39.3",
+    "eslint-plugin-vue": "^10.8.0",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.17",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1",
+    "vite": "^7.2.4",
+    "vue-eslint-parser": "^10.4.0",
+    "vue-tsc": "^3.1.4"
+  },
+  "dependencies": {
+    "@headlessui/vue": "^1.7.23",
+    "@tresjs/cientos": "^5.1.1",
+    "@tresjs/core": "^5.1.1",
+    "@types/pg": "^8.15.6",
+    "@vue-flow/background": "^1.3.2",
+    "@vue-flow/controls": "^1.1.3",
+    "@vue-flow/core": "^1.48.1",
+    "@vueuse/core": "^14.0.0",
+    "dagre": "^0.8.5",
+    "electron-updater": "^6.7.3",
+    "node-cron": "^3.0.3",
+    "pg": "^8.16.3",
+    "pg-format": "^1.0.4",
+    "three": "^0.181.2",
+    "vue": "^3.5.24"
+  },
+  "build": {
+    "appId": "com.bbdump.app",
+    "productName": "bbdump",
+    "publish": {
+      "provider": "github",
+      "owner": "poup-s",
+      "repo": "bbdump"
+    },
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "logo.png"
+    ],
+    "extraResources": [
+      {
+        "from": "mcp-postgres/build",
+        "to": "mcp-postgres",
+        "filter": [
+          "**/*.js"
+        ]
+      },
+      {
+        "from": "mcp-postgres/node_modules",
+        "to": "mcp-postgres/node_modules",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "identity": null,
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "icon": "logo.png",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "entitlements": null,
+      "entitlementsInherit": null,
+      "extendInfo": {
+        "LSMinimumSystemVersion": "10.13"
+      }
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "icon": "logo.png",
+      "background": null,
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "format": "UDZO"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Utility",
+      "icon": "logo.png",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    }
+  }
+}

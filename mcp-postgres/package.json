@@ -1,0 +1,27 @@
+{
+  "name": "mcp-postgres",
+  "version": "1.0.0",
+  "description": "PostgreSQL MCP Server - Read-only database exploration for LLMs",
+  "type": "module",
+  "main": "./build/index.js",
+  "bin": {
+    "mcp-postgres": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "pg": "^8.16.3",
+    "pg-format": "^1.0.4",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "@types/pg": "^8.11.2",
+    "@types/pg-format": "^1.0.5",
+    "typescript": "^5.9.0"
+  }
+}

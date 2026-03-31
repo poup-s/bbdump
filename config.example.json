@@ -1,0 +1,45 @@
+{
+  "databases": [
+    {
+      "name": "test",
+      "displayName": "Test Database",
+      "host": "127.0.0.1",
+      "port": 5432,
+      "user": "postgres",
+      "password": "encrypted_password_here",
+      "cron": "0 2 * * *",
+      "output": "backups/test.backup",
+      "enabled": true
+    },
+    {
+      "name": "db1",
+      "displayName": "Production Database",
+      "host": "127.0.0.1",
+      "port": 5432,
+      "user": "postgres",
+      "password": "encrypted_password_here",
+      "cron": "",
+      "output": "backups/db1.backup"
+    },
+    {
+      "name": "analytics",
+      "displayName": "Analytics Marketing",
+      "host": "127.0.0.1",
+      "port": 5432,
+      "user": "postgres",
+      "password": "encrypted_password_here",
+      "cron": "0 0 * * 0",
+      "output": "backups/analytics.backup",
+      "enabled": false
+    },
+    {
+      "name": "postgres",
+      "host": "127.0.0.1",
+      "port": 5432,
+      "user": "postgres",
+      "password": "encrypted_password_here",
+      "cron": "0 3 * * 1-5",
+      "output": "backups/postgres.backup"
+    }
+  ]
+}
