@@ -236,7 +236,7 @@ build_download_url() {
       FILENAME="${APP_NAME}-${VERSION}-${LINUX_ARCH}.AppImage"
       ;;
   esac
-  DOWNLOAD_URL="${GITHUB_DL}/${VERSION}/${FILENAME}"
+  DOWNLOAD_URL="${GITHUB_DL}/v${VERSION}/${FILENAME}"
 }
 
 # --- Download ---
