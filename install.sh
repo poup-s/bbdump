@@ -248,65 +248,10 @@ download() {
   TMP_DIR=$(mktemp -d)
   DOWNLOAD_PATH="${TMP_DIR}/${FILENAME}"
 
-  # Try to get file size for custom progress bar
-  local total_size
-  total_size=$(curl -sIL "$DOWNLOAD_URL" | grep -i "content-length" | tail -n 1 | awk '{print $2}' | tr -d '\r')
-
-  echo -e "    ${T2}┌──────────────────────────────────────────────────┐${R}"
-
-  # Fallback to standard curl progress if total_size cannot be determined or animations disabled
-  if ! [[ "$total_size" =~ ^[0-9]+$ ]] || [ "$ENABLE_ANIM" -eq 0 ]; then
-    if curl -fSL --progress-bar -o "$DOWNLOAD_PATH" "$DOWNLOAD_URL"; then
-      echo -e "    ${T2}└──────────────────────────────────────────────────┘${R}"
-      echo ""
-      success "Download complete"
-    else
-      echo -e "    ${T2}└──────────────────────────────────────────────────┘${R}"
-      error "Download failed. Version ${VERSION} may not exist for ${PLATFORM}/${ARCH}."
-    fi
-    return
-  fi
-
-  # Custom animated progress bar
-  curl -fSL "$DOWNLOAD_URL" -o "$DOWNLOAD_PATH" > /dev/null 2>&1 &
-  local curl_pid=$!
-
-  printf "    ${T2}│${R}                                                  ${T2}│${R}   0%%\r"
-
-  while kill -0 "$curl_pid" 2>/dev/null; do
-    local current_size=0
-    if [ -f "$DOWNLOAD_PATH" ]; then
-      current_size=$(wc -c < "$DOWNLOAD_PATH" | tr -d ' ')
-    fi
-
-    local pct=$(( current_size * 100 / total_size ))
-    [ "$pct" -gt 100 ] && pct=100
-    local filled=$(( pct / 2 ))
-    local empty=$(( 50 - filled ))
-
-    local bar_filled=""
-    local i
-    for ((i=0; i<filled; i++)); do bar_filled="${bar_filled}█"; done
-    local bar_empty=""
-    for ((i=0; i<empty; i++)); do bar_empty="${bar_empty} "; done
-
-    printf "\r    ${T2}│${R}${G}%s${R}%s${T2}│${R} %3d%%" "$bar_filled" "$bar_empty" "$pct"
-    sleep 0.1
-  done
-
-  wait "$curl_pid"
-  local status=$?
-
-  if [ $status -eq 0 ]; then
-    local bar_filled=""
-    local i
-    for ((i=0; i<50; i++)); do bar_filled="${bar_filled}█"; done
-    printf "\r    ${T2}│${R}${G}%s${R}${T2}│${R} 100%%\n" "$bar_filled"
-    echo -e "    ${T2}└──────────────────────────────────────────────────┘${R}"
+  if curl -fSL --progress-bar -H "User-Agent: bbdump-installer" -o "$DOWNLOAD_PATH" "$DOWNLOAD_URL"; then
     echo ""
     success "Download complete"
   else
-    printf "\n"
     error "Download failed. Version ${VERSION} may not exist for ${PLATFORM}/${ARCH}."
   fi
 }
