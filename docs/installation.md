@@ -20,13 +20,13 @@ curl -fsSL https://poups.dev/bbdump.sh | bash | bash
 
 ```bash
 # Install a specific version
-BBDUMP_VERSION=1.2.2 curl -fsSL https://raw.githubusercontent.com/poup-s/bbdump/main/install.sh | bash
+BBDUMP_VERSION=1.2.2 curl -fsSL https://poups.dev/bbdump.sh | bash | bash
 
 # Install without dependencies
-curl -fsSL https://raw.githubusercontent.com/poup-s/bbdump/main/install.sh | bash -s -- --no-deps
+curl -fsSL https://poups.dev/bbdump.sh | bash | bash -s -- --no-deps
 
 # Uninstall
-curl -fsSL https://raw.githubusercontent.com/poup-s/bbdump/main/install.sh | bash -s -- --uninstall
+curl -fsSL https://poups.dev/bbdump.sh | bash | bash -s -- --uninstall
 ```
 
 The installer handles:
