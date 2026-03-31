@@ -91,7 +91,15 @@ Quick access to your projects and databases from the menu bar. Trigger backups a
 
 ## Installation
 
-### From Release (recommended)
+### Quick Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/poup-s/bbdump/main/install.sh | bash
+```
+
+Detects your platform, downloads the latest release, installs PostgreSQL if needed, and sets everything up. See [full installation docs](docs/installation.md) for options.
+
+### From Release
 
 Download the latest release from [GitHub Releases](https://github.com/poup-s/bbdump/releases):
 
