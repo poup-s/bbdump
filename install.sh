@@ -206,14 +206,20 @@ get_latest_version() {
 
   spinner "GitHub API…"
   local response
-  response=$(curl -fsSL "$GITHUB_API" 2>/dev/null) || {
-    stop_spinner
-    error "Could not reach GitHub. Check your connection."
-  }
+  response=$(curl -fsSL -H "User-Agent: bbdump-installer" "$GITHUB_API" 2>/dev/null) || true
   stop_spinner
 
   VERSION=$(echo "$response" | grep '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
-  [ -z "$VERSION" ] && error "Could not get version. Try: BBDUMP_VERSION=1.0.9 bash install.sh"
+
+  # Fallback: scrape latest redirect if API fails (rate limit)
+  if [ -z "$VERSION" ]; then
+    info "API rate-limited, trying fallback…"
+    spinner "Resolving latest version…"
+    VERSION=$(curl -fsSI -H "User-Agent: bbdump-installer" "https://github.com/${REPO}/releases/latest" 2>/dev/null | grep -i "^location:" | sed -E 's|.*/tag/v?([^[:space:]]+).*|\1|' | tr -d '\r')
+    stop_spinner
+  fi
+
+  [ -z "$VERSION" ] && error "Could not get version. Try: BBDUMP_VERSION=1.0.2 bash install.sh"
   VERSION="${VERSION#v}"
 
   success "v${VERSION}"
