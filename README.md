@@ -126,6 +126,16 @@ npm run dev
 
 **Prerequisites:** Node.js 18+, PostgreSQL client tools (`pg_dump` in PATH).
 
+## Demo Database
+
+Want to try bbdump right away? A demo script creates a PostgreSQL database with 36 000+ French towns and registers it in bbdump automatically:
+
+```bash
+./bbdump-demo/bbdump-demo.sh
+```
+
+See [bbdump-demo/README.md](bbdump-demo/README.md) for details.
+
 ## Building
 
 ```bash
