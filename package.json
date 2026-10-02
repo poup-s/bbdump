@@ -17,7 +17,7 @@
     "dist:linux": "npm run build && npm run bundle:mcp && electron-builder --linux",
     "start": "electron .",
     "lint": "eslint src/",
-    "test": "tsc && node --test test/",
+    "test": "tsc && node --test \"test/*.test.mjs\"",
     "lint:fix": "eslint src/ --fix"
   },
   "keywords": [
