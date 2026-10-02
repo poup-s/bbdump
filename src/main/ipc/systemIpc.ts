@@ -1,36 +1,31 @@
-import { ipcMain, app, BrowserWindow, dialog } from 'electron';
+import { ipcMain, app, BrowserWindow, dialog, nativeImage } from 'electron';
 import { getErrorMessage } from '../utils';
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
 import { logger } from '../logger';
 import { pathManager } from '../paths';
-import { fileEncryptionManager } from '../fileEncryption';
 import { backupManager } from '../backup';
-import { checkForUpdates, downloadUpdate, quitAndInstall } from '../updateChecker';
-import { encryptionManager } from '../encryption';
-import { getConfig, saveConfig } from './configIpc';
+import { checkForUpdates, downloadUpdate, quitAndInstall, supportsAutoInstall } from '../updateChecker';
+import { toRuntimeDatabase } from '../dbSecrets';
+import { listBackupEntries, runBackupNow } from '../backupActions';
+import { defaultBackupDir, resolveBackupFile } from '../backupLocations';
+import { getConfig } from './configIpc';
 import { cronManager } from '../cron';
+import { withTunnel } from '../sshTunnel';
+import * as nodeCron from 'node-cron';
+import { nextRun, previousRun } from '../cronSchedule';
 import { resolveConfirmation } from '../mcpConfirmServer';
+import {
+    McpClientId, getClientDefs, getClientStatus, listClientStatuses,
+    installClient, uninstallClient, buildCustomSnippet,
+} from '../mcpClients';
+import { getMcpClientContext, getMcpLaunchSpec, isAppTranslocated } from '../mcpLaunch';
 
-function resolveNodePath(): string {
-    try {
-        if (process.platform === 'win32') {
-            const result = execSync('where node', { encoding: 'utf-8' }).trim().split('\n')[0].trim();
-            if (result && fs.existsSync(result)) return result;
-        } else {
-            // Source nvm if available to get the active node
-            const nvmInit = `[ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh"; which node 2>/dev/null`;
-            const result = execSync(nvmInit, { encoding: 'utf-8', shell: '/bin/bash' }).trim();
-            if (result && fs.existsSync(result)) return result;
-        }
-    } catch {
-        // fallback below
-    }
-    return 'node';
+function isKnownMcpClient(id: unknown): id is McpClientId {
+    return typeof id === 'string' && getClientDefs().some((c) => c.id === id);
 }
 
-export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
+export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null) {
 
     // Prerequisites Handlers
     ipcMain.handle('check-prerequisites', async () => {
@@ -49,6 +44,11 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
                     path: prerequisites.psql.path,
                     error: prerequisites.psql.error
                 },
+                pgRestore: {
+                    installed: prerequisites.pgRestore.installed,
+                    path: prerequisites.pgRestore.path,
+                    error: prerequisites.pgRestore.error
+                },
                 homebrew: prerequisites.homebrew ? {
                     installed: prerequisites.homebrew.installed,
                     path: prerequisites.homebrew.path,
@@ -66,9 +66,7 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
         try {
             const { installHomebrew } = await import('../tools/toolInstaller');
             const onProgress = (progress: { step: string; message: string; progress: number }) => {
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('install-progress', progress);
-                }
+                getMainWindow()?.webContents.send('install-progress', progress);
             };
             return await installHomebrew(onProgress);
         } catch (error) {
@@ -90,9 +88,7 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
             }
 
             const onProgress = (progress: { step: string; message: string; progress: number }) => {
-                if (mainWindow && !mainWindow.isDestroyed()) {
-                    mainWindow.webContents.send('install-progress', progress);
-                }
+                getMainWindow()?.webContents.send('install-progress', progress);
             };
             return await installPostgreSQL(onProgress, { brewPath });
         } catch (error) {
@@ -109,54 +105,31 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
     });
 
     // Backup & Restore Handlers
-    ipcMain.handle('backup-now', async (_, id: string) => {
-        try {
-            const config = getConfig();
-            const db = config.databases.find(d => d.id === id);
-            if (!db) {
-                const error = `Database not found: ${id}`;
-                logger.error(error);
-                return { success: false, database: id, timestamp: new Date().toISOString(), error };
-            }
+    ipcMain.handle('backup-now', async (_, id: string) =>
+        runBackupNow(id, (channel, payload) => getMainWindow()?.webContents.send(channel, payload)));
 
-            const decryptedDb = { ...db };
-            try {
-                if (db.encrypted) {
-                    decryptedDb.password = encryptionManager.decrypt(db.password);
-                }
-            } catch (error) {
-                const msg = `Failed to decrypt password for ${db.name}: ${error}`;
-                logger.error(msg);
-                return { success: false, database: db.name, timestamp: new Date().toISOString(), error: msg };
-            }
-
-            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('backup-started', id);
-
-            const result = await backupManager.backupDatabase(decryptedDb);
-
-            if (result.success) {
-                const dbIndex = config.databases.findIndex(d => d.id === id);
-                if (dbIndex !== -1) {
-                    config.databases[dbIndex].lastBackup = result.timestamp;
-                    saveConfig(config);
-                }
-            }
-
-            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('backup-complete', { ...result, databaseId: id });
-            return result;
-        } catch (error) {
-            const msg = `Unexpected error during backup of ${id}: ${error}`;
-            logger.error(msg);
-            return { success: false, database: id, timestamp: new Date().toISOString(), error: msg };
-        }
-    });
-
-    ipcMain.handle('restore-backup', async (_, payload: { backupFile: string; target: { name: string; host: string; port: number; user: string; password: string } }) => {
+    ipcMain.handle('restore-backup', async (_, payload: { backupFile: string; target: { name: string; host: string; port: number; user: string; password: string; connectionString?: string }; replace?: boolean }) => {
         const { backupFile, target } = payload;
         logger.info(`Restore request: ${backupFile} to ${target.name}@${target.host}:${target.port}`);
 
         try {
-            return await backupManager.restoreBackup(backupFile, target);
+            // The renderer only has masked passwords and no SSL settings: take the
+            // credentials (decrypted, injected into the URI) from the matching saved database
+            const saved = getConfig().databases.find(d =>
+                d.name === target.name && d.host === target.host && d.port === target.port);
+            let fromSaved = {};
+            if (saved) {
+                const runtime = toRuntimeDatabase(saved);
+                fromSaved = {
+                    password: runtime.password,
+                    connectionString: runtime.connectionString ?? target.connectionString,
+                    ssl: saved.ssl, sslMode: saved.sslMode, sslRootCert: saved.sslRootCert,
+                };
+            }
+            // A database on a server: through its SSH tunnel, kept open for the whole restore
+            const merged = { ...target, ...fromSaved, ssh: saved?.ssh };
+            // The target's content is replaced unless the caller says otherwise
+            return await withTunnel(merged, reached => backupManager.restoreBackup(backupFile, reached, { replace: payload.replace !== false }));
         } catch (error) {
             logger.error(`Error during restore: ${error}`);
             return {
@@ -170,43 +143,9 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
 
     ipcMain.handle('get-backups', async () => {
         try {
-            const backupDir = pathManager.backupsPath;
-            if (!fs.existsSync(backupDir)) {
-                return { backups: [], stats: { total: 0, totalSize: 0 } };
-            }
-
-            const config = getConfig();
-            const files = fs.readdirSync(backupDir);
-            const backups = files
-                .filter(file => file.endsWith('.backup'))
-                .map(file => {
-                    const filePath = path.join(backupDir, file);
-                    const stats = fs.statSync(filePath);
-                    const isEncrypted = fileEncryptionManager.isFileEncrypted(filePath);
-
-                    const fileNameWithoutExt = file.replace('.backup', '');
-                    const parts = fileNameWithoutExt.split('_');
-                    const prefix = parts[0] || 'unknown';
-
-                    // Try to match by id first, then by name (backwards compatibility)
-                    const matchedDb = config.databases.find(d => d.id === prefix) ||
-                                     config.databases.find(d => d.name === prefix);
-                    const databaseId = matchedDb ? matchedDb.id : prefix;
-
-                    return {
-                        filename: file,
-                        databaseId: databaseId,
-                        name: file,
-                        path: path.relative(pathManager.appDataPath, filePath),
-                        size: stats.size,
-                        created: stats.birthtime.toISOString(),
-                        encrypted: isEncrypted
-                    };
-                })
-                .sort((a, b) => new Date(b.created).getTime() - new Date(a.created).getTime());
-
+            // Every folder backups are written to (database output, default folder, internal)
+            const backups = listBackupEntries(getConfig());
             const totalSize = backups.reduce((sum, backup) => sum + backup.size, 0);
-
             return { backups, stats: { total: backups.length, totalSize } };
         } catch (error) {
             logger.error(`Error retrieving backups: ${error}`);
@@ -216,11 +155,8 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
 
     ipcMain.handle('delete-backup', async (_, filename: string) => {
         try {
-            const backupDir = pathManager.backupsPath;
-            const filePath = path.resolve(backupDir, filename);
-            const normalizedDir = path.resolve(backupDir) + path.sep;
-
-            if (!filePath.startsWith(normalizedDir)) throw new Error('Invalid path');
+            const filePath = resolveBackupFile(getConfig(), filename);
+            if (!filePath) throw new Error('Invalid path');
 
             if (fs.existsSync(filePath)) {
                 fs.unlinkSync(filePath);
@@ -237,17 +173,15 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
 
     ipcMain.handle('download-backup', async (_, filename: string) => {
         try {
-            const backupDir = pathManager.backupsPath;
-            const filePath = path.resolve(backupDir, filename);
-            const normalizedDir = path.resolve(backupDir) + path.sep;
-
-            if (!filePath.startsWith(normalizedDir)) throw new Error('Invalid path');
+            const filePath = resolveBackupFile(getConfig(), filename);
+            if (!filePath) throw new Error('Invalid path');
             if (!fs.existsSync(filePath)) throw new Error('File not found');
-            if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Window not available');
+            const mainWindow = getMainWindow();
+            if (!mainWindow) throw new Error('Window not available');
 
             const result = await dialog.showSaveDialog(mainWindow, {
                 title: 'Download backup',
-                defaultPath: filename,
+                defaultPath: path.basename(filePath),
                 filters: [
                     { name: 'Backup files', extensions: ['backup'] },
                     { name: 'All files', extensions: ['*'] }
@@ -266,12 +200,60 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
     });
 
     // Logs Handlers
-    ipcMain.handle('get-logs', async (_, limit?: number) => {
-        return logger.getLogs(limit);
+    ipcMain.handle('logs-read', async (_, from?: { offset: number; fileId: number }) => {
+        const valid = from && Number.isSafeInteger(from.offset) && from.offset >= 0 && Number.isSafeInteger(from.fileId);
+        return logger.readLogs(valid ? from : undefined);
     });
 
     ipcMain.handle('clear-logs', async () => {
         logger.clearLogs();
+    });
+
+    /**
+     * Tasks and Backups pages: per database, its schedule (next run, missed run, paused),
+     * its last runs (successes and failures), its retention and its backup files.
+     */
+    ipcMain.handle('schedule-overview', async () => {
+        const config = getConfig();
+        const now = new Date();
+        const files = listBackupEntries(config);
+        const history = backupManager.backupHistory();
+        const databases = config.databases.map(db => {
+            const cronText = (db.cron || '').trim();
+            const enabled = db.enabled !== false;
+            let next: string | null = null;
+            let missed = false;
+            if (cronText && nodeCron.validate(cronText)) {
+                try {
+                    if (enabled) next = nextRun(cronText, now)?.toISOString() ?? null;
+                    const expected = enabled ? previousRun(cronText, now) : null;
+                    const last = db.lastBackup ? new Date(db.lastBackup) : null;
+                    // Only after the app had a chance to run it (the catch-up runs at startup)
+                    missed = !!expected && (!last || last < expected) && now.getTime() - expected.getTime() > 5 * 60 * 1000;
+                } catch (error) {
+                    logger.warn(`Schedule "${cronText}" cannot be evaluated: ${getErrorMessage(error)}`, db.name);
+                }
+            }
+            const own = files.filter(f => f.databaseId === db.id);
+            return {
+                id: db.id,
+                cron: cronText,
+                cronValid: !cronText || nodeCron.validate(cronText),
+                enabled,
+                scheduled: cronManager.isScheduled(db.id),
+                running: backupManager.isRunning(db.id),
+                nextRun: next,
+                missed,
+                lastBackup: db.lastBackup ?? null,
+                runs: history.runs(db.id).slice(0, 12),
+                retentionCount: db.retentionCount ?? null,
+                verifyBackups: db.verifyBackups !== false,
+                encryptBackups: !!db.encryptBackups,
+                backupCount: own.length,
+                backupSize: own.reduce((sum, f) => sum + f.size, 0),
+            };
+        });
+        return { databases, launchAtLogin: !!config.launchAtLogin };
     });
 
     ipcMain.handle('get-scheduled-tasks', async () => {
@@ -279,7 +261,47 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
     });
 
     ipcMain.handle('get-app-version', () => app.getVersion());
-    ipcMain.handle('get-default-path', () => pathManager.backupsPath);
+    /** Info page: versions, system, PostgreSQL tools and where bbdump keeps its files */
+    ipcMain.handle('get-about-info', async () => {
+        let pgDump: { version?: string; path?: string } | null = null;
+        try {
+            const { detectPostgresTools } = await import('../tools/toolDetector');
+            const tools = await detectPostgresTools();
+            if (tools.pgDump.installed) pgDump = { version: tools.pgDump.version, path: tools.pgDump.path };
+        } catch (error) {
+            logger.warn(`Info page: pg_dump detection failed: ${getErrorMessage(error)}`);
+        }
+        return {
+            version: app.getVersion(),
+            packaged: app.isPackaged,
+            electron: process.versions.electron,
+            chrome: process.versions.chrome,
+            node: process.versions.node,
+            platform: process.platform,
+            arch: process.arch,
+            osVersion: process.getSystemVersion(),
+            pgDump,
+            dataPath: pathManager.appDataPath,
+            logsPath: pathManager.logsPath,
+            configPath: pathManager.configPath,
+            home: app.getPath('home'),
+            autoInstallUpdates: supportsAutoInstall(),
+        };
+    });
+    // The user's default folder if set (Settings showed the internal one even after a change)
+    ipcMain.handle('get-default-path', () => defaultBackupDir(getConfig()));
+
+    ipcMain.handle('select-ssl-root-cert', async () => {
+        const result = await dialog.showOpenDialog({
+            properties: ['openFile'],
+            filters: [
+                { name: 'Certificates', extensions: ['pem', 'crt', 'cer'] },
+                { name: 'All files', extensions: ['*'] }
+            ]
+        });
+        if (result.canceled || result.filePaths.length === 0) return null;
+        return result.filePaths[0];
+    });
 
     ipcMain.handle('select-directory', async () => {
         const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] });
@@ -293,7 +315,7 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
     });
 
     ipcMain.handle('download-update', async () => {
-        await downloadUpdate();
+        return await downloadUpdate();
     });
 
     ipcMain.handle('install-update', () => {
@@ -317,7 +339,8 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
             const keyPath = pathManager.encryptionKeyPath;
 
             if (!fs.existsSync(keyPath)) return { success: false, error: 'Encryption key not found' };
-            if (!mainWindow || mainWindow.isDestroyed()) return { success: false, error: 'Window not available' };
+            const mainWindow = getMainWindow();
+            if (!mainWindow) return { success: false, error: 'Window not available' };
 
             const result = await dialog.showSaveDialog(mainWindow, {
                 title: 'Export encryption key',
@@ -341,7 +364,8 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
         try {
             const keyPath = pathManager.encryptionKeyPath;
 
-            if (!mainWindow || mainWindow.isDestroyed()) return { success: false, error: 'Window not available' };
+            const mainWindow = getMainWindow();
+            if (!mainWindow) return { success: false, error: 'Window not available' };
 
             const result = await dialog.showOpenDialog(mainWindow, {
                 title: 'Import encryption key',
@@ -372,81 +396,90 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
     });
 
     // MCP Server Handlers
-    ipcMain.handle('get-mcp-status', async () => {
-        try {
-            const configPath = pathManager.claudeDesktopConfigPath;
-            const serverPath = pathManager.mcpServerPath;
-            const configExists = fs.existsSync(configPath);
-            let installed = false;
-
-            if (configExists) {
-                const raw = fs.readFileSync(configPath, 'utf-8');
-                const config = JSON.parse(raw);
-                installed = !!(config.mcpServers && config.mcpServers['bbdump-postgres']);
+    // Real app icons of installed AI clients (read from the system, never bundled)
+    const iconCache = new Map<string, string>();
+    ipcMain.handle('mcp-client-icons', async () => {
+        const icons: Record<string, string> = {};
+        const statuses = listClientStatuses(getMcpClientContext(), getMcpLaunchSpec());
+        for (const client of statuses) {
+            if (!client.appPath) continue;
+            try {
+                let dataUrl = iconCache.get(client.appPath);
+                if (!dataUrl) {
+                    // QuickLook thumbnail: Retina-sharp app icon on macOS; getFileIcon as fallback
+                    const image = process.platform === 'darwin'
+                        ? await nativeImage.createThumbnailFromPath(client.appPath, { width: 64, height: 64 })
+                            .catch(() => app.getFileIcon(client.appPath!, { size: 'normal' }))
+                        : await app.getFileIcon(client.appPath, { size: 'normal' });
+                    dataUrl = image.isEmpty() ? '' : image.toDataURL();
+                    iconCache.set(client.appPath, dataUrl);
+                }
+                if (dataUrl) icons[client.id] = dataUrl;
+            } catch (error) {
+                logger.warn(`No icon for ${client.name}: ${getErrorMessage(error)}`);
             }
-
-            // Detect if Claude Desktop is installed
-            let claudeDesktopDetected = false;
-            if (process.platform === 'darwin') {
-                claudeDesktopDetected = fs.existsSync('/Applications/Claude.app');
-            } else if (process.platform === 'win32') {
-                const localAppData = process.env.LOCALAPPDATA || '';
-                claudeDesktopDetected = fs.existsSync(path.join(localAppData, 'Programs', 'claude-desktop'))
-                    || fs.existsSync(path.join(localAppData, 'AnthropicClaude'));
-            } else {
-                // Linux: check if config dir exists (created on first run)
-                claudeDesktopDetected = fs.existsSync(path.dirname(configPath));
-            }
-
-            return { installed, configExists, configPath, serverPath, claudeDesktopDetected, bbdumpConfigPath: pathManager.configPath, bbdumpKeyPath: pathManager.encryptionKeyPath };
-        } catch (error) {
-            logger.error(`Error checking MCP status: ${getErrorMessage(error)}`);
-            return { installed: false, configExists: false, configPath: pathManager.claudeDesktopConfigPath, serverPath: pathManager.mcpServerPath, claudeDesktopDetected: false, bbdumpConfigPath: pathManager.configPath, bbdumpKeyPath: pathManager.encryptionKeyPath };
         }
+        return icons;
+    });
+
+    ipcMain.handle('mcp-list-clients', async () => {
+        try {
+            return listClientStatuses(getMcpClientContext(), getMcpLaunchSpec());
+        } catch (error) {
+            logger.error(`Error listing MCP clients: ${getErrorMessage(error)}`);
+            return [];
+        }
+    });
+
+    ipcMain.handle('mcp-install-client', async (_, id: unknown) => {
+        if (!isKnownMcpClient(id)) return { success: false, error: 'Unknown MCP client' };
+        try {
+            const configPath = installClient(id, getMcpClientContext(), getMcpLaunchSpec());
+            logger.info(`MCP server installed for ${id}: ${configPath}`);
+            return { success: true, configPath };
+        } catch (error) {
+            logger.error(`Error installing MCP for ${id}: ${getErrorMessage(error)}`);
+            return { success: false, error: getErrorMessage(error) };
+        }
+    });
+
+    ipcMain.handle('mcp-uninstall-client', async (_, id: unknown) => {
+        if (!isKnownMcpClient(id)) return { success: false, error: 'Unknown MCP client' };
+        try {
+            const configPath = uninstallClient(id, getMcpClientContext());
+            logger.info(`MCP server removed for ${id}: ${configPath}`);
+            return { success: true, configPath };
+        } catch (error) {
+            logger.error(`Error uninstalling MCP for ${id}: ${getErrorMessage(error)}`);
+            return { success: false, error: getErrorMessage(error) };
+        }
+    });
+
+    ipcMain.handle('mcp-get-custom-config', async () => {
+        const spec = getMcpLaunchSpec();
+        return { snippet: buildCustomSnippet(spec), spec, translocated: isAppTranslocated() };
+    });
+
+    // Legacy channels (Claude Desktop only), kept for compatibility
+    ipcMain.handle('get-mcp-status', async () => {
+        const spec = getMcpLaunchSpec();
+        const status = getClientStatus('claude-desktop', getMcpClientContext(), spec);
+        return {
+            installed: status.installed,
+            state: status.state,
+            configExists: fs.existsSync(status.configPath),
+            configPath: status.configPath,
+            serverPath: spec.args[0],
+            claudeDesktopDetected: status.detected,
+            bbdumpConfigPath: pathManager.configPath,
+            bbdumpKeyPath: pathManager.encryptionKeyPath,
+        };
     });
 
     ipcMain.handle('install-mcp-claude-desktop', async () => {
         try {
-            const configPath = pathManager.claudeDesktopConfigPath;
-            const serverPath = pathManager.mcpServerPath;
-
-            // Ensure directory exists
-            const configDir = path.dirname(configPath);
-            if (!fs.existsSync(configDir)) {
-                fs.mkdirSync(configDir, { recursive: true });
-            }
-
-            // Read existing config or create empty
-            let config: any = {};
-            if (fs.existsSync(configPath)) {
-                const raw = fs.readFileSync(configPath, 'utf-8');
-                config = JSON.parse(raw);
-            }
-
-            if (!config.mcpServers) {
-                config.mcpServers = {};
-            }
-
-            // Pass bbdump config and encryption key paths
-            // The MCP server reads database connections from bbdump's config
-            const env: Record<string, string> = {
-                BBDUMP_CONFIG_PATH: pathManager.configPath,
-                BBDUMP_KEY_PATH: pathManager.encryptionKeyPath,
-                MCP_CONFIRM_PORT_FILE: path.join(pathManager.appDataPath, '.mcp-confirm-port'),
-                BBDUMP_APP_PATH: app.isPackaged
-                    ? (process.platform === 'darwin' ? app.getPath('exe').replace(/\/Contents\/MacOS\/.*$/, '') : app.getPath('exe'))
-                    : '',
-            };
-
-            config.mcpServers['bbdump-postgres'] = {
-                command: resolveNodePath(),
-                args: [serverPath],
-                env
-            };
-
-            fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+            const configPath = installClient('claude-desktop', getMcpClientContext(), getMcpLaunchSpec());
             logger.info(`MCP server installed in Claude Desktop config: ${configPath}`);
-
             return { success: true, configPath };
         } catch (error) {
             logger.error(`Error installing MCP for Claude Desktop: ${getErrorMessage(error)}`);
@@ -456,21 +489,8 @@ export function registerSystemHandlers(mainWindow: BrowserWindow | null) {
 
     ipcMain.handle('uninstall-mcp-claude-desktop', async () => {
         try {
-            const configPath = pathManager.claudeDesktopConfigPath;
-
-            if (!fs.existsSync(configPath)) {
-                return { success: true };
-            }
-
-            const raw = fs.readFileSync(configPath, 'utf-8');
-            const config = JSON.parse(raw);
-
-            if (config.mcpServers && config.mcpServers['bbdump-postgres']) {
-                delete config.mcpServers['bbdump-postgres'];
-                fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
-                logger.info('MCP server removed from Claude Desktop config');
-            }
-
+            uninstallClient('claude-desktop', getMcpClientContext());
+            logger.info('MCP server removed from Claude Desktop config');
             return { success: true };
         } catch (error) {
             logger.error(`Error uninstalling MCP from Claude Desktop: ${getErrorMessage(error)}`);

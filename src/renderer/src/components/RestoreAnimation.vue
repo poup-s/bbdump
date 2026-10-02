@@ -9,7 +9,12 @@ const databaseRef = shallowRef();
 
 // Particle system
 const particleCount = 50;
-const particles = ref<any[]>([]);
+interface Particle {
+  position: THREE.Vector3;
+  velocity: THREE.Vector3;
+  offset: number;
+}
+const particles = ref<Particle[]>([]);
 
 // Initialize particles
 for (let i = 0; i < particleCount; i++) {
@@ -87,12 +92,6 @@ useRafFn(() => {
       <TresDirectionalLight :position="[5, 5, 5]" :intensity="2" />
       <TresPointLight :position="[-5, 5, 5]" :intensity="1" color="#3b82f6" />
     </TresCanvas>
-    
-    <!-- Overlay Text -->
-    <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
-      <div class="bg-black/40 backdrop-blur-sm px-4 py-2 rounded-full border border-white/10 text-white font-medium animate-pulse">
-        Restoring Data...
-      </div>
-    </div>
+    <!-- What is happening is written under the animation, by the dialog (translated) -->
   </div>
 </template>

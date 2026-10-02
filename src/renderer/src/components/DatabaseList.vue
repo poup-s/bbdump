@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { getErrorMessage } from '../utils';
-import { store } from '../store';
+import { store, isRemoteOnly } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
@@ -11,48 +11,18 @@ import DatabaseCardCompact from './DatabaseCardCompact.vue';
 import DuplicateDatabaseModal from './DuplicateDatabaseModal.vue';
 import ProjectSection from './ProjectSection.vue';
 import ProjectModal from './ProjectModal.vue';
+import AppModal from './ui/AppModal.vue';
+import { btnGhost, btnSecondary } from './ui/classes';
 // ProxyPortModal removed — config is now inline in ProjectSection
 
 const { t } = useI18n();
 const { addToast } = useToast();
 const { showConfirm } = useConfirm();
 
-const hiddenDatabasesCount = ref(0);
-const hiddenDatabases = ref<any[]>([]);
-const isLoadingHiddenCount = ref(false);
-const isImportingHidden = ref(false);
-
 // Duplicate Modal State
 const showDuplicateModal = ref(false);
 const duplicateSourceDb = ref<Database | null>(null);
 const duplicateSourceProjectId = ref<string | null>(null);
-
-const loadHiddenDatabasesCount = async () => {
-  try {
-    isLoadingHiddenCount.value = true;
-    const result = await ipcRenderer.invoke('get-postgres-config');
-    if (result && result.databases) {
-      const localDbs = store.databases.filter(db => db.isLocalBbdump);
-      const localDbNames = new Set(localDbs.map(db => db.name));
-      const postgresDbs = result.databases.filter((db: any) => 
-        !db.name.startsWith('template') && 
-        !localDbNames.has(db.name)
-      );
-      hiddenDatabases.value = postgresDbs;
-      hiddenDatabasesCount.value = postgresDbs.length;
-    }
-  } catch (error) {
-    console.error('Error loading hidden databases count:', error);
-    hiddenDatabasesCount.value = 0;
-  } finally {
-    isLoadingHiddenCount.value = false;
-  }
-};
-
-// Reload the count when databases change
-watch(() => store.databases.length, () => {
-  loadHiddenDatabasesCount();
-});
 
 const openAddModal = () => {
   store.editingDatabase = null;
@@ -81,7 +51,7 @@ const onDuplicateSuccess = async (newDbName: string) => {
     store.databases = config.databases;
 
     // Find the newly added DB by name to get its id
-    const newDb = store.databases.find((d: any) => d.name === newDbName);
+    const newDb = store.databases.find((d) => d.name === newDbName);
     if (newDb) {
       store.newlyAddedDbId = newDb.id;
       setTimeout(() => {
@@ -97,47 +67,9 @@ const onDuplicateSuccess = async (newDbName: string) => {
     duplicateSourceProjectId.value = null;
 }
 
-const importAllHidden = async () => {
-  if (hiddenDatabases.value.length === 0) return;
-  
-  try {
-    isImportingHidden.value = true;
-    
-    for (const db of hiddenDatabases.value) {
-      await ipcRenderer.invoke('add-database', {
-        name: db.name,
-        displayName: db.name,
-        host: 'localhost',
-        port: 5432,
-        user: db.owner || 'postgres',
-        password: '',
-        encrypted: true,
-        encryptBackups: false,
-        cron: '',
-        output: '',
-        enabled: false,
-        ssl: false,
-        isLocalBbdump: true
-      });
-    }
-    
-    addToast(t('databases.importSuccess'), 'success');
-    
-    // Refresh config
-    const config = await ipcRenderer.invoke('get-config');
-    store.databases = config.databases;
-    
-    await loadHiddenDatabasesCount();
-  } catch (error) {
-    addToast('Error importing databases: ' + getErrorMessage(error), 'error');
-  } finally {
-    isImportingHidden.value = false;
-  }
-};
-
 const deleteDatabase = (db: Database) => {
   if (isSystemDatabase(db.name)) {
-    addToast(t('databases.cannotDeleteSystemDatabase', { name: db.name }), 'error');
+    addToast(t('databases.cannotDeleteSystemDatabase', { name: db.name }), 'warning');
     return;
   }
   
@@ -153,6 +85,8 @@ const deleteDatabase = (db: Database) => {
     type: 'danger',
       onConfirm: async () => {
         try {
+          // One toast per outcome: dropped, already gone, or kept on the server but removed from bbdump
+          let outcome: 'deleted' | 'gone' | 'kept' = 'deleted';
           if (isLocal) {
             const result = await ipcRenderer.invoke('drop-postgres-database', db.name, db.port, true);
             if (!result.success) {
@@ -162,9 +96,11 @@ const deleteDatabase = (db: Database) => {
               );
               
               if (isNotFoundError) {
-                addToast(t('databases.dbAlreadyDeleted', { name: db.name }), 'warning');
+                outcome = 'gone';
+                addToast(t('databases.dbAlreadyDeleted', { name: db.name }), 'info');
               } else {
-                addToast(result.error || t('postgresConfig.dropError'), 'warning');
+                outcome = 'kept';
+                addToast(t('toasts.dropFailedRemoved', { name: db.name }), 'warning', { detail: result.error });
               }
             }
           }
@@ -172,9 +108,9 @@ const deleteDatabase = (db: Database) => {
           await ipcRenderer.invoke('remove-database', db.id);
           const config = await ipcRenderer.invoke('get-config');
           store.databases = config.databases;
-          addToast(isLocal ? t('toasts.dbDeleted') : t('toasts.connectionDeleted'), 'success');
+          if (outcome === 'deleted') addToast(isLocal ? t('toasts.dbDeleted', { name: db.name }) : t('toasts.connectionDeleted', { name: db.displayName || db.name }), 'success');
         } catch (error) {
-          addToast('Error deleting database: ' + getErrorMessage(error), 'error');
+          addToast(t('toasts.databaseDeleteError'), 'error', { detail: getErrorMessage(error) });
         }
       }
   });
@@ -186,7 +122,7 @@ const backupNow = async (db: Database) => {
     await ipcRenderer.invoke('backup-now', db.id);
   } catch (error) {
     store.isBackingUp = false;
-    addToast('Error starting backup: ' + getErrorMessage(error), 'error');
+    addToast(t('toasts.backupStartError'), 'error', { detail: getErrorMessage(error) });
   }
 };
 
@@ -210,18 +146,8 @@ const copyConnectionUrl = async (db: Database) => {
     await navigator.clipboard.writeText(url);
     addToast(t('databases.urlCopied'), 'success');
   } catch {
-    addToast('Failed to copy URL', 'error');
+    addToast(t('toasts.urlCopyFailed'), 'error');
   }
-};
-
-const openPostgresSettings = () => {
-  store.activeTab = 'settings';
-  setTimeout(() => {
-    const postgresConfigElement = document.querySelector('[data-postgres-config]');
-    if (postgresConfigElement) {
-      postgresConfigElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  }, 300);
 };
 
 const disconnectDatabase = async (db: Database) => {
@@ -240,7 +166,7 @@ const disconnectDatabase = async (db: Database) => {
           'success'
         );
       } catch (error) {
-        addToast(`Error removing database from list: ${getErrorMessage(error)}`, 'error');
+        addToast(t('toasts.databaseRemoveError'), 'error', { detail: getErrorMessage(error) });
       }
     }
   });
@@ -252,7 +178,7 @@ const toggleMask = async (db: Database) => {
     const config = await ipcRenderer.invoke('get-config');
     store.databases = config.databases;
   } catch (error) {
-    addToast('Error toggling mask: ' + getErrorMessage(error), 'error');
+    addToast(t('toasts.maskToggleError'), 'error', { detail: getErrorMessage(error) });
   }
 };
 
@@ -309,7 +235,7 @@ const toggleProjectMask = async (project: Project) => {
     store.projects = config.projects || [];
     store.databases = config.databases || [];
   } catch (error) {
-    addToast('Error toggling project mask: ' + getErrorMessage(error), 'error');
+    addToast(t('toasts.projectMaskToggleError'), 'error', { detail: getErrorMessage(error) });
   }
 };
 
@@ -326,7 +252,6 @@ const dragOverPosition = ref<'above' | 'below' | null>(null);
 const ungroupedDragOver = ref(false);
 
 onMounted(() => {
-  loadHiddenDatabasesCount();
   fetchDatabaseSizes();
 
   const onDragStartGlobal = (e: DragEvent) => {
@@ -350,7 +275,7 @@ const moveDatabaseToProject = async (databaseId: string, targetProjectId: string
     store.projects = config.projects || [];
     addToast(t('project.databaseMoved'), 'success');
   } catch (error) {
-    addToast('Error moving database: ' + getErrorMessage(error), 'error');
+    addToast(t('toasts.databaseMoveError'), 'error', { detail: getErrorMessage(error) });
   }
 };
 
@@ -392,7 +317,7 @@ const onProjectDrop = async (event: DragEvent, targetProjectId: string) => {
     const config = await ipcRenderer.invoke('reorder-projects', ids);
     store.projects = config.projects || [];
   } catch (error) {
-    addToast('Error reordering projects: ' + getErrorMessage(error), 'error');
+    addToast(t('toasts.projectsReorderError'), 'error', { detail: getErrorMessage(error) });
   }
 };
 
@@ -434,7 +359,7 @@ const deleteProject = (project: Project) => {
         store.projects = config.projects || [];
         addToast(t('project.deleted', { name: project.name }), 'success');
       } catch (error) {
-        addToast('Error deleting project: ' + getErrorMessage(error), 'error');
+        addToast(t('toasts.projectDeleteError'), 'error', { detail: getErrorMessage(error) });
       }
     }
   });
@@ -483,7 +408,7 @@ const handleProxyToggle = async (project: Project) => {
       if (status?.running) {
         const result = await ipcRenderer.invoke('proxy-stop', project.id);
         if (!result.success) {
-          addToast(t('proxy.stopError', { error: result.error }), 'error');
+          addToast(t('proxy.stopError'), 'error', { detail: result.error });
           return;
         }
       }
@@ -515,16 +440,16 @@ const handleProxyToggle = async (project: Project) => {
         if (result.success) {
           addToast(t('proxy.started', { port }), 'success');
         } else {
-          addToast(t('proxy.startError', { error: result.error }), 'error');
+          addToast(t('proxy.startError'), 'error', { detail: result.error });
         }
       } else {
-        addToast(t('proxy.selectTargetFirst'), 'info');
+        addToast(t('proxy.selectTargetFirst'), 'warning');
       }
       await refreshProxyStatuses();
     }
   } catch (err) {
     console.error('handleProxyToggle error:', err);
-    addToast(t('proxy.startError', { error: getErrorMessage(err) || 'Unknown error' }), 'error');
+    addToast(t('proxy.startError'), 'error', { detail: getErrorMessage(err) || t('toasts.unknownError') });
   }
 };
 
@@ -556,7 +481,7 @@ const handleUpdateProxyConfig = async (projectId: string, config: { port?: numbe
         if (result.success) {
           addToast(t('proxy.started', { port: config.port }), 'success');
         } else {
-          addToast(t('proxy.startError', { error: result.error }), 'error');
+          addToast(t('proxy.startError'), 'error', { detail: result.error });
         }
       }
     }
@@ -565,7 +490,7 @@ const handleUpdateProxyConfig = async (projectId: string, config: { port?: numbe
     await refreshProxyStatuses();
   } catch (err) {
     console.error('handleUpdateProxyConfig error:', err);
-    addToast(t('proxy.startError', { error: getErrorMessage(err) || 'Unknown error' }), 'error');
+    addToast(t('proxy.startError'), 'error', { detail: getErrorMessage(err) || t('toasts.unknownError') });
   }
 };
 
@@ -595,16 +520,16 @@ const handleSetProxyTarget = (projectId: string, dbId: string) => {
             if (startResult.success) {
               addToast(t('proxy.started', { port: project.proxyPort }), 'success');
             } else {
-              addToast(t('proxy.startError', { error: startResult.error }), 'error');
+              addToast(t('proxy.startError'), 'error', { detail: startResult.error });
             }
           }
         } else {
-          addToast(t('proxy.switchError', { error: result.error }), 'error');
+          addToast(t('proxy.switchError'), 'error', { detail: result.error });
         }
         await refreshProxyStatuses();
       } catch (err) {
         console.error('handleSetProxyTarget error:', err);
-        addToast(t('proxy.switchError', { error: getErrorMessage(err) || 'Unknown error' }), 'error');
+        addToast(t('proxy.switchError'), 'error', { detail: getErrorMessage(err) || t('toasts.unknownError') });
       }
     }
   });
@@ -613,14 +538,17 @@ const handleSetProxyTarget = (projectId: string, dbId: string) => {
 // --- Proxy Activity Logs ---
 let proxyLogInterval: ReturnType<typeof setInterval> | null = null;
 
+const closeProxyLogs = () => {
+  store.proxyActivityProjectId = null;
+  if (proxyLogInterval) {
+    clearInterval(proxyLogInterval);
+    proxyLogInterval = null;
+  }
+};
+
 const handleShowProxyLogs = async (projectId: string) => {
   if (store.proxyActivityProjectId === projectId) {
-    // Toggle off
-    store.proxyActivityProjectId = null;
-    if (proxyLogInterval) {
-      clearInterval(proxyLogInterval);
-      proxyLogInterval = null;
-    }
+    closeProxyLogs();
     return;
   }
   store.proxyActivityProjectId = projectId;
@@ -652,20 +580,24 @@ const handleClearProxyLogs = (projectId: string) => {
     onConfirm: async () => {
       await ipcRenderer.invoke('proxy-clear-logs', projectId);
       store.proxyActivityLogs[projectId] = [];
-      addToast(t('proxy.activity.cleared'), 'info');
+      addToast(t('proxy.activity.cleared'), 'success');
     }
   });
 };
 
-const handleCopyProxyLogs = (projectId: string) => {
+const handleCopyProxyLogs = async (projectId: string) => {
   const logs = store.proxyActivityLogs[projectId] || [];
   if (logs.length === 0) return;
   const text = logs.map(l => {
     const time = new Date(l.timestamp).toLocaleTimeString();
     return `[${time}] [${l.type.toUpperCase()}] ${l.message}`;
   }).join('\n');
-  navigator.clipboard.writeText(text);
-  addToast(t('proxy.activity.copied'), 'success');
+  try {
+    await navigator.clipboard.writeText(text);
+    addToast(t('proxy.activity.copied'), 'success');
+  } catch {
+    addToast(t('toasts.copyFailed'), 'error');
+  }
 };
 
 const getActivityColor = (type: ProxyActivityEvent['type']) => {
@@ -694,6 +626,13 @@ const formatLogTime = (timestamp: string) => {
   return new Date(timestamp).toLocaleTimeString();
 };
 
+const ICON_ACTIVITY = 'M4 6h16M4 10h16M4 14h10M4 18h6';
+const proxyLogs = computed(() => (store.proxyActivityProjectId ? store.proxyActivityLogs[store.proxyActivityProjectId] || [] : []));
+const proxyLogsMeta = computed(() => {
+  const project = store.projects.find(p => p.id === store.proxyActivityProjectId);
+  return project ? `${project.name} · ${proxyLogs.value.length}` : String(proxyLogs.value.length);
+});
+
 // Start proxy status polling
 refreshProxyStatuses();
 proxyStatusInterval = setInterval(refreshProxyStatuses, 5000);
@@ -719,8 +658,9 @@ onUnmounted(() => {
         <p class="text-gray-500 mt-1">{{ t('databases.configuredConnections', { count: store.databases.length }) }}</p>
       </div>
       <div class="flex gap-3">
-        <!-- Create database button -->
+        <!-- Create database button (needs a local server) -->
         <button
+          v-if="!isRemoteOnly()"
           @click="store.createDatabaseForProjectId = null; store.showCreateDatabaseModal = true"
           class="group relative overflow-hidden bg-gradient-to-br from-blue-600 via-blue-500 to-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-medium shadow-lg shadow-blue-500/30 hover:shadow-xl hover:shadow-blue-500/40 transition-all duration-300 flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
         >
@@ -902,105 +842,44 @@ onUnmounted(() => {
 
     <!-- ProxyPortModal removed — config is now inline in ProjectSection -->
 
-    <!-- Proxy Activity Log Modal -->
-    <Transition
-      enter-active-class="transition duration-200 ease-out"
-      enter-from-class="opacity-0"
-      enter-to-class="opacity-100"
-      leave-active-class="transition duration-150 ease-in"
-      leave-from-class="opacity-100"
-      leave-to-class="opacity-0"
+    <!-- Proxy activity -->
+    <AppModal
+      v-if="store.proxyActivityProjectId"
+      :title="t('proxy.activity.title')"
+      :icon="ICON_ACTIVITY"
+      :meta="proxyLogsMeta"
+      width="lg"
+      :close-label="t('common.close')"
+      @close="closeProxyLogs"
     >
-      <div
-        v-if="store.proxyActivityProjectId"
-        class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-        @click="store.proxyActivityProjectId = null"
-      >
-        <div
-          class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-2xl w-full border border-border overflow-hidden flex flex-col max-h-[80vh]"
-          @click.stop
-        >
-          <!-- Header -->
-          <div class="px-6 py-4 border-b border-border flex justify-between items-center bg-surface shrink-0">
-            <div class="flex items-center gap-3">
-              <div class="w-8 h-8 rounded-xl bg-blue-500/10 flex items-center justify-center">
-                <svg class="w-4 h-4 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h10M4 18h6" />
-                </svg>
-              </div>
-              <div>
-                <h3 class="text-lg font-bold">{{ t('proxy.activity.title') }}</h3>
-                <p class="text-xs text-gray-500">
-                  {{ store.projects.find(p => p.id === store.proxyActivityProjectId)?.name }}
-                </p>
-              </div>
-              <span class="text-[10px] text-gray-400 bg-gray-200 dark:bg-zinc-700 px-1.5 py-0.5 rounded-full">
-                {{ (store.proxyActivityLogs[store.proxyActivityProjectId!] || []).length }}
-              </span>
-            </div>
-            <div class="flex items-center gap-1">
-              <!-- Refresh -->
-              <button
-                @click="refreshProxyLogs(store.proxyActivityProjectId!)"
-                class="p-1.5 rounded-lg hover:bg-gray-200 dark:hover:bg-zinc-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-                title="Refresh"
-              >
-                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-              </button>
-              <!-- Copy all -->
-              <button
-                @click="handleCopyProxyLogs(store.proxyActivityProjectId!)"
-                class="p-1.5 rounded-lg hover:bg-gray-200 dark:hover:bg-zinc-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-                :title="t('proxy.activity.copyAll')"
-              >
-                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                </svg>
-              </button>
-              <!-- Clear -->
-              <button
-                @click="handleClearProxyLogs(store.proxyActivityProjectId!)"
-                class="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500 transition-colors"
-                :title="t('proxy.activity.clear')"
-              >
-                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
-              <!-- Close -->
-              <button
-                @click="store.proxyActivityProjectId = null"
-                class="p-1.5 rounded-lg hover:bg-gray-200 dark:hover:bg-zinc-700 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-              >
-                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <!-- Log Content -->
-          <div class="flex-1 overflow-y-auto bg-zinc-900 dark:bg-zinc-950">
-            <div v-if="(store.proxyActivityLogs[store.proxyActivityProjectId!] || []).length === 0" class="py-12 text-center text-sm text-gray-500">
-              {{ t('proxy.activity.empty') }}
-            </div>
-            <div v-else class="py-1">
-              <div
-                v-for="log in store.proxyActivityLogs[store.proxyActivityProjectId!]"
-                :key="log.id"
-                class="flex items-start gap-2 px-4 py-1.5 hover:bg-zinc-800/50 border-l-2 font-mono text-xs"
-                :class="getActivityColor(log.type)"
-              >
-                <span class="text-zinc-500 shrink-0 w-16">{{ formatLogTime(log.timestamp) }}</span>
-                <span class="shrink-0 w-4 text-center">{{ getActivityIcon(log.type) }}</span>
-                <span class="text-zinc-300">{{ log.message }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
+      <div class="rounded-xl border border-zinc-800 bg-zinc-950 overflow-hidden">
+        <p v-if="proxyLogs.length === 0" class="py-12 text-center text-[13px] text-zinc-500">{{ t('proxy.activity.empty') }}</p>
+        <ul v-else class="py-1">
+          <li
+            v-for="log in proxyLogs"
+            :key="log.id"
+            class="flex items-start gap-2 px-4 py-1.5 hover:bg-zinc-800/50 border-l-2 font-mono text-xs"
+            :class="getActivityColor(log.type)"
+          >
+            <span class="text-zinc-500 shrink-0 w-16 tabular-nums">{{ formatLogTime(log.timestamp) }}</span>
+            <span class="shrink-0 w-4 text-center text-zinc-400" aria-hidden="true">{{ getActivityIcon(log.type) }}</span>
+            <span class="text-zinc-300 min-w-0 break-words">{{ log.message }}</span>
+          </li>
+        </ul>
       </div>
-    </Transition>
+
+      <template #footer>
+        <button
+          type="button"
+          :class="btnGhost"
+          class="hover:!text-red-600 dark:hover:!text-red-400"
+          :disabled="proxyLogs.length === 0"
+          @click="handleClearProxyLogs(store.proxyActivityProjectId!)"
+        >{{ t('proxy.activity.clear') }}</button>
+        <span class="flex-1" />
+        <button type="button" :class="btnGhost" @click="refreshProxyLogs(store.proxyActivityProjectId!)">{{ t('common.refresh') }}</button>
+        <button type="button" :class="btnSecondary" :disabled="proxyLogs.length === 0" @click="handleCopyProxyLogs(store.proxyActivityProjectId!)">{{ t('proxy.activity.copyAll') }}</button>
+      </template>
+    </AppModal>
   </div>
 </template>

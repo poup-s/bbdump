@@ -1,0 +1,78 @@
+# Builds the release artifacts WITHOUT publishing them.
+# Run it by hand (Actions > Build release artifacts > Run workflow), download the
+# artifacts, test them, then create the GitHub release manually with these files
+# (including latest-mac.yml / latest-linux*.yml, which existing installs poll).
+name: Build release artifacts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    env:
+      # Unsigned build (mac.identity is null): never look for a signing identity
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mcp-postgres/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm run bundle:mcp
+
+      - name: Package (dmg + zip, arm64 + x64)
+        run: npx electron-builder --mac --arm64 --x64 --publish never
+
+      # electron-updater must not offer this build to Macs below the minimum macOS
+      - name: Add minimumSystemVersion to latest-mac.yml
+        run: node scripts/set-update-min-os.mjs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bbdump-mac
+          if-no-files-found: error
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/latest-mac.yml
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mcp-postgres/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm run bundle:mcp
+
+      - name: Package (AppImage x64 + arm64, deb x64)
+        run: npx electron-builder --linux --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bbdump-linux
+          if-no-files-found: error
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/latest-linux*.yml

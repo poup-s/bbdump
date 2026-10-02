@@ -16,8 +16,10 @@ Both use **AES-256-GCM**, a symmetric authenticated encryption algorithm.
 On first launch, bbdump generates a random 256-bit encryption key and saves it to:
 
 ```
-~/.bbdump/.encryption.key
+<data dir>/.encryption.key
 ```
+
+`<data dir>` is `~/Library/Application Support/bbdump` on macOS and `~/.config/bbdump` on Linux (see [Configuration](configuration.md)).
 
 The file is created with restricted permissions (`0600` — owner read/write only).
 
@@ -82,8 +84,8 @@ bbdump follows Electron security best practices:
 
 | File | Permissions | Description |
 |------|-------------|-------------|
-| `~/.bbdump/.encryption.key` | `0600` | Read/write by owner only |
-| `~/.bbdump/config.json` | Default | Contains encrypted passwords |
+| `<data dir>/.encryption.key` | `0600` | Read/write by owner only |
+| `<data dir>/config.json` | Default | Contains encrypted passwords |
 | Backup files | Default | Optionally encrypted with AES-256-GCM |
 
 ## Best Practices

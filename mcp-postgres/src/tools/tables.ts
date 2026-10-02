@@ -1,153 +1,165 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getClient, executeReadOnly } from '../db.js';
+import pgFormat from 'pg-format';
+import { withClient, executeReadOnly, resolveSchema } from '../db.js';
 import { jsonResult, errorResult } from '../types.js';
+import { READ, databaseParam, schemaParam, tableParam } from './common.js';
+
+/** Exact COUNT(*) only below this size; bigger tables keep the planner's estimate */
+const EXACT_COUNT_MAX_BYTES = 8 * 1024 * 1024;
+
+const RELKIND: Record<string, string> = { r: 'table', p: 'partitioned table', v: 'view', m: 'materialized view', f: 'foreign table' };
 
 export function registerTableTools(server: McpServer) {
-  server.tool(
+  server.registerTool(
     'list_tables',
-    'List all tables in a database with fast row count estimates. Uses pg_class.reltuples for speed, with COUNT(*) fallback for empty estimates.',
     {
-      database: z.string().optional().describe('Database name (default: configured database)'),
-      schema: z.string().default('public').describe('Schema to inspect (default: public)'),
+      title: 'List tables',
+      description: 'List the tables of a schema with row counts (exact for small tables, planner estimate otherwise), size and comment. Views can be included.',
+      inputSchema: {
+        database: databaseParam,
+        schema: schemaParam,
+        include_views: z.boolean().default(false).describe('Also list views, materialized views and foreign tables'),
+      },
+      annotations: READ,
     },
-    async ({ database, schema }) => {
-      const client = await getClient(database);
-      try {
-        const result = await executeReadOnly(client, `
-          SELECT
-            t.table_name as name,
-            COALESCE(pc.reltuples::bigint, 0) as row_count_estimate
-          FROM information_schema.tables t
-          LEFT JOIN pg_class pc ON pc.relname = t.table_name
-            AND pc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = t.table_schema)
-          WHERE t.table_schema = $1
-            AND t.table_type = 'BASE TABLE'
-          ORDER BY t.table_name
-        `, [schema]);
+    async ({ database, schema, include_views }) => withClient(database, async (client) => {
+      const nsp = resolveSchema(schema);
+      const kinds = include_views ? ['r', 'p', 'v', 'm', 'f'] : ['r', 'p'];
+      const result = await executeReadOnly(client, `
+        SELECT c.relname AS name, c.relkind AS kind,
+               c.reltuples::bigint AS estimate,
+               pg_total_relation_size(c.oid) AS total_bytes,
+               pg_size_pretty(pg_total_relation_size(c.oid)) AS size,
+               obj_description(c.oid, 'pg_class') AS comment
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relkind = ANY($2) AND NOT c.relispartition
+        ORDER BY c.relname
+      `, [nsp, kinds]);
 
-        // Fallback COUNT(*) for tables where reltuples is 0 or negative
-        const tables = [];
-        for (const row of result.rows) {
-          if (row.row_count_estimate <= 0) {
-            try {
-              const countResult = await executeReadOnly(
-                client,
-                `SELECT COUNT(*) as count FROM "${schema}"."${row.name}"`
-              );
-              tables.push({ name: row.name, row_count: parseInt(countResult.rows[0].count, 10) });
-            } catch {
-              tables.push({ name: row.name, row_count: 0 });
-            }
-          } else {
-            tables.push({ name: row.name, row_count: parseInt(row.row_count_estimate, 10) });
+      const tables = [];
+      for (const row of result.rows) {
+        const isTable = row.kind === 'r' || row.kind === 'p';
+        let rowCount: number | null = Number(row.estimate) >= 0 ? Number(row.estimate) : null;
+        let exact = false;
+        // Never analyzed (-1) or empty estimate: count small tables exactly
+        if (isTable && (rowCount === null || rowCount === 0) && Number(row.total_bytes) <= EXACT_COUNT_MAX_BYTES) {
+          try {
+            const counted = await executeReadOnly(client, pgFormat('SELECT count(*)::bigint AS n FROM %I.%I', nsp, row.name), [], 10000);
+            rowCount = Number(counted.rows[0].n);
+            exact = true;
+          } catch {
+            // keep the estimate
           }
         }
-
-        return jsonResult({
-          schema,
-          tables,
-          count: tables.length,
+        tables.push({
+          name: row.name,
+          type: RELKIND[row.kind] ?? row.kind,
+          row_count: isTable ? rowCount : null,
+          row_count_exact: exact,
+          size: row.size,
+          ...(row.comment ? { comment: row.comment } : {}),
         });
-      } catch (err: any) {
-        return errorResult(err.message);
-      } finally {
-        client.release();
       }
-    }
+      return jsonResult({ schema: nsp, tables, count: tables.length });
+    })
   );
 
-  server.tool(
+  server.registerTool(
     'describe_table',
-    'Describe the complete structure of a table: columns, data types, nullability, defaults, primary keys, and foreign keys',
     {
-      table: z.string().describe('Table name'),
-      database: z.string().optional().describe('Database name'),
-      schema: z.string().default('public').describe('Schema (default: public)'),
+      title: 'Describe a table',
+      description: 'Full structure of a table or view: columns (type, nullability, default, identity/generated, comment), primary key, foreign keys (multi-column and cross-schema), unique and check constraints, indexes, and the tables that reference it.',
+      inputSchema: { table: tableParam, database: databaseParam, schema: schemaParam },
+      annotations: READ,
     },
-    async ({ table, database, schema }) => {
-      const client = await getClient(database);
-      try {
-        // Get columns
-        const columnsResult = await executeReadOnly(client, `
-          SELECT
-            column_name, data_type, udt_name,
-            is_nullable, column_default,
-            character_maximum_length,
-            numeric_precision, numeric_scale,
-            ordinal_position
-          FROM information_schema.columns
-          WHERE table_schema = $1 AND table_name = $2
-          ORDER BY ordinal_position
-        `, [schema, table]);
-
-        // Get primary keys
-        const pkResult = await executeReadOnly(client, `
-          SELECT a.attname as column_name
-          FROM pg_index i
-          JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
-          JOIN pg_class c ON c.oid = i.indrelid
-          JOIN pg_namespace n ON n.oid = c.relnamespace
-          WHERE i.indisprimary
-            AND c.relname = $1
-            AND n.nspname = $2
-        `, [table, schema]);
-        const pkColumns = new Set(pkResult.rows.map((r: any) => r.column_name));
-
-        // Get foreign keys
-        const fkResult = await executeReadOnly(client, `
-          SELECT
-            kcu.column_name,
-            ccu.table_schema AS foreign_schema,
-            ccu.table_name AS foreign_table,
-            ccu.column_name AS foreign_column,
-            tc.constraint_name
-          FROM information_schema.table_constraints tc
-          JOIN information_schema.key_column_usage kcu
-            ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-          JOIN information_schema.constraint_column_usage ccu
-            ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema
-          WHERE tc.constraint_type = 'FOREIGN KEY'
-            AND tc.table_schema = $1
-            AND tc.table_name = $2
-        `, [schema, table]);
-
-        const fkMap = new Map<string, any>();
-        for (const fk of fkResult.rows) {
-          fkMap.set(fk.column_name, {
-            foreign_schema: fk.foreign_schema,
-            foreign_table: fk.foreign_table,
-            foreign_column: fk.foreign_column,
-            constraint_name: fk.constraint_name,
-          });
-        }
-
-        const columns = columnsResult.rows.map((col: any) => ({
-          column_name: col.column_name,
-          data_type: col.data_type,
-          udt_name: col.udt_name,
-          is_nullable: col.is_nullable === 'YES',
-          column_default: col.column_default,
-          max_length: col.character_maximum_length,
-          numeric_precision: col.numeric_precision,
-          numeric_scale: col.numeric_scale,
-          is_primary_key: pkColumns.has(col.column_name),
-          foreign_key: fkMap.get(col.column_name) || null,
-        }));
-
-        return jsonResult({
-          table,
-          schema,
-          columns,
-          column_count: columns.length,
-          primary_keys: Array.from(pkColumns),
-          foreign_keys: fkResult.rows.length,
-        });
-      } catch (err: any) {
-        return errorResult(err.message);
-      } finally {
-        client.release();
+    async ({ table, database, schema }) => withClient(database, async (client) => {
+      const nsp = resolveSchema(schema);
+      const rel = await executeReadOnly(client, `
+        SELECT c.oid, c.relkind, obj_description(c.oid, 'pg_class') AS comment, c.reltuples::bigint AS estimate,
+               pg_size_pretty(pg_total_relation_size(c.oid)) AS size
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = $1 AND c.relname = $2
+      `, [nsp, table]);
+      if (rel.rows.length === 0) {
+        return errorResult(`Table "${nsp}"."${table}" not found. Use list_tables${schema ? '' : ' (or list_schemas: the table may be in another schema)'}.`);
       }
-    }
+      const { oid, relkind, comment, estimate, size } = rel.rows[0];
+
+      const columns = await executeReadOnly(client, `
+        SELECT a.attname AS name,
+               format_type(a.atttypid, a.atttypmod) AS type,
+               NOT a.attnotnull AS nullable,
+               pg_get_expr(d.adbin, d.adrelid) AS "default",
+               CASE a.attidentity WHEN 'a' THEN 'always' WHEN 'd' THEN 'by default' END AS identity,
+               CASE a.attgenerated WHEN 's' THEN pg_get_expr(d.adbin, d.adrelid) END AS generated,
+               col_description(a.attrelid, a.attnum) AS comment
+        FROM pg_attribute a
+        LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+        WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped
+        ORDER BY a.attnum
+      `, [oid]);
+
+      const constraints = await executeReadOnly(client, `
+        SELECT con.conname AS name, con.contype AS type,
+               ARRAY(SELECT att.attname FROM unnest(con.conkey) WITH ORDINALITY k(n, i)
+                     JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k.n ORDER BY k.i)::text[] AS columns,
+               fn.nspname AS foreign_schema, fc.relname AS foreign_table,
+               ARRAY(SELECT att.attname FROM unnest(con.confkey) WITH ORDINALITY k(n, i)
+                     JOIN pg_attribute att ON att.attrelid = con.confrelid AND att.attnum = k.n ORDER BY k.i)::text[] AS foreign_columns,
+               CASE con.confdeltype WHEN 'c' THEN 'cascade' WHEN 'n' THEN 'set null' WHEN 'd' THEN 'set default' WHEN 'r' THEN 'restrict' ELSE 'no action' END AS on_delete,
+               pg_get_constraintdef(con.oid) AS definition
+        FROM pg_constraint con
+        LEFT JOIN pg_class fc ON fc.oid = con.confrelid
+        LEFT JOIN pg_namespace fn ON fn.oid = fc.relnamespace
+        WHERE con.conrelid = $1
+        ORDER BY con.contype, con.conname
+      `, [oid]);
+
+      const indexes = await executeReadOnly(client, `
+        SELECT i.relname AS name, pg_get_indexdef(ix.indexrelid) AS definition, ix.indisunique AS unique,
+               ix.indisprimary AS primary, ix.indisvalid AS valid, pg_size_pretty(pg_relation_size(ix.indexrelid)) AS size
+        FROM pg_index ix JOIN pg_class i ON i.oid = ix.indexrelid
+        WHERE ix.indrelid = $1
+        ORDER BY i.relname
+      `, [oid]);
+
+      const referencedBy = await executeReadOnly(client, `
+        SELECT n.nspname AS schema, c.relname AS table, con.conname AS constraint,
+               ARRAY(SELECT att.attname FROM unnest(con.conkey) WITH ORDINALITY k(n, i)
+                     JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k.n ORDER BY k.i)::text[] AS columns
+        FROM pg_constraint con
+        JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE con.contype = 'f' AND con.confrelid = $1
+        ORDER BY n.nspname, c.relname
+      `, [oid]);
+
+      const pk = constraints.rows.find((c: any) => c.type === 'p');
+      const pick = (type: string) => constraints.rows.filter((c: any) => c.type === type);
+      return jsonResult({
+        table,
+        schema: nsp,
+        type: RELKIND[relkind] ?? relkind,
+        ...(comment ? { comment } : {}),
+        row_estimate: Number(estimate) >= 0 ? Number(estimate) : null,
+        size,
+        columns: columns.rows.map((col: any) => ({
+          ...col,
+          is_primary_key: !!pk?.columns.includes(col.name),
+        })),
+        primary_key: pk ? pk.columns : [],
+        foreign_keys: pick('f').map((c: any) => ({
+          name: c.name, columns: c.columns,
+          references: `${c.foreign_schema}.${c.foreign_table}(${c.foreign_columns.join(', ')})`,
+          on_delete: c.on_delete,
+        })),
+        unique_constraints: pick('u').map((c: any) => ({ name: c.name, columns: c.columns })),
+        check_constraints: pick('c').map((c: any) => ({ name: c.name, definition: c.definition })),
+        exclusion_constraints: pick('x').map((c: any) => ({ name: c.name, definition: c.definition })),
+        indexes: indexes.rows,
+        referenced_by: referencedBy.rows,
+      });
+    })
   );
 }

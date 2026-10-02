@@ -4,7 +4,29 @@ import { tcpProxyManager, ProxyStatus, TargetCredentials } from '../tcpProxy';
 import { getConfig, saveConfig } from './configIpc';
 import { encryptionManager } from '../encryption';
 import { logger } from '../logger';
+import { isSslEnabled } from '../sslConfig';
 import { proxyActivityLog, ProxyActivityEvent } from '../proxyActivityLog';
+import { holdTunnel, releaseHolder } from '../sshTunnel';
+
+const proxyHolder = (projectId: string) => `proxy:${projectId}`;
+
+/**
+ * Where a project's proxy forwards to. A database on a server is reached through its SSH
+ * tunnel, held open as long as the proxy runs (released by stopping or switching it).
+ */
+export async function resolveProxyTarget(dbId: string, projectId: string): Promise<TargetCredentials | null> {
+    const target = resolveDbCredentials(dbId);
+    releaseHolder(proxyHolder(projectId));
+    if (!target) return null;
+    const db = getConfig().databases.find(d => d.id === dbId);
+    if (!db?.ssh) return target;
+    const endpoint = await holdTunnel(db.ssh, proxyHolder(projectId));
+    return { ...target, host: endpoint.host, port: endpoint.port };
+}
+
+export function releaseProxyTunnel(projectId: string): void {
+    releaseHolder(proxyHolder(projectId));
+}
 
 /**
  * Resolve full credentials for a database (host, port, user, password, database, ssl).
@@ -35,7 +57,7 @@ function resolveDbCredentials(dbId: string): TargetCredentials | null {
                 user: decodeURIComponent(url.username) || 'postgres',
                 password: decodeURIComponent(url.password) || password,
                 database: url.pathname.replace(/^\//, '') || db.name || 'postgres',
-                ssl: db.ssl || url.searchParams.get('sslmode') === 'require',
+                ssl: isSslEnabled(db),
             };
         } catch {
             // Fall back to individual fields
@@ -48,7 +70,7 @@ function resolveDbCredentials(dbId: string): TargetCredentials | null {
         user: db.user || 'postgres',
         password,
         database: db.name || 'postgres',
-        ssl: db.ssl,
+        ssl: isSslEnabled(db),
     };
 }
 
@@ -68,7 +90,7 @@ export function registerProxyHandlers() {
             const targetDbId = project.proxyTargetDbId;
             if (!targetDbId) return { success: false, error: 'No target database selected' };
 
-            const target = resolveDbCredentials(targetDbId);
+            const target = await resolveProxyTarget(targetDbId, projectId);
             if (!target) return { success: false, error: 'Target database not found' };
 
             const targetDb = config.databases.find(d => d.id === targetDbId);
@@ -93,6 +115,7 @@ export function registerProxyHandlers() {
     ipcMain.handle('proxy-stop', async (_, projectId: string): Promise<{ success: boolean; error?: string }> => {
         try {
             tcpProxyManager.stopProxy(projectId);
+            releaseProxyTunnel(projectId);
 
             const config = getConfig();
             const project = (config.projects || []).find(p => p.id === projectId);
@@ -121,7 +144,9 @@ export function registerProxyHandlers() {
                 return { success: false, error: 'Database does not belong to this project' };
             }
 
-            const target = resolveDbCredentials(targetDbId);
+            // Only a running proxy needs the new target reachable (its SSH tunnel opened)
+            const running = tcpProxyManager.isRunning(projectId);
+            const target = running ? await resolveProxyTarget(targetDbId, projectId) : resolveDbCredentials(targetDbId);
             if (!target) return { success: false, error: 'Target database not found' };
 
             // Get display name for activity logs

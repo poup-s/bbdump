@@ -1,253 +1,134 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+/**
+ * Toasts, newest on top. Hovering one keeps it on screen (its bar pauses too);
+ * errors stay longer and their detail can be selected and copied.
+ */
 import { useToast } from '../composables/useToast';
-import { store } from '../store';
+import { useI18n } from '../composables/useI18n';
+import type { Toast } from '../types';
 
-const { toasts, removeToast } = useToast();
+const { toasts, removeToast, pauseToast, resumeToast } = useToast();
+const { t } = useI18n();
 
-// Track progress for each toast (countdown)
-const progressMap = ref<Record<number, number>>({});
-let intervalId: ReturnType<typeof setInterval> | null = null;
+const tone = {
+  success: { dot: 'bg-emerald-500', bar: 'bg-emerald-500', action: 'text-emerald-700 dark:text-emerald-400' },
+  info: { dot: 'bg-sky-500', bar: 'bg-sky-500', action: 'text-sky-700 dark:text-sky-400' },
+  warning: { dot: 'bg-amber-500', bar: 'bg-amber-500', action: 'text-amber-700 dark:text-amber-400' },
+  error: { dot: 'bg-red-500', bar: 'bg-red-500', action: 'text-red-700 dark:text-red-400' },
+} as const;
 
-const handleAction = (url: string, toastId: number) => {
-  if (url.startsWith('__navigate:')) {
-    const tab = url.replace('__navigate:', '');
-    store.activeTab = tab;
-    removeToast(toastId);
-  } else {
-    window.open(url, '_blank');
-  }
+const runAction = (toast: Toast) => {
+  toast.action?.run();
+  removeToast(toast.id);
 };
-
-onMounted(() => {
-  intervalId = setInterval(() => {
-    for (const toast of toasts.value) {
-      if (progressMap.value[toast.id] === undefined) {
-        progressMap.value[toast.id] = 100;
-      }
-      const duration = toast.actionUrl ? 10000 : 5000;
-      const step = (100 / duration) * 50;
-      progressMap.value[toast.id] = Math.max(0, progressMap.value[toast.id] - step);
-    }
-    // Cleanup removed toasts
-    const activeIds = new Set(toasts.value.map(t => t.id));
-    for (const key of Object.keys(progressMap.value)) {
-      if (!activeIds.has(Number(key))) {
-        delete progressMap.value[Number(key)];
-      }
-    }
-  }, 50);
-});
-
-onUnmounted(() => {
-  if (intervalId) clearInterval(intervalId);
-});
 </script>
 
 <template>
-  <div class="fixed top-6 left-1/2 -translate-x-1/2 z-[9999] flex flex-col items-center gap-2.5 pointer-events-none">
-    <transition-group name="toast-glass">
+  <div
+    class="fixed top-4 left-1/2 -translate-x-1/2 z-[9999] w-[min(380px,calc(100vw-32px))] flex flex-col gap-2 pointer-events-none"
+    aria-live="polite"
+  >
+    <TransitionGroup name="toast">
       <div
         v-for="toast in toasts"
         :key="toast.id"
-        class="pointer-events-auto toast-perspective"
+        :role="toast.type === 'error' ? 'alert' : 'status'"
+        class="toast group pointer-events-auto relative overflow-hidden rounded-xl border border-gray-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-sm shadow-[0_10px_30px_-10px_rgba(0,0,0,0.18)] dark:shadow-[0_10px_30px_-8px_rgba(0,0,0,0.6)]"
+        @mouseenter="pauseToast(toast.id)"
+        @mouseleave="resumeToast(toast.id)"
       >
-        <div
-          class="toast-card relative overflow-hidden rounded-2xl min-w-[300px] max-w-md"
-          :class="{
-            'toast-success': toast.type === 'success',
-            'toast-error': toast.type === 'error',
-            'toast-warning': toast.type === 'warning',
-            'toast-info': toast.type === 'info',
-          }"
-        >
-          <!-- Glass background -->
-          <div class="absolute inset-0 glass-bg"></div>
+        <div class="flex items-start gap-3 pl-3.5 pr-2 py-3">
+          <!-- Type -->
+          <span class="mt-px w-[18px] h-[18px] rounded-full grid place-items-center shrink-0 text-white" :class="tone[toast.type].dot" aria-hidden="true">
+            <svg v-if="toast.type === 'success'" class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="4">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+            <svg v-else-if="toast.type === 'error'" class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="4">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+            <span v-else-if="toast.type === 'warning'" class="text-[11px] font-bold leading-none">!</span>
+            <span v-else class="text-[11px] font-bold leading-none font-serif italic">i</span>
+          </span>
 
-          <!-- Top highlight (3D edge light) -->
-          <div class="absolute inset-x-0 top-0 h-px glass-highlight"></div>
-
-          <!-- Inner shadow (depth) -->
-          <div class="absolute inset-0 rounded-2xl glass-inner-shadow pointer-events-none"></div>
-
-          <!-- Content -->
-          <div class="relative flex items-center gap-3 px-4 py-3">
-            <!-- Icon -->
-            <div
-              class="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 icon-container"
-              :class="{
-                'bg-emerald-500/20 text-emerald-500 dark:text-emerald-400': toast.type === 'success',
-                'bg-red-500/20 text-red-500 dark:text-red-400': toast.type === 'error',
-                'bg-amber-500/20 text-amber-500 dark:text-amber-400': toast.type === 'warning',
-                'bg-blue-500/20 text-blue-500 dark:text-blue-400': toast.type === 'info',
-              }"
-            >
-              <svg v-if="toast.type === 'success'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
-              <svg v-else-if="toast.type === 'error'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-              <svg v-else-if="toast.type === 'warning'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z" />
-              </svg>
-              <svg v-else class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </div>
-
-            <!-- Message -->
-            <div class="flex-1 min-w-0">
-              <p class="text-sm font-medium text-gray-900 dark:text-white/95 leading-snug">{{ toast.message }}</p>
-              <button
-                v-if="toast.actionUrl"
-                @click="handleAction(toast.actionUrl!, toast.id)"
-                class="mt-1 text-xs font-semibold transition-colors"
-                :class="{
-                  'text-emerald-600 dark:text-emerald-400 hover:text-emerald-500': toast.type === 'success',
-                  'text-red-600 dark:text-red-400 hover:text-red-500': toast.type === 'error',
-                  'text-amber-600 dark:text-amber-400 hover:text-amber-500': toast.type === 'warning',
-                  'text-blue-600 dark:text-blue-400 hover:text-blue-500': toast.type === 'info',
-                }"
-              >
-                View →
-              </button>
-            </div>
-
-            <!-- Close -->
+          <div class="flex-1 min-w-0">
+            <p class="text-[13px] font-medium leading-snug text-gray-900 dark:text-zinc-100 whitespace-pre-line break-words">
+              {{ toast.message }}
+              <span v-if="toast.count > 1" class="ml-1 align-middle font-mono text-[10px] font-normal px-1.5 py-px rounded bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400">×{{ toast.count }}</span>
+            </p>
+            <p
+              v-if="toast.detail"
+              class="mt-1 font-mono text-[11.5px] leading-relaxed text-gray-500 dark:text-zinc-400 whitespace-pre-line break-words line-clamp-4 select-text cursor-text"
+              :title="toast.detail"
+            >{{ toast.detail }}</p>
             <button
-              @click="removeToast(toast.id)"
-              class="p-1 rounded-lg text-gray-400/70 hover:text-gray-600 dark:text-white/30 dark:hover:text-white/70 hover:bg-black/5 dark:hover:bg-white/10 transition-colors shrink-0"
-            >
-              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
+              v-if="toast.action"
+              type="button"
+              class="mt-1.5 text-[12px] font-medium hover:underline underline-offset-2"
+              :class="tone[toast.type].action"
+              @click="runAction(toast)"
+            >{{ toast.action.label }} →</button>
           </div>
 
-          <!-- Progress bar -->
-          <div class="relative h-[2px] bg-black/5 dark:bg-white/5">
-            <div
-              class="absolute inset-y-0 left-0 transition-all duration-75 ease-linear"
-              :class="{
-                'bg-emerald-500/50': toast.type === 'success',
-                'bg-red-500/50': toast.type === 'error',
-                'bg-amber-500/50': toast.type === 'warning',
-                'bg-blue-500/50': toast.type === 'info',
-              }"
-              :style="{ width: `${progressMap[toast.id] ?? 100}%` }"
-            ></div>
-          </div>
+          <button
+            type="button"
+            class="p-1 -mt-0.5 rounded-md text-gray-400 hover:text-gray-700 dark:text-zinc-500 dark:hover:text-zinc-200 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors shrink-0"
+            :aria-label="t('common.close')"
+            @click="removeToast(toast.id)"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
+
+        <!-- Time left (paused while hovered) -->
+        <div
+          :key="toast.restartKey"
+          class="toast-bar absolute left-0 bottom-0 h-[2px] w-full origin-left opacity-50"
+          :class="tone[toast.type].bar"
+          :style="{ animationDuration: `${toast.duration}ms` }"
+          aria-hidden="true"
+        />
       </div>
-    </transition-group>
+    </TransitionGroup>
   </div>
 </template>
 
 <style scoped>
-.toast-perspective {
-  perspective: 800px;
+.toast-bar {
+  animation-name: toast-time;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+.toast:hover .toast-bar {
+  animation-play-state: paused;
+}
+@keyframes toast-time {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
 }
 
-.toast-card {
-  transform: rotateX(2deg);
-  transform-style: preserve-3d;
-  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+.toast-enter-active {
+  transition: opacity 0.2s ease-out, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
-
-.toast-card:hover {
-  transform: rotateX(0deg) scale(1.02);
+.toast-leave-active {
+  transition: opacity 0.15s ease-in, transform 0.15s ease-in;
 }
-
-/* ---- Glass backgrounds ---- */
-.glass-bg {
-  backdrop-filter: blur(12px) saturate(150%);
-  -webkit-backdrop-filter: blur(12px) saturate(150%);
-  background: rgba(255, 255, 255, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.5);
-}
-
-:root.dark .glass-bg,
-.dark .glass-bg {
-  background: rgba(30, 30, 34, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-/* ---- Top highlight (simulates light reflection on glass edge) ---- */
-.glass-highlight {
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
-}
-
-.dark .glass-highlight {
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
-}
-
-/* ---- Inner shadow for depth ---- */
-.glass-inner-shadow {
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.5), inset 0 -1px 3px rgba(0,0,0,0.06);
-}
-
-.dark .glass-inner-shadow {
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), inset 0 -1px 3px rgba(0,0,0,0.3);
-}
-
-/* ---- Colored shadow per type (strong depth) ---- */
-.toast-success .glass-bg {
-  box-shadow: 0 4px 12px rgba(0,0,0,0.08), 0 12px 40px rgba(16, 185, 129, 0.18), 0 1px 3px rgba(0,0,0,0.1);
-}
-.toast-error .glass-bg {
-  box-shadow: 0 4px 12px rgba(0,0,0,0.08), 0 12px 40px rgba(239, 68, 68, 0.18), 0 1px 3px rgba(0,0,0,0.1);
-}
-.toast-warning .glass-bg {
-  box-shadow: 0 4px 12px rgba(0,0,0,0.08), 0 12px 40px rgba(245, 158, 11, 0.18), 0 1px 3px rgba(0,0,0,0.1);
-}
-.toast-info .glass-bg {
-  box-shadow: 0 4px 12px rgba(0,0,0,0.08), 0 12px 40px rgba(59, 130, 246, 0.18), 0 1px 3px rgba(0,0,0,0.1);
-}
-
-.dark .toast-success .glass-bg {
-  box-shadow: 0 4px 16px rgba(0,0,0,0.4), 0 12px 40px rgba(16, 185, 129, 0.2), 0 1px 3px rgba(0,0,0,0.5);
-}
-.dark .toast-error .glass-bg {
-  box-shadow: 0 4px 16px rgba(0,0,0,0.4), 0 12px 40px rgba(239, 68, 68, 0.2), 0 1px 3px rgba(0,0,0,0.5);
-}
-.dark .toast-warning .glass-bg {
-  box-shadow: 0 4px 16px rgba(0,0,0,0.4), 0 12px 40px rgba(245, 158, 11, 0.2), 0 1px 3px rgba(0,0,0,0.5);
-}
-.dark .toast-info .glass-bg {
-  box-shadow: 0 4px 16px rgba(0,0,0,0.4), 0 12px 40px rgba(59, 130, 246, 0.2), 0 1px 3px rgba(0,0,0,0.5);
-}
-
-/* ---- Icon container inner glow ---- */
-.icon-container {
-  backdrop-filter: blur(4px);
-  box-shadow: inset 0 1px 2px rgba(255,255,255,0.2);
-}
-
-.dark .icon-container {
-  box-shadow: inset 0 1px 2px rgba(255,255,255,0.05);
-}
-
-/* ---- Transitions ---- */
-.toast-glass-enter-active {
-  transition: all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-.toast-glass-leave-active {
-  transition: all 0.3s cubic-bezier(0.4, 0, 1, 1);
-}
-
-.toast-glass-enter-from {
+.toast-enter-from {
   opacity: 0;
-  transform: translateY(-30px) scale(0.9);
+  transform: translateY(-8px) scale(0.98);
 }
-
-.toast-glass-leave-to {
+.toast-leave-to {
   opacity: 0;
-  transform: translateY(-15px) scale(0.95);
+  transform: scale(0.98);
+}
+.toast-move {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.toast-glass-move {
-  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+@media (prefers-reduced-motion: reduce) {
+  .toast-enter-active, .toast-leave-active, .toast-move { transition: opacity 0.1s linear; }
+  .toast-enter-from, .toast-leave-to { transform: none; }
+  .toast-bar { animation: none; }
 }
 </style>

@@ -2,15 +2,20 @@
 
 ## File Locations
 
-All bbdump data is stored in `~/.bbdump/`:
+All bbdump data is stored in the app data directory, written `<data dir>` below:
+
+- macOS: `~/Library/Application Support/bbdump`
+- Linux: `~/.config/bbdump`
+
+Earlier documentation said `<data dir>/`; the app has never used that location.
 
 | Path | Description |
 |------|-------------|
-| `~/.bbdump/config.json` | Main configuration file — databases, projects, settings |
-| `~/.bbdump/.encryption.key` | AES-256 encryption key (mode 0600) |
-| `~/.bbdump/backups/` | Default backup storage directory |
-| `~/.bbdump/logs/app.log` | Application logs |
-| `~/.bbdump/.mcp-confirm-port` | MCP confirmation server port (runtime) |
+| `<data dir>/config.json` | Main configuration file — databases, projects, settings |
+| `<data dir>/.encryption.key` | AES-256 encryption key (mode 0600) |
+| `<data dir>/backups/` | Default backup storage directory |
+| `<data dir>/logs/app.log` | Application logs |
+| `<data dir>/.mcp-confirm-port` | MCP confirmation server port (runtime) |
 
 ## App Settings
 
@@ -19,7 +24,7 @@ Access settings from the **Settings** tab in the sidebar.
 | Setting | Description | Default |
 |---------|-------------|---------|
 | **Language** | UI language — English or French | English |
-| **Backup location** | Directory where backup files are stored | `~/.bbdump/backups/` |
+| **Backup location** | Directory where backup files are stored | `<data dir>/backups/` |
 | **SQL mutations** | Allow INSERT/UPDATE/DELETE in the SQL Builder | Disabled |
 | **MCP skip confirmation** | Auto-approve MCP mutation requests | Disabled |
 

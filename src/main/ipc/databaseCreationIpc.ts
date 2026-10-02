@@ -6,6 +6,7 @@ import { logger } from '../logger';
 import { getConfig, saveConfig } from './configIpc';
 import { sanitizeDatabaseConfig } from '../configHelper';
 import { encryptionManager } from '../encryption';
+import { toRuntimeDatabase } from '../dbSecrets';
 import * as fs from 'fs';
 import * as path from 'path';
 import { pathManager } from '../paths';
@@ -23,7 +24,7 @@ interface DatabaseInfo {
     encrypted?: boolean;
 }
 
-export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | null) {
+export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWindow | null) {
 
     ipcMain.handle('create-local-database', async (_, params: { name: string; displayName?: string; port: number; password?: string; enabled?: boolean }) => {
         try {
@@ -37,9 +38,7 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
                 existingPorts,
                 (progress: { step: string; message: string; progress: number }) => {
                     lastProgress = progress;
-                    if (mainWindow && !mainWindow.isDestroyed()) {
-                        mainWindow.webContents.send('create-database-progress', progress);
-                    }
+                    getMainWindow()?.webContents.send('create-database-progress', progress);
                 }
             );
 
@@ -54,7 +53,7 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
             // Cast to DatabaseInfo to handle optional properties safely
             const newDb = result.database as DatabaseInfo;
             const shouldEncrypt = newDb.encrypted !== false;
-            const sanitizedDb = sanitizeDatabaseConfig(newDb as any); // Cast to any for helper compatibility if needed
+            const sanitizedDb = sanitizeDatabaseConfig(newDb);
 
             const dbToSave = {
                 ...sanitizedDb,
@@ -84,16 +83,14 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
     });
 
     ipcMain.handle('duplicate-external-to-local', async (_, params: {
-        sourceDb: any;
+        sourceDb: Partial<DatabaseConfig>;
         targetName: string;
         targetPort: number;
         targetPassword?: string;
     }) => {
         // Helper to send progress
         const sendProgress = (step: string, message: string, progress: number) => {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('duplicate-progress', { step, message, progress });
-            }
+            getMainWindow()?.webContents.send('duplicate-progress', { step, message, progress });
         };
 
         // Track created backup file for cleanup on error
@@ -113,23 +110,16 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
                 throw new Error(`Source database not found: ${sourceDbId}`);
             }
 
-            // 1. Decrypt password if needed
-            let sourcePassword = sourceDb.password;
-            if (sourceDb.encrypted) {
-                sourcePassword = encryptionManager.decrypt(sourceDb.password);
-            }
-
-            // 2. Backup Source
+            // 2. Backup Source (credentials decrypted below, in sourceDbConfig)
             sendProgress('backup', `Creating backup from external database "${sourceDb.name}"...`, 10);
             logger.info(`Creating backup from external database "${sourceDb.name}"`);
 
             // Create a temporary config for the backup
-            const sourceDbConfig: DatabaseConfig = {
-                ...sourceDb,
-                password: sourcePassword // Decrypted for usage
-            };
+            // Decrypted password, also injected into the connection string (stored without it)
+            const sourceDbConfig: DatabaseConfig = toRuntimeDatabase(sourceDb);
 
-            const backupResult = await backupManager.executeBackup(sourceDbConfig);
+            // Like any backup of the source: retention applied, run recorded in its history
+            const backupResult = await backupManager.backupDatabase(sourceDbConfig, 'manual');
 
             if (!backupResult.success) {
                 return {
@@ -240,9 +230,7 @@ export function registerDatabaseCreationHandlers(mainWindow: BrowserWindow | nul
                 isLocalBbdump: true
             });
 
-            if (backupResult.timestamp) {
-                targetDbConfig.lastBackup = backupResult.timestamp;
-            }
+            // No lastBackup: the dump belongs to the source, the copy was never backed up
 
             config.databases.push(targetDbConfig);
             saveConfig(config);

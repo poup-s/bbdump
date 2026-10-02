@@ -1,3 +1,8 @@
+/**
+ * Talks to the bbdump app's local HTTP server (127.0.0.1, random port, per-launch token
+ * read from MCP_CONFIRM_PORT_FILE): write confirmations, backups. Starts the app when it
+ * is not running.
+ */
 import * as http from 'http';
 import * as fs from 'fs';
 import { spawn } from 'child_process';
@@ -11,86 +16,75 @@ interface ConfirmationDetails {
   description: string;
 }
 
-function readPortFromFile(): number | null {
+export type ConfirmationOutcome =
+  | { approved: true }
+  | { approved: false; reason: 'refused' | 'timeout' | 'no_window' | 'unavailable' | 'not_configured' };
+
+const TOKEN_HEADER = 'x-bbdump-token';
+
+interface AppEndpoint {
+  port: number;
+  token: string;
+}
+
+/**
+ * Port file format (written 0600 by the bbdump app): port on the first line,
+ * auth token on the second. A port-only file (bbdump <= 1.0.2) yields an empty
+ * token, which the app rejects.
+ */
+function readEndpointFromFile(): AppEndpoint | null {
   const portFile = process.env.MCP_CONFIRM_PORT_FILE;
   if (!portFile) return null;
   try {
-    const content = fs.readFileSync(portFile, 'utf-8').trim();
-    const port = parseInt(content, 10);
-    return isNaN(port) ? null : port;
+    const [portLine = '', tokenLine = ''] = fs.readFileSync(portFile, 'utf-8').split(/\r?\n/);
+    const port = parseInt(portLine.trim(), 10);
+    return isNaN(port) ? null : { port, token: tokenLine.trim() };
   } catch {
     return null;
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+interface AppResponse {
+  reachable: boolean;
+  status?: number;
+  body?: any;
 }
 
-/**
- * Send a confirmation request to the Electron app's HTTP server.
- * Returns { approved, reachable }.
- */
-function doConfirmRequest(
-  port: number,
-  details: ConfirmationDetails
-): Promise<{ approved: boolean; reachable: boolean }> {
+/** One request to the app; `reachable: false` when nothing answers on the port */
+function appRequest({ port, token }: AppEndpoint, method: 'GET' | 'POST', path: string, payload: unknown, timeoutMs: number): Promise<AppResponse> {
   return new Promise((resolve) => {
-    const data = JSON.stringify(details);
+    const data = payload === undefined ? '' : JSON.stringify(payload);
     const req = http.request(
       {
         hostname: '127.0.0.1',
         port,
-        path: '/confirm',
-        method: 'POST',
+        path,
+        method,
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(data),
+          [TOKEN_HEADER]: token,
         },
-        timeout: 65000,
+        timeout: timeoutMs,
       },
       (res) => {
         let body = '';
-        res.on('data', (chunk: Buffer) => {
-          body += chunk.toString();
-        });
+        res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
         res.on('end', () => {
-          try {
-            const result = JSON.parse(body);
-            resolve({ approved: result.approved === true, reachable: true });
-          } catch {
-            resolve({ approved: false, reachable: true });
-          }
+          let parsed: any = undefined;
+          try { parsed = body ? JSON.parse(body) : undefined; } catch { /* not JSON */ }
+          resolve({ reachable: true, status: res.statusCode, body: parsed });
         });
       }
     );
-    req.on('error', () => resolve({ approved: false, reachable: false }));
+    req.on('error', () => resolve({ reachable: false }));
     req.on('timeout', () => {
       req.destroy();
-      resolve({ approved: false, reachable: false });
+      resolve({ reachable: false });
     });
-    req.write(data);
-    req.end();
-  });
-}
-
-function checkServerReachable(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const req = http.request(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/health',
-        method: 'GET',
-        timeout: 2000,
-      },
-      () => resolve(true)
-    );
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => {
-      req.destroy();
-      resolve(false);
-    });
+    if (data) req.write(data);
     req.end();
   });
 }
@@ -99,50 +93,72 @@ function tryLaunchApp(): void {
   const appPath = process.env.BBDUMP_APP_PATH;
   if (!appPath) return;
 
+  // This server may itself run on bbdump's binary in Node mode: the launched app
+  // must not inherit ELECTRON_RUN_AS_NODE, or it would start as plain Node.
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+
   try {
     if (process.platform === 'darwin') {
-      spawn('open', ['-a', appPath, '--args', '--mcp-confirm'], { detached: true, stdio: 'ignore' }).unref();
+      spawn('open', ['-a', appPath, '--args', '--mcp-confirm'], { detached: true, stdio: 'ignore', env }).unref();
     } else if (process.platform === 'linux') {
-      spawn(appPath, ['--mcp-confirm'], { detached: true, stdio: 'ignore' }).unref();
+      spawn(appPath, ['--mcp-confirm'], { detached: true, stdio: 'ignore', env }).unref();
     }
   } catch {
     // Ignore launch errors
   }
 }
 
-/**
- * Request user confirmation for a mutation via the Electron app.
- *
- * Flow:
- * 1. Read port file -> if missing, deny (not configured)
- * 2. Try to send confirmation request
- * 3. If server reachable -> return the user's decision
- * 4. If server unreachable -> launch app, wait for server, retry
- * 5. If still unreachable after retries -> deny
- */
-export async function requestConfirmation(details: ConfirmationDetails): Promise<boolean> {
-  const port = readPortFromFile();
-  if (!port) return false;
+/** Sends a request to the app, starting it (up to 15 s) when it is not running */
+async function callApp(method: 'GET' | 'POST', path: string, payload: unknown, timeoutMs: number): Promise<AppResponse | null> {
+  const endpoint = readEndpointFromFile();
+  if (!endpoint) return null;
+  const first = await appRequest(endpoint, method, path, payload, timeoutMs);
+  if (first.reachable) return first;
 
-  // First attempt
-  const firstAttempt = await doConfirmRequest(port, details);
-  if (firstAttempt.reachable) {
-    return firstAttempt.approved;
-  }
-
-  // Server not reachable — try to launch the app
   tryLaunchApp();
-
-  // Wait for the app to start (check every second, up to 15 seconds)
   for (let i = 0; i < 15; i++) {
     await sleep(1000);
-    const newPort = readPortFromFile();
-    if (newPort && (await checkServerReachable(newPort))) {
-      const retryResult = await doConfirmRequest(newPort, details);
-      return retryResult.approved;
-    }
+    const fresh = readEndpointFromFile();
+    if (!fresh) continue;
+    const health = await appRequest(fresh, 'GET', '/health', undefined, 2000);
+    if (health.reachable && health.status === 200) return appRequest(fresh, method, path, payload, timeoutMs);
   }
+  return { reachable: false };
+}
 
-  // App didn't start in time — deny
-  return false;
+/**
+ * Asks the user to approve a write in the bbdump app (or auto-approves when the user
+ * turned confirmations off there). Denied unless the app answers yes.
+ */
+export async function requestConfirmation(details: ConfirmationDetails): Promise<ConfirmationOutcome> {
+  const response = await callApp('POST', '/confirm', details, 65000);
+  if (!response) return { approved: false, reason: 'not_configured' };
+  if (!response.reachable || response.status === 401 || response.status === 403) return { approved: false, reason: 'unavailable' };
+  if (response.body?.approved === true) return { approved: true };
+  const reason = response.body?.reason;
+  return { approved: false, reason: reason === 'timeout' || reason === 'no_window' ? reason : 'refused' };
+}
+
+/** Message for a write that did not happen, telling the model what to do next */
+export function refusalMessage(outcome: Exclude<ConfirmationOutcome, { approved: true }>): string {
+  switch (outcome.reason) {
+    case 'refused': return 'The user refused this change in bbdump. Do not retry it as is: ask the user what they want instead.';
+    case 'timeout': return 'Nobody answered the confirmation in bbdump within 60 seconds. Ask the user to watch the bbdump window, then retry.';
+    case 'no_window': return 'bbdump could not show the confirmation window. Ask the user to open bbdump, then retry.';
+    case 'unavailable': return 'The bbdump app is not reachable to confirm this change. Ask the user to start bbdump (version 1.1 or later), then retry.';
+    case 'not_configured': return 'Writes need confirmation in the bbdump app, and this MCP server was not set up by bbdump. Reinstall it from bbdump Settings → MCP.';
+  }
+}
+
+/** GET/POST to the app for non-confirmation features (backups). Throws with a readable message */
+export async function appApi<T>(method: 'GET' | 'POST', path: string, payload?: unknown, timeoutMs = 30000): Promise<T> {
+  const response = await callApp(method, path, payload, timeoutMs);
+  if (!response) throw new Error('This MCP server was not set up by bbdump: reinstall it from bbdump Settings → MCP.');
+  if (!response.reachable) throw new Error('The bbdump app is not reachable. Ask the user to start bbdump, then retry.');
+  if (response.status === 404) throw new Error('This bbdump version does not support this feature: update bbdump to 1.1 or later.');
+  if (response.status && response.status >= 400) {
+    throw new Error(response.body?.error || `bbdump answered HTTP ${response.status}`);
+  }
+  return response.body as T;
 }

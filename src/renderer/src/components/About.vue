@@ -1,36 +1,114 @@
 <script setup lang="ts">
+/**
+ * Info page: the version and its updates, the environment (what a bug report needs, one
+ * click to copy), where bbdump keeps its files, and the project's links.
+ */
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { ipcRenderer } from '../electron';
 import { useToast } from '../composables/useToast';
+import { getErrorMessage } from '../utils';
+import { btnPrimary, btnSecondary } from './ui/classes';
+import { WHATS_NEW_VERSION } from '../whatsNew';
 
-const { t } = useI18n();
+const { t, currentLanguage } = useI18n();
 const { addToast } = useToast();
+
+interface AboutInfo {
+  version: string;
+  packaged: boolean;
+  electron: string;
+  chrome: string;
+  node: string;
+  platform: string;
+  arch: string;
+  osVersion: string;
+  pgDump: { version?: string; path?: string } | null;
+  dataPath: string;
+  logsPath: string;
+  configPath: string;
+  home: string;
+  autoInstallUpdates: boolean;
+}
+
+const LINKS = {
+  site: 'https://poups.dev/bbdump',
+  source: 'https://github.com/poup-s/bbdump',
+  releases: 'https://github.com/poup-s/bbdump/releases',
+  issues: 'https://github.com/poup-s/bbdump/issues/new',
+  kofi: 'https://ko-fi.com/poup_s',
+};
+
+const info = ref<AboutInfo | null>(null);
+
+// "Checked 3 minutes ago", refreshed every half minute
+const now = ref(Date.now());
+let clock: ReturnType<typeof setInterval> | null = null;
+
+onMounted(async () => {
+  clock = setInterval(() => { now.value = Date.now(); }, 30000);
+  try {
+    info.value = await ipcRenderer.invoke('get-about-info');
+  } catch (error) {
+    console.error('Info page:', getErrorMessage(error));
+  }
+});
+onUnmounted(() => { if (clock) clearInterval(clock); });
+
+const osName = computed(() => {
+  if (!info.value) return '';
+  const name = { darwin: 'macOS', linux: 'Linux', win32: 'Windows' }[info.value.platform] ?? info.value.platform;
+  return `${name} ${info.value.osVersion} · ${info.value.arch}`;
+});
+
+const lastCheck = computed(() => {
+  if (!store.lastUpdateCheck) return '';
+  const minutes = Math.round((now.value - store.lastUpdateCheck) / 60000);
+  const rtf = new Intl.RelativeTimeFormat(currentLanguage.value, { numeric: 'auto' });
+  const when = minutes < 1 ? t('about.justNow')
+    : minutes < 60 ? rtf.format(-minutes, 'minute')
+      : rtf.format(-Math.round(minutes / 60), 'hour');
+  return t('about.lastCheck', { when });
+});
+
+/** One state for the update block */
+const updateState = computed(() => {
+  if (store.updateDownloaded) return 'ready';
+  if (store.downloadingUpdate) return 'downloading';
+  if (store.checkingUpdate) return 'checking';
+  if (store.updateAvailable) return 'available';
+  if (store.updateCheckFailed) return 'failed';
+  return 'current';
+});
+
+const stateTone = computed(() => ({
+  ready: 'bg-emerald-500', downloading: 'bg-sky-500', checking: 'bg-gray-400 animate-pulse',
+  available: 'bg-sky-500', failed: 'bg-amber-500', current: 'bg-emerald-500',
+}[updateState.value]));
 
 const checkForUpdates = async () => {
   if (store.checkingUpdate) return;
-  
+  store.checkingUpdate = true;
   try {
-    store.checkingUpdate = true;
     const result = await ipcRenderer.invoke('check-for-updates');
-    store.checkingUpdate = false;
-    
-    if (result.updateAvailable) {
+    store.lastUpdateCheck = Date.now();
+    store.updateCheckFailed = !!result.error;
+    if (result.error) {
+      addToast(t('settings.updateError'), 'error', { detail: result.error });
+    } else if (result.updateAvailable) {
       store.updateAvailable = true;
-      store.updateDetails = {
-        version: result.version,
-        url: result.url,
-        releaseNotes: result.releaseNotes
-      };
-      addToast(t('settings.updateAvailable', { version: result.version }), 'info', result.url);
+      store.updateDetails = { version: result.version, url: result.url, releaseNotes: result.releaseNotes };
     } else {
       store.updateAvailable = false;
       store.updateDetails = null;
       addToast(t('settings.upToDate'), 'success');
     }
-  } catch {
+  } catch (error) {
+    store.updateCheckFailed = true;
+    addToast(t('settings.updateError'), 'error', { detail: getErrorMessage(error) });
+  } finally {
     store.checkingUpdate = false;
-    addToast(t('settings.updateError'), 'error');
   }
 };
 
@@ -39,176 +117,208 @@ const downloadUpdate = async () => {
   store.downloadingUpdate = true;
   store.downloadProgress = 0;
   try {
-    await ipcRenderer.invoke('download-update');
-  } catch {
+    const result = await ipcRenderer.invoke('download-update');
+    // macOS (unsigned) and .deb: the release page was opened in the browser
+    if (result?.manual) store.downloadingUpdate = false;
+  } catch (error) {
     store.downloadingUpdate = false;
-    addToast(t('settings.updateError'), 'error');
+    addToast(t('settings.updateError'), 'error', { detail: getErrorMessage(error) });
   }
 };
 
-const installUpdate = () => {
-  ipcRenderer.invoke('install-update');
+const installUpdate = () => ipcRenderer.invoke('install-update');
+
+const open = (url: string) => window.open(url, '_blank');
+const reveal = (path: string) => ipcRenderer.invoke('show-item-in-folder', path);
+/** ~/Library/… rather than /Users/name/Library/… */
+const shortPath = (path: string) => (info.value?.home && path.startsWith(info.value.home) ? `~${path.slice(info.value.home.length)}` : path);
+
+/** What a bug report needs, without any database or connection detail */
+const diagnostics = computed(() => {
+  const i = info.value;
+  if (!i) return '';
+  return [
+    `bbdump ${i.version}${i.packaged ? '' : ' (dev)'}`,
+    `${osName.value}`,
+    `pg_dump ${i.pgDump?.version ?? (i.pgDump ? '?' : t('about.notFound'))}`,
+    `Electron ${i.electron} · Chromium ${i.chrome} · Node ${i.node}`,
+    `${t('about.language')}: ${currentLanguage.value}`,
+  ].join('\n');
+});
+
+const copyDiagnostics = async () => {
+  try {
+    await navigator.clipboard.writeText(diagnostics.value);
+    addToast(t('about.diagnosticsCopied'), 'success');
+  } catch {
+    addToast(t('toasts.copyFailed'), 'error');
+  }
 };
 
+const rowLabel = 'text-[13px] text-gray-500 dark:text-zinc-400';
+const rowValue = 'font-mono text-[12.5px] text-gray-800 dark:text-zinc-200 text-right truncate';
+const sectionTitle = 'text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3';
+const card = 'bg-white dark:bg-zinc-900 rounded-xl p-4 border border-gray-200 dark:border-zinc-800';
 </script>
 
 <template>
-  <div class="h-full flex flex-col items-center justify-center p-8 max-w-4xl mx-auto">
-    <!-- Header Section -->
-    <div class="relative group mb-12">
-      <div class="absolute -inset-4 bg-gradient-to-tr from-blue-500/20 to-purple-500/20 blur-2xl rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-700"></div>
-      
-      <div class="relative w-32 h-32 bg-white dark:bg-zinc-900 rounded-[2.5rem] flex items-center justify-center shadow-2xl rotate-3 group-hover:rotate-0 transition-transform duration-500 border border-white/20">
-        <img src="/logo.png" alt="logo" class="w-full h-full p-4 object-contain rounded-[2.5rem]"/>
-      </div>
-      
-      <!-- Version Badge -->
-      <div class="absolute -bottom-2 -right-2 px-3 py-1 bg-foreground text-background text-xs font-bold rounded-full shadow-lg border-2 border-background transform group-hover:scale-110 transition-transform duration-300">
-        v{{ store.appVersion }}
-      </div>
+  <div class="h-full flex flex-col">
+    <div class="mb-4 shrink-0">
+      <h2 class="text-lg font-bold tracking-tight">{{ t('nav.about') }}</h2>
+      <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{{ t('about.description') }}</p>
     </div>
-    
-    <div class="text-center mb-12">
-      <h1 class="text-5xl font-black tracking-tighter mb-4 bg-gradient-to-b from-foreground to-foreground/70 bg-clip-text text-transparent">
-        bbdump
-      </h1>
-      <p class="text-xl text-gray-500 dark:text-gray-400 font-medium">
-        Modern PostgreSQL Manager
-      </p>
-    </div>
-    
-    <!-- Info Grid -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-2xl mb-12">
-      <!-- Status Card -->
-      <div class="bg-surface/50 backdrop-blur-md border border-white/10 rounded-3xl p-6 shadow-xl relative overflow-hidden group">
-        <div class="absolute top-0 right-0 p-4 opacity-10 transform translate-x-2 -translate-y-2 group-hover:scale-125 transition-transform duration-500">
-          <svg class="w-16 h-16" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 2.18l7 3.12v4.7c0 4.67-3.13 8.75-7 9.81-3.87-1.06-7-5.14-7-9.81V6.3l7-3.12z"/>
-          </svg>
-        </div>
-        
-        <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Status</h3>
-        
-        <div class="flex items-center gap-3">
-          <template v-if="store.updateDownloaded">
-            <div class="w-3 h-3 bg-green-500 rounded-full animate-pulse shadow-[0_0_12px_rgba(34,197,94,0.5)]"></div>
-            <span class="text-lg font-bold text-green-500 tracking-tight">{{ t('settings.updateReady') }}</span>
-          </template>
-          <template v-else-if="store.downloadingUpdate">
-            <div class="w-3 h-3 bg-blue-500 rounded-full animate-pulse shadow-[0_0_12px_rgba(59,130,246,0.5)]"></div>
-            <span class="text-lg font-bold text-blue-500 tracking-tight">{{ t('settings.downloading') }}</span>
-          </template>
-          <template v-else-if="store.updateAvailable">
-            <div class="w-3 h-3 bg-blue-500 rounded-full animate-pulse shadow-[0_0_12px_rgba(59,130,246,0.5)]"></div>
-            <span class="text-lg font-bold text-blue-500 tracking-tight">{{ t('settings.updateAvailableShort') }}</span>
-          </template>
-          <template v-else>
-            <div class="w-3 h-3 bg-green-500 rounded-full shadow-[0_0_12px_rgba(34,197,94,0.5)]"></div>
-            <span class="text-lg font-bold text-green-500 tracking-tight">{{ t('settings.upToDate') }}</span>
-          </template>
-        </div>
 
-        <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
-          <template v-if="store.updateDownloaded">
-            v{{ store.updateDetails?.version }} {{ t('settings.readyToInstall') }}
-          </template>
-          <template v-else-if="store.downloadingUpdate">
-            {{ t('settings.downloading') }} {{ store.downloadProgress }}%
-          </template>
-          <template v-else-if="store.updateAvailable">
-            v{{ store.updateDetails?.version }} {{ t('settings.isAvailable') }}
-          </template>
-          <template v-else>
-            {{ t('settings.latestVersion') }}
-          </template>
-        </p>
-
-        <!-- Progress bar -->
-        <div v-if="store.downloadingUpdate" class="mt-3 w-full bg-zinc-200 dark:bg-zinc-700 rounded-full h-2 overflow-hidden">
-          <div class="bg-blue-500 h-full rounded-full transition-all duration-300" :style="{ width: store.downloadProgress + '%' }"></div>
-        </div>
-
-        <div class="mt-4 flex gap-2">
-          <button
-            v-if="store.updateDownloaded"
-            @click="installUpdate"
-            class="px-4 py-2 bg-green-500 hover:bg-green-600 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-green-500/20 active:scale-95"
-          >
-            {{ t('settings.installAndRestart') }}
-          </button>
-          <button
-            v-else-if="store.updateAvailable && !store.downloadingUpdate"
-            @click="downloadUpdate"
-            class="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-bold rounded-xl transition-all shadow-lg shadow-blue-500/20 active:scale-95"
-          >
-            {{ t('settings.downloadUpdate') }} v{{ store.updateDetails?.version }}
-          </button>
-          <button
-            v-if="!store.downloadingUpdate && !store.updateDownloaded"
-            @click="checkForUpdates"
-            class="p-2 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl transition-all group active:scale-95 disabled:opacity-50"
-            :disabled="store.checkingUpdate"
-            :title="t('settings.checkForUpdates')"
-          >
-            <svg
-              class="w-5 h-5 text-gray-400 group-hover:text-foreground transition-colors"
-              :class="{ 'animate-spin': store.checkingUpdate }"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      <!-- App Details Card -->
-      <div class="bg-surface/50 backdrop-blur-md border border-white/10 rounded-3xl p-6 shadow-xl relative overflow-hidden group">
-        <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Details</h3>
-        
-        <div class="space-y-4">
-          <div class="flex justify-between items-center text-sm">
-            <span class="text-gray-500">{{ t('about.version') }}</span>
-            <span class="font-mono font-bold">{{ store.appVersion }}</span>
+    <div class="space-y-4 pb-6">
+      <!-- Version and updates -->
+      <div :class="card" class="p-5!">
+        <div class="flex flex-col md:flex-row md:items-center gap-5">
+          <div class="flex items-center gap-4 min-w-0 flex-1">
+            <img src="/logo.png" alt="" class="w-14 h-14 shrink-0 rounded-2xl border border-gray-200 dark:border-zinc-700 bg-white p-1.5 object-contain" />
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="text-xl font-bold tracking-tight">bbdump</span>
+                <span class="font-mono text-[11px] px-1.5 py-0.5 rounded-md bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-300">v{{ store.appVersion }}</span>
+                <span v-if="info && !info.packaged" class="font-mono text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400">dev</span>
+              </div>
+              <p class="mt-0.5 text-[13px] text-gray-500 dark:text-zinc-400">{{ t('about.tagline') }}</p>
+              <button type="button" class="mt-1.5 inline-flex items-center gap-1.5 text-[12.5px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline" @click="store.showWhatsNew = true">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
+                {{ t('about.tour', { version: WHATS_NEW_VERSION.replace(/\.0$/, '') }) }}
+              </button>
+            </div>
           </div>
-          <div class="flex justify-between items-center text-sm">
-            <span class="text-gray-500">{{ t('about.author') }}</span>
-            <span class="font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">{{ store.appAuthor }}</span>
+
+          <div class="md:w-[300px] shrink-0 rounded-lg border border-gray-200 dark:border-zinc-800 bg-gray-50/70 dark:bg-zinc-800/30 px-3.5 py-3" aria-live="polite">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full shrink-0" :class="stateTone" aria-hidden="true" />
+              <span class="text-[13px] font-medium text-gray-900 dark:text-zinc-100">
+                <template v-if="updateState === 'ready'">{{ t('about.update.ready', { version: store.updateDetails?.version }) }}</template>
+                <template v-else-if="updateState === 'downloading'">{{ t('about.update.downloading', { progress: store.downloadProgress }) }}</template>
+                <template v-else-if="updateState === 'checking'">{{ t('about.update.checking') }}</template>
+                <template v-else-if="updateState === 'available'">{{ t('about.update.available', { version: store.updateDetails?.version }) }}</template>
+                <template v-else-if="updateState === 'failed'">{{ t('about.update.failed') }}</template>
+                <template v-else>{{ t('about.update.current') }}</template>
+              </span>
+            </div>
+            <p v-if="lastCheck && updateState !== 'downloading' && updateState !== 'ready'" class="mt-0.5 pl-4 text-[11.5px] text-gray-500 dark:text-zinc-400">{{ lastCheck }}</p>
+
+            <div v-if="updateState === 'downloading'" class="mt-2.5 h-1.5 rounded-full bg-gray-200 dark:bg-zinc-700 overflow-hidden">
+              <div class="h-full bg-sky-500 rounded-full transition-[width] duration-300" :style="{ width: `${store.downloadProgress}%` }" />
+            </div>
+
+            <p v-if="updateState === 'available' && info && !info.autoInstallUpdates" class="mt-2 text-[11.5px] leading-snug text-gray-500 dark:text-zinc-400">
+              {{ t('about.update.manualHint') }}
+            </p>
+
+            <div class="mt-3 flex flex-wrap gap-2">
+              <button v-if="updateState === 'ready'" type="button" :class="btnPrimary" @click="installUpdate">{{ t('settings.installAndRestart') }}</button>
+              <template v-else-if="updateState === 'available'">
+                <button type="button" :class="btnPrimary" @click="downloadUpdate">
+                  {{ info && !info.autoInstallUpdates ? t('about.update.openDownload') : t('about.update.download', { version: store.updateDetails?.version }) }}
+                </button>
+                <button v-if="store.updateDetails?.url" type="button" :class="btnSecondary" @click="open(store.updateDetails.url)">{{ t('toasts.actions.releaseNotes') }}</button>
+              </template>
+              <button
+                v-if="updateState !== 'ready' && updateState !== 'downloading' && updateState !== 'available'"
+                type="button"
+                :class="btnSecondary"
+                :disabled="store.checkingUpdate"
+                @click="checkForUpdates"
+              >
+                <svg class="w-3.5 h-3.5" :class="{ 'animate-spin': store.checkingUpdate }" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                {{ t('settings.checkForUpdates') }}
+              </button>
+            </div>
           </div>
         </div>
       </div>
-    </div>
 
-    <!-- Footer -->
-    <div class="flex flex-col items-center gap-4 text-center">
-      <div class="flex gap-6">
-        <a href="https://github.com/poup-s/bbdump" target="_blank" class="text-gray-400 hover:text-foreground transition-colors">
-          <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.43.372.823 1.102.823 2.222 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
-        </a>
-        <a href="https://ko-fi.com/poup_s" target="_blank" class="text-gray-400 hover:text-amber-500 transition-colors">
-          <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 14c.83.642 2.077 1.017 3.5 1c1.423.017 2.67-.358 3.5-1s2.077-1.017 3.5-1c1.423-.017 2.67.358 3.5 1"/>
-            <path d="M8 3a2.4 2.4 0 0 0-1 2a2.4 2.4 0 0 0 1 2m4-4a2.4 2.4 0 0 0-1 2a2.4 2.4 0 0 0 1 2"/>
-            <path d="M3 10h14v5a6 6 0 0 1-6 6H9a6 6 0 0 1-6-6z"/>
-            <path d="M16.746 16.726a3 3 0 1 0 .252-5.555"/>
-          </svg>
-        </a>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <!-- Environment -->
+        <div :class="card" class="flex flex-col">
+          <h3 :class="sectionTitle">{{ t('about.environment') }}</h3>
+          <dl class="space-y-2.5 flex-1">
+            <div class="flex items-center justify-between gap-4">
+              <dt :class="rowLabel">{{ t('about.system') }}</dt>
+              <dd :class="rowValue">{{ osName || '…' }}</dd>
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <dt :class="rowLabel">pg_dump</dt>
+              <dd v-if="!info" :class="rowValue">…</dd>
+              <dd v-else-if="info.pgDump" :class="rowValue" :title="info.pgDump.path">{{ info.pgDump.version ?? '?' }}<span v-if="info.pgDump.path" class="text-gray-400 dark:text-zinc-500"> · {{ info.pgDump.path }}</span></dd>
+              <dd v-else class="text-[12.5px] text-amber-700 dark:text-amber-400">{{ t('about.notFound') }}</dd>
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <dt :class="rowLabel">Electron</dt>
+              <dd :class="rowValue">{{ info?.electron ?? '…' }}</dd>
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <dt :class="rowLabel">Chromium · Node</dt>
+              <dd :class="rowValue">{{ info ? `${info.chrome} · ${info.node}` : '…' }}</dd>
+            </div>
+          </dl>
+          <div class="mt-4 pt-3 border-t border-gray-100 dark:border-zinc-800 flex flex-wrap items-center gap-2">
+            <button type="button" :class="btnSecondary" :disabled="!info" @click="copyDiagnostics">{{ t('about.copyDiagnostics') }}</button>
+            <button type="button" :class="btnSecondary" @click="open(LINKS.issues)">{{ t('about.reportIssue') }}</button>
+          </div>
+          <p class="mt-2 text-[11px] leading-snug text-gray-400 dark:text-zinc-500">{{ t('about.diagnosticsHint') }}</p>
+        </div>
+
+        <!-- Files -->
+        <div :class="card">
+          <h3 :class="sectionTitle">{{ t('about.files') }}</h3>
+          <ul class="space-y-1">
+            <li v-for="item in info ? [
+              { label: t('about.dataFolder'), path: info.dataPath },
+              { label: t('about.configFile'), path: info.configPath },
+              { label: t('about.logsFolder'), path: info.logsPath },
+            ] : []" :key="item.label" class="flex items-center gap-3 -mx-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-800/50">
+              <div class="min-w-0 flex-1">
+                <div class="text-[13px] text-gray-700 dark:text-zinc-300">{{ item.label }}</div>
+                <!-- Cut at the start: the end of a path is the part that tells -->
+                <div class="font-mono text-[11.5px] text-gray-400 dark:text-zinc-500 truncate [direction:rtl] text-left" :title="item.path"><bdi dir="ltr">{{ shortPath(item.path) }}</bdi></div>
+              </div>
+              <button type="button" class="shrink-0 text-[12px] font-medium text-gray-600 dark:text-zinc-300 hover:text-gray-900 dark:hover:text-white px-2 py-1 rounded-md hover:bg-gray-100 dark:hover:bg-zinc-800" @click="reveal(item.path)">
+                {{ info?.platform === 'darwin' ? t('about.showInFinder') : t('about.showInFolder') }}
+              </button>
+            </li>
+          </ul>
+          <p class="mt-3 text-[11px] leading-snug text-gray-400 dark:text-zinc-500">{{ t('about.filesHint') }}</p>
+        </div>
       </div>
-      <p class="text-xs text-gray-500">
-        &copy; {{ new Date().getFullYear() }} bbdump. Built with ❤️ by <a href="https://github.com/poup-s" target="_blank" class="text-blue-500 hover:text-blue-600 transition-colors">Poups</a>.
+
+      <!-- Links -->
+      <div :class="card">
+        <h3 :class="sectionTitle">{{ t('about.links') }}</h3>
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+          <button
+            v-for="link in [
+              { url: LINKS.site, title: t('about.site'), sub: 'poups.dev/bbdump' },
+              { url: LINKS.releases, title: t('about.whatsNew'), sub: t('about.whatsNewSub') },
+              { url: LINKS.source, title: t('about.source'), sub: 'github.com/poup-s/bbdump' },
+              { url: LINKS.kofi, title: t('about.support'), sub: 'ko-fi.com/poup_s' },
+            ]"
+            :key="link.url"
+            type="button"
+            class="group text-left rounded-lg border border-gray-200 dark:border-zinc-800 px-3 py-2.5 hover:border-gray-300 dark:hover:border-zinc-700 hover:bg-gray-50 dark:hover:bg-zinc-800/40 transition-colors"
+            @click="open(link.url)"
+          >
+            <div class="flex items-center gap-1.5 text-[13px] font-medium text-gray-800 dark:text-zinc-100">
+              {{ link.title }}
+              <svg class="w-3 h-3 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-zinc-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+              </svg>
+            </div>
+            <div class="mt-0.5 text-[11.5px] text-gray-500 dark:text-zinc-400 truncate">{{ link.sub }}</div>
+          </button>
+        </div>
+      </div>
+
+      <p class="text-center text-[11px] text-gray-400 dark:text-zinc-500">
+        {{ t('about.footer', { year: new Date().getFullYear() }) }}
       </p>
     </div>
   </div>
 </template>
-
-<style scoped>
-.animate-spin {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-</style>

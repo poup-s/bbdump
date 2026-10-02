@@ -1,4 +1,4 @@
-import { detectOS, getOSType } from '../os/osDetector';
+import { detectOS } from '../os/osDetector';
 import { getErrorMessage } from '../utils';
 import { detectPostgresTools, detectHomebrew, ToolDetectionResult } from '../tools/toolDetector';
 import { getToolPaths } from '../os/osPaths';
@@ -8,6 +8,7 @@ import { logger } from '../logger';
 export interface PrerequisitesResult {
   pgDump: ToolDetectionResult;
   psql: ToolDetectionResult;
+  pgRestore: ToolDetectionResult;
   homebrew?: ToolDetectionResult; // macOS only
   postgresServer: {
     installed: boolean;
@@ -58,6 +59,7 @@ export async function checkPrerequisites(): Promise<PrerequisitesResult> {
   return {
     pgDump: postgresTools.pgDump,
     psql: postgresTools.psql,
+    pgRestore: postgresTools.pgRestore,
     homebrew,
     postgresServer
   };
@@ -67,42 +69,29 @@ export async function checkPrerequisites(): Promise<PrerequisitesResult> {
  * Checks if all required prerequisites are installed
  */
 export function areRequiredPrerequisitesInstalled(prerequisites: PrerequisitesResult): boolean {
-  // pg_dump et psql sont requis
-  if (!prerequisites.pgDump.installed || !prerequisites.psql.installed) {
-    return false;
-  }
-  
-  // On macOS, if we want to create local DBs, Homebrew and PostgreSQL Server are required
-  // But for now, we consider them optional
-  // (the user can still connect to remote DBs)
-  
-  return true;
+  // The client tools are required; Homebrew and a local PostgreSQL server are optional
+  // (only needed to create/manage local databases — remote-only use works without them)
+  return getMissingPrerequisites(prerequisites).length === 0;
 }
 
 /**
- * Returns the list of missing tools
+ * Returns the list of missing required tools
  */
 export function getMissingPrerequisites(prerequisites: PrerequisitesResult): string[] {
   const missing: string[] = [];
-  
+
   if (!prerequisites.pgDump.installed) {
     missing.push('pg_dump');
   }
-  
+
   if (!prerequisites.psql.installed) {
     missing.push('psql');
   }
-  
-  if (getOSType() === 'macos') {
-    if (!prerequisites.homebrew?.installed) {
-      missing.push('Homebrew');
-    }
-    
-    if (!prerequisites.postgresServer.installed) {
-      missing.push('PostgreSQL Server');
-    }
+
+  if (!prerequisites.pgRestore.installed) {
+    missing.push('pg_restore');
   }
-  
+
   return missing;
 }
 

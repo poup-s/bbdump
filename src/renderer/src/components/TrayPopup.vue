@@ -59,6 +59,7 @@ let countdownInterval: ReturnType<typeof setInterval> | null = null;
 const operationLabel = computed(() => {
   const tool = mcpConfirm.value?.tool;
   if (!tool) return '';
+  if (tool === 'undo_change') return t('mcp.undo');
   if (tool.includes('insert')) return t('mcp.insert');
   if (tool.includes('update')) return t('mcp.update');
   if (tool.includes('delete')) return t('mcp.delete');
@@ -68,6 +69,7 @@ const operationLabel = computed(() => {
 const operationColorClass = computed(() => {
   const tool = mcpConfirm.value?.tool;
   if (!tool) return 'bg-amber-500/20 text-amber-400';
+  if (tool === 'undo_change') return 'bg-sky-500/20 text-sky-400';
   if (tool.includes('insert')) return 'bg-emerald-500/20 text-emerald-400';
   if (tool.includes('delete')) return 'bg-red-500/20 text-red-400';
   return 'bg-amber-500/20 text-amber-400';
@@ -146,7 +148,7 @@ const loadData = async () => {
   try {
     const config = await ipcRenderer.invoke('get-config');
     if (config?.language) setLanguage(config.language);
-    databases.value = (config?.databases || []).map((db: any) => ({
+    databases.value = (config?.databases || []).map((db: TrayDatabase) => ({
       id: db.id,
       name: db.name,
       displayName: db.displayName,
@@ -157,7 +159,7 @@ const loadData = async () => {
       cron: db.cron,
       masked: db.masked
     }));
-    projects.value = (config?.projects || []).map((p: any) => ({
+    projects.value = (config?.projects || []).map((p: TrayProject) => ({
       id: p.id,
       name: p.name,
       color: p.color || 'bg-blue-500',
@@ -228,12 +230,12 @@ onMounted(() => {
   loadData();
   ipcRenderer.on('tray-refresh', loadData);
 
-  ipcRenderer.on('mcp-confirm-request', (_: any, data: McpConfirmRequest) => {
+  ipcRenderer.on('mcp-confirm-request', (_: unknown, data: McpConfirmRequest) => {
     mcpConfirm.value = data;
     startCountdown();
   });
 
-  ipcRenderer.on('mcp-confirm-timeout', (_: any, id: string) => {
+  ipcRenderer.on('mcp-confirm-timeout', (_: unknown, id: string) => {
     if (mcpConfirm.value?.id === id) {
       stopCountdown();
       mcpConfirm.value = null;

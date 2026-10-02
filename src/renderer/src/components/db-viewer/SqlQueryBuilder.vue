@@ -5,12 +5,17 @@ import { useI18n } from '../../composables/useI18n';
 import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
 import { ipcRenderer } from '../../electron';
-import { buildDbConfig, Database } from '../../types';
+import { buildDbConfig, Database, type FullSchema } from '../../types';
 import { store } from '../../store';
+import { DEFAULT_SCHEMA, displayTableName, quoteIdent, qualifiedIdent } from './schemaNames';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   db: Database | null;
-}>();
+  /** Schema selected in the viewer: its tables are listed first. */
+  schema?: string;
+}>(), {
+  schema: DEFAULT_SCHEMA
+});
 
 const { t } = useI18n();
 const { addToast } = useToast();
@@ -19,7 +24,10 @@ const { showConfirm } = useConfirm();
 const MUTATION_REGEX = /^\s*(UPDATE|DELETE|INSERT|DROP|ALTER|TRUNCATE|CREATE)\b/i;
 const DANGEROUS_REGEX = /^\s*(DELETE|DROP|TRUNCATE)\b/i;
 
-// Schema data
+// Schema data.
+// Tables are referenced in the builder by a "table key": the bare name for tables of the
+// public schema, `schema.table` otherwise. `table_name` / `source_table` / `target_table`
+// below hold that key; tableRefs maps it back to the real schema and table name.
 interface SchemaColumn {
   table_name: string;
   column_name: string;
@@ -31,8 +39,20 @@ interface SchemaFK {
   target_table: string;
   target_column: string;
 }
+interface TableRef {
+  schema: string;
+  name: string;
+}
 
-const allTables = ref<string[]>([]);
+const tableRefs = ref<Map<string, TableRef>>(new Map());
+const tableKey = (schema: string, name: string) => displayTableName(schema, name, DEFAULT_SCHEMA);
+// Tables of the schema selected in the viewer first, then the others
+const allTables = computed(() => {
+  const refs = [...tableRefs.value.entries()];
+  const inCurrent = refs.filter(([, r]) => r.schema === props.schema).map(([k]) => k);
+  const others = refs.filter(([, r]) => r.schema !== props.schema).map(([k]) => k);
+  return [...inCurrent, ...others];
+});
 const allColumns = ref<SchemaColumn[]>([]);
 const allForeignKeys = ref<SchemaFK[]>([]);
 const schemaLoaded = ref(false);
@@ -135,7 +155,7 @@ const rawMode = ref(false);
 const rawSql = ref('');
 
 const isExecuting = ref(false);
-const resultRows = ref<any[]>([]);
+const resultRows = ref<Record<string, unknown>[]>([]);
 const resultFields = ref<string[]>([]);
 const resultDuration = ref(0);
 const resultTruncated = ref(false);
@@ -218,6 +238,24 @@ const getFkSuggestions = (joinTable: string) => {
   return suggestions;
 };
 
+// Quoted, schema-qualified SQL for a table key (unknown names are quoted as-is)
+const tableSql = (key: string): string => {
+  const ref = tableRefs.value.get(key);
+  return ref ? qualifiedIdent(ref.schema, ref.name) : quoteIdent(key);
+};
+
+// Quoted SQL for a column reference picked in the builder ("col" or "tableKey.col").
+// Anything that is not a known column (an expression, a function call...) is kept verbatim.
+const columnSql = (colRef: string): string => {
+  const ref = colRef.trim();
+  if (!ref || ref === '*') return ref;
+  const candidates = allColumns.value.filter(c => activeTables.value.includes(c.table_name));
+  const qualified = candidates.find(c => `${c.table_name}.${c.column_name}` === ref);
+  if (qualified) return `${tableSql(qualified.table_name)}.${quoteIdent(qualified.column_name)}`;
+  if (candidates.some(c => c.column_name === ref)) return quoteIdent(ref);
+  return ref;
+};
+
 // Build WHERE clause (shared across query types)
 const buildWhereClause = () => {
   const whereBlock = blocks.value.find(b => b.type === 'where') as WhereBlock | undefined;
@@ -227,12 +265,12 @@ const buildWhereClause = () => {
   const whereParts = validConditions.map((c, i) => {
     const prefix = i > 0 ? `${c.connector} ` : '';
     if (c.operator === 'IS NULL' || c.operator === 'IS NOT NULL') {
-      return `${prefix}${c.column} ${c.operator}`;
+      return `${prefix}${columnSql(c.column)} ${c.operator}`;
     }
     const val = c.value;
     const isNum = val !== '' && !isNaN(Number(val));
     const quotedVal = isNum ? val : `'${val.replace(/'/g, "''")}'`;
-    return `${prefix}${c.column} ${c.operator} ${quotedVal}`;
+    return `${prefix}${columnSql(c.column)} ${c.operator} ${quotedVal}`;
   });
   return `WHERE ${whereParts.join(' ')}`;
 };
@@ -250,19 +288,19 @@ const generatedSql = computed(() => {
     if (!fromBlock?.table) return '';
     const parts: string[] = [];
     const distinct = selectBlock?.distinct ? 'DISTINCT ' : '';
-    const cols = selectBlock?.columns?.length ? selectBlock.columns.join(', ') : '*';
+    const cols = selectBlock?.columns?.length ? selectBlock.columns.map(columnSql).join(', ') : '*';
     parts.push(`SELECT ${distinct}${cols}`);
-    parts.push(`FROM "${fromBlock.table}"`);
+    parts.push(`FROM ${tableSql(fromBlock.table)}`);
     for (const join of joinBlocks) {
       if (join.table && join.onLeft && join.onRight) {
-        parts.push(`${join.joinType} JOIN "${join.table}" ON ${join.onLeft} = ${join.onRight}`);
+        parts.push(`${join.joinType} JOIN ${tableSql(join.table)} ON ${columnSql(join.onLeft)} = ${columnSql(join.onRight)}`);
       }
     }
     const where = buildWhereClause();
     if (where) parts.push(where);
-    if (groupByBlock?.columns.length) parts.push(`GROUP BY ${groupByBlock.columns.join(', ')}`);
+    if (groupByBlock?.columns.length) parts.push(`GROUP BY ${groupByBlock.columns.map(columnSql).join(', ')}`);
     if (orderByBlock?.columns.length) {
-      const orderParts = orderByBlock.columns.filter(c => c.column).map(c => `${c.column} ${c.direction}`);
+      const orderParts = orderByBlock.columns.filter(c => c.column).map(c => `${columnSql(c.column)} ${c.direction}`);
       if (orderParts.length) parts.push(`ORDER BY ${orderParts.join(', ')}`);
     }
     if (limitBlock) parts.push(`LIMIT ${limitBlock.value}`);
@@ -276,11 +314,11 @@ const generatedSql = computed(() => {
     const validItems = setBlock?.items.filter(i => i.column) || [];
     if (validItems.length === 0) return '';
     const parts: string[] = [];
-    parts.push(`UPDATE "${tableBlock.table}"`);
+    parts.push(`UPDATE ${tableSql(tableBlock.table)}`);
     const setParts = validItems.map(i => {
       const isNum = i.value !== '' && !isNaN(Number(i.value));
       const val = i.value === 'NULL' ? 'NULL' : isNum ? i.value : `'${i.value.replace(/'/g, "''")}'`;
-      return `${i.column} = ${val}`;
+      return `${columnSql(i.column)} = ${val}`;
     });
     parts.push(`SET ${setParts.join(', ')}`);
     const where = buildWhereClause();
@@ -292,7 +330,7 @@ const generatedSql = computed(() => {
     const tableBlock = blocks.value.find(b => b.type === 'deleteFrom') as DeleteFromBlock | undefined;
     if (!tableBlock?.table) return '';
     const parts: string[] = [];
-    parts.push(`DELETE FROM "${tableBlock.table}"`);
+    parts.push(`DELETE FROM ${tableSql(tableBlock.table)}`);
     const where = buildWhereClause();
     if (where) parts.push(where);
     return parts.join('\n');
@@ -305,7 +343,7 @@ const generatedSql = computed(() => {
     if (!valuesBlock?.rows.length) return '';
     const cols = insertBlock.columns;
     const parts: string[] = [];
-    parts.push(`INSERT INTO "${insertBlock.table}" (${cols.join(', ')})`);
+    parts.push(`INSERT INTO ${tableSql(insertBlock.table)} (${cols.map(quoteIdent).join(', ')})`);
     const rowStrings = valuesBlock.rows.map(row => {
       const vals = cols.map(col => {
         const v = row[col] ?? '';
@@ -336,10 +374,24 @@ const activeSql = computed(() => rawMode.value ? rawSql.value.trim() : generated
 const loadSchema = async () => {
   if (!props.db) return;
   try {
-    const result = await ipcRenderer.invoke('get-db-full-schema', { db: buildDbConfig(props.db) });
-    allTables.value = result.tables.map((t: any) => t.name);
-    allColumns.value = result.columns;
-    allForeignKeys.value = result.foreignKeys;
+    // All user schemas: joins may cross schemas
+    const result: FullSchema = await ipcRenderer.invoke('get-db-full-schema', { db: buildDbConfig(props.db) });
+    const refs = new Map<string, TableRef>();
+    for (const tbl of result.tables) {
+      refs.set(tableKey(tbl.schema, tbl.name), { schema: tbl.schema, name: tbl.name });
+    }
+    tableRefs.value = refs;
+    allColumns.value = result.columns.map((c) => ({
+      table_name: tableKey(c.table_schema, c.table_name),
+      column_name: c.column_name,
+      data_type: c.data_type
+    }));
+    allForeignKeys.value = result.foreignKeys.map((fk) => ({
+      source_table: tableKey(fk.source_schema, fk.source_table),
+      source_column: fk.source_column,
+      target_table: tableKey(fk.target_schema, fk.target_table),
+      target_column: fk.target_column
+    }));
     schemaLoaded.value = true;
   } catch (err) {
     console.error('Failed to load schema:', err);
@@ -505,7 +557,7 @@ const executeQuery = async () => {
 const exportCSV = () => {
   if (resultRows.value.length === 0 || resultFields.value.length === 0) return;
 
-  const escape = (val: any) => {
+  const escape = (val: unknown) => {
     if (val === null || val === undefined) return '';
     const str = String(val);
     if (str.includes(',') || str.includes('"') || str.includes('\n')) {
@@ -637,14 +689,107 @@ const removeInsertRow = (idx: number) => {
   }
 };
 
+const copyGeneratedSql = async () => {
+  try {
+    await navigator.clipboard.writeText(generatedSql.value);
+    addToast(t('viewer.queryCopied'), 'success');
+  } catch (e) {
+    console.error('Failed to copy SQL:', e);
+  }
+};
+
 const loadFromHistory = (entry: { sql: string }) => {
   showHistory.value = false;
   if (rawMode.value) {
     rawSql.value = entry.sql;
   } else {
     navigator.clipboard.writeText(entry.sql);
-    addToast(t('viewer.sqlHistoryCopied'), 'info');
+    addToast(t('viewer.sqlHistoryCopied'), 'success');
   }
+};
+
+// Identifier regex sources: a double-quoted identifier (with doubled quotes inside) or a bare word, optionally dotted
+const IDENT_SRC = '"(?:[^"]|"")+"|\\w+';
+const IDENT_CHAIN_SRC = `(?:${IDENT_SRC})(?:\\s*\\.\\s*(?:${IDENT_SRC}))*`;
+
+/**
+ * Replaces the content of '...' literals and "..." identifiers with '_' (quotes kept,
+ * length preserved), so keyword searches and splits never match inside them: indexes
+ * found on the masked string are valid on the original one.
+ */
+const maskQuoted = (s: string): string => {
+  let out = '';
+  let quote: string | null = null;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) {
+      if (ch === quote && s[i + 1] === quote) { out += '__'; i++; continue; } // escaped '' or ""
+      if (ch === quote) { quote = null; out += ch; } else { out += '_'; }
+    } else {
+      if (ch === "'" || ch === '"') quote = ch;
+      out += ch;
+    }
+  }
+  return out;
+};
+
+/** Parenthesis depth before each character of an already-masked string. */
+const parenDepths = (masked: string): number[] => {
+  const depths: number[] = [];
+  let depth = 0;
+  for (const ch of masked) {
+    depths.push(depth);
+    if (ch === '(') depth++;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+  }
+  return depths;
+};
+
+/**
+ * Splits `str` on `separator` matches that are outside quotes and parentheses.
+ * With `keepSeparators`, the matched separators are returned between the parts.
+ */
+const splitTopLevel = (str: string, separator: RegExp, keepSeparators = false): string[] => {
+  const masked = maskQuoted(str);
+  const depths = parenDepths(masked);
+  const re = new RegExp(separator.source, separator.flags.includes('g') ? separator.flags : separator.flags + 'g');
+  const result: string[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(masked)) !== null) {
+    if (m[0].length === 0) { re.lastIndex++; continue; }
+    if (depths[m.index] !== 0) continue;
+    result.push(str.slice(last, m.index));
+    if (keepSeparators) result.push(str.slice(m.index, m.index + m[0].length));
+    last = m.index + m[0].length;
+  }
+  result.push(str.slice(last));
+  return result;
+};
+
+/** Regex match run on the masked string; groups are returned as slices of the original. */
+const matchOutsideQuotes = (str: string, re: RegExp): (string | undefined)[] | null => {
+  const flags = re.flags.includes('d') ? re.flags : re.flags + 'd';
+  // `indices` comes from the 'd' flag (ES2022, supported by Electron's Chromium; the
+  // renderer tsconfig targets ES2020 typings)
+  const m = new RegExp(re.source, flags).exec(maskQuoted(str)) as
+    (RegExpExecArray & { indices?: Array<[number, number] | undefined> }) | null;
+  if (!m || !m.indices) return null;
+  return m.indices.map((range: [number, number] | undefined) => (range ? str.slice(range[0], range[1]) : undefined));
+};
+
+/** Collapses whitespace outside quotes only (string literals keep their spaces). */
+const normalizeWhitespace = (s: string): string => {
+  const masked = maskQuoted(s);
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    if (/\s/.test(masked[i])) {
+      if (!/\s/.test(masked[i - 1] ?? '')) out += ' ';
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
 };
 
 // Parse raw SQL into blocks
@@ -652,51 +797,78 @@ const parseRawSqlToBlocks = (sql: string) => {
   const trimmed = sql.trim().replace(/;\s*$/, '');
   if (!trimmed) return;
 
-  // Helper: strip quotes from table name
-  const stripQuotes = (s: string) => s.replace(/^"(.*)"$/, '$1').trim();
+  // Helper: split an identifier chain (a.b, "a"."b c", "x""y") into its unquoted parts,
+  // or null when the string is not a plain identifier chain (expression, literal...)
+  const splitIdentChain = (str: string): string[] | null => {
+    const m = str.trim().match(new RegExp(`^${IDENT_CHAIN_SRC}$`));
+    if (!m) return null;
+    const parts = [...m[0].matchAll(new RegExp(IDENT_SRC, 'g'))].map(p => p[0]);
+    return parts.map(p => (p.startsWith('"') ? p.slice(1, -1).replace(/""/g, '"') : p));
+  };
 
-  // Helper: extract table name from "table alias" or "table" or '"table" alias'
-  const extractTableName = (s: string) => {
-    const m = s.trim().match(/^"?(\w+)"?(?:\s+(?:AS\s+)?(\w+))?$/i);
-    return m ? stripQuotes(m[1]) : s.trim();
+  // Helper: builder table key for [schema, table] or [table]
+  const keyForParts = (parts: string[]): string => {
+    if (parts.length >= 2) return tableKey(parts[parts.length - 2], parts[parts.length - 1]);
+    const name = parts[0];
+    if (tableRefs.value.has(name)) return name;
+    // Bare name of a table living outside public: pick the viewer's schema first
+    const matches = [...tableRefs.value.entries()].filter(([, r]) => r.name === name);
+    const preferred = matches.find(([, r]) => r.schema === props.schema) || matches[0];
+    return preferred ? preferred[0] : name;
+  };
+
+  // Helper: extract table key from "table alias", "schema"."table" or '"table" alias'
+  const extractTableName = (str: string) => {
+    const m = str.trim().match(new RegExp(`^(${IDENT_CHAIN_SRC})(?:\\s+(?:AS\\s+)?(\\w+))?$`, 'i'));
+    const parts = m ? splitIdentChain(m[1]) : null;
+    return parts ? keyForParts(parts) : str.trim();
+  };
+
+  // Helper: turn a (possibly quoted/qualified) column reference back into builder form
+  const unquoteColumn = (str: string) => {
+    const parts = splitIdentChain(str);
+    if (!parts) return str.trim();
+    if (parts.length === 1) return parts[0];
+    const col = parts[parts.length - 1];
+    return `${keyForParts(parts.slice(0, -1))}.${col}`;
   };
 
   // Helper: parse WHERE clause into conditions
   const parseWhere = (whereStr: string): WhereCondition[] => {
     const conditions: WhereCondition[] = [];
-    // Split on AND/OR at word boundaries, keeping the connector
-    const tokens = whereStr.split(/\b(AND|OR)\b/i);
+    // Split on AND/OR at word boundaries (outside quotes/parentheses), keeping the connector
+    const tokens = splitTopLevel(whereStr, /\b(?:AND|OR)\b/i, true);
     let connector: 'AND' | 'OR' = 'AND';
     for (const token of tokens) {
       const t = token.trim();
       if (!t) continue;
       const up = t.toUpperCase();
       if (up === 'AND' || up === 'OR') { connector = up as 'AND' | 'OR'; continue; }
-      const m = t.match(/^(.+?)\s+(IS\s+NOT\s+NULL|IS\s+NULL|!=|<>|>=|<=|ILIKE|LIKE|NOT\s+IN|IN|[=<>])\s*([\s\S]*)?$/i);
-      if (m) {
+      const m = matchOutsideQuotes(t, /^(.+?)\s+(IS\s+NOT\s+NULL|IS\s+NULL|!=|<>|>=|<=|ILIKE|LIKE|NOT\s+IN|IN|[=<>])\s*([\s\S]*)?$/i);
+      if (m && m[1] && m[2]) {
         let val = (m[3] || '').trim();
         // Strip surrounding single quotes
         if (val.startsWith("'") && val.endsWith("'")) {
           val = val.slice(1, -1).replace(/''/g, "'");
         }
-        conditions.push({ column: m[1].trim(), operator: m[2].toUpperCase().replace(/\s+/g, ' '), value: val, connector });
+        conditions.push({ column: unquoteColumn(m[1]), operator: m[2].toUpperCase().replace(/\s+/g, ' '), value: val, connector });
       }
       connector = 'AND';
     }
     return conditions.length ? conditions : [{ column: '', operator: '=', value: '', connector: 'AND' }];
   };
 
-  // Normalize whitespace for easier matching
-  const norm = trimmed.replace(/\s+/g, ' ');
+  // Normalize whitespace (outside quotes) for easier matching
+  const norm = normalizeWhitespace(trimmed);
 
   // Try UPDATE: UPDATE table SET col=val, ... WHERE ...
-  const updateMatch = norm.match(/^UPDATE\s+("?\w+"?(?:\s+\w+)?)\s+SET\s+([\s\S]+?)(?:\s+WHERE\s+([\s\S]+))?$/i);
-  if (updateMatch) {
+  const updateMatch = matchOutsideQuotes(norm, new RegExp(`^UPDATE\\s+(${IDENT_CHAIN_SRC}(?:\\s+\\w+)?)\\s+SET\\s+([\\s\\S]+?)(?:\\s+WHERE\\s+([\\s\\S]+))?$`, 'i'));
+  if (updateMatch && updateMatch[1] && updateMatch[2]) {
     const table = extractTableName(updateMatch[1]);
-    const setItems = updateMatch[2].split(',').map(s => {
-      const eqIdx = s.indexOf('=');
-      if (eqIdx < 0) return { column: s.trim(), value: '' };
-      const col = s.substring(0, eqIdx).trim();
+    const setItems = splitTopLevel(updateMatch[2], /,/).map(s => {
+      const eqIdx = maskQuoted(s).indexOf('=');
+      if (eqIdx < 0) return { column: unquoteColumn(s), value: '' };
+      const col = unquoteColumn(s.substring(0, eqIdx));
       let val = s.substring(eqIdx + 1).trim();
       if (val.startsWith("'") && val.endsWith("'")) val = val.slice(1, -1).replace(/''/g, "'");
       return { column: col, value: val };
@@ -712,8 +884,8 @@ const parseRawSqlToBlocks = (sql: string) => {
   }
 
   // Try DELETE: DELETE FROM table WHERE ...
-  const deleteMatch = norm.match(/^DELETE\s+FROM\s+("?\w+"?(?:\s+\w+)?)(?:\s+WHERE\s+([\s\S]+))?$/i);
-  if (deleteMatch) {
+  const deleteMatch = matchOutsideQuotes(norm, new RegExp(`^DELETE\\s+FROM\\s+(${IDENT_CHAIN_SRC}(?:\\s+\\w+)?)(?:\\s+WHERE\\s+([\\s\\S]+))?$`, 'i'));
+  if (deleteMatch && deleteMatch[1]) {
     const table = extractTableName(deleteMatch[1]);
     const newBlocks: Block[] = [{ type: 'deleteFrom', table }];
     if (deleteMatch[2]) newBlocks.push({ type: 'where', conditions: parseWhere(deleteMatch[2]) });
@@ -723,13 +895,16 @@ const parseRawSqlToBlocks = (sql: string) => {
   }
 
   // Try INSERT: INSERT INTO table (cols) VALUES (...)
-  const insertMatch = norm.match(/^INSERT\s+INTO\s+("?\w+"?)\s*\(([^)]+)\)\s*VALUES\s*([\s\S]+)$/i);
-  if (insertMatch) {
+  const insertMatch = matchOutsideQuotes(norm, new RegExp(`^INSERT\\s+INTO\\s+(${IDENT_CHAIN_SRC})\\s*\\(([^)]+)\\)\\s*VALUES\\s*([\\s\\S]+)$`, 'i'));
+  if (insertMatch && insertMatch[1] && insertMatch[2] && insertMatch[3]) {
     const table = extractTableName(insertMatch[1]);
-    const columns = insertMatch[2].split(',').map(c => c.trim());
-    const rowMatches = [...insertMatch[3].matchAll(/\(([^)]*)\)/g)];
-    const rows = rowMatches.map(rm => {
-      const vals = rm[1].split(',').map(v => {
+    const columns = splitTopLevel(insertMatch[2], /,/).map(c => unquoteColumn(c));
+    // Row tuples found on the masked text, so ')' inside a string literal is not an end
+    const valuesStr = insertMatch[3];
+    const rowInners = [...maskQuoted(valuesStr).matchAll(/\(([^)]*)\)/g)]
+      .map(rm => valuesStr.slice(rm.index! + 1, rm.index! + rm[0].length - 1));
+    const rows = rowInners.map(inner => {
+      const vals = splitTopLevel(inner, /,/).map(v => {
         let val = v.trim();
         if (val.startsWith("'") && val.endsWith("'")) val = val.slice(1, -1).replace(/''/g, "'");
         return val;
@@ -747,25 +922,26 @@ const parseRawSqlToBlocks = (sql: string) => {
   }
 
   // Try SELECT: use clause-based splitting
-  const selectTest = norm.match(/^SELECT\s+([\s\S]+)/i);
-  if (selectTest) {
+  const selectTest = matchOutsideQuotes(norm, /^SELECT\s+([\s\S]+)/i);
+  if (selectTest && selectTest[1]) {
     const body = selectTest[1];
 
-    // Split by SQL keywords to find clause boundaries
-    const fromIdx = body.search(/\bFROM\b/i);
+    // Split by SQL keywords to find clause boundaries (searched outside quotes)
+    const fromIdx = maskQuoted(body).search(/\bFROM\b/i);
     if (fromIdx < 0) return;
 
     const colsPart = body.substring(0, fromIdx).trim();
     const afterFrom = body.substring(fromIdx + 4).trim(); // skip "FROM"
+    const maskedAfterFrom = maskQuoted(afterFrom);
 
     // Parse SELECT columns
     const distinct = /^DISTINCT\s+/i.test(colsPart);
     const colsStr = colsPart.replace(/^DISTINCT\s+/i, '').trim();
-    const columns = colsStr === '*' ? ['*'] : colsStr.split(',').map(c => c.trim());
+    const columns = colsStr === '*' ? ['*'] : splitTopLevel(colsStr, /,/).map(c => unquoteColumn(c));
 
-    // Find clause positions in afterFrom
-    const findClause = (str: string, pattern: RegExp) => {
-      const m = str.match(pattern);
+    // Find clause positions in afterFrom (on the masked copy: same indexes)
+    const findClause = (pattern: RegExp) => {
+      const m = maskedAfterFrom.match(pattern);
       return m ? m.index! : -1;
     };
 
@@ -773,12 +949,12 @@ const parseRawSqlToBlocks = (sql: string) => {
     const joinPositions: number[] = [];
     const joinRegex = /\b(?:INNER\s+|LEFT\s+|RIGHT\s+|FULL\s+|LEFT\s+OUTER\s+|RIGHT\s+OUTER\s+)?JOIN\b/gi;
     let jm;
-    while ((jm = joinRegex.exec(afterFrom)) !== null) joinPositions.push(jm.index);
+    while ((jm = joinRegex.exec(maskedAfterFrom)) !== null) joinPositions.push(jm.index);
 
-    const whereIdx = findClause(afterFrom, /\bWHERE\b/i);
-    const groupIdx = findClause(afterFrom, /\bGROUP\s+BY\b/i);
-    const orderIdx = findClause(afterFrom, /\bORDER\s+BY\b/i);
-    const limitIdx = findClause(afterFrom, /\bLIMIT\b/i);
+    const whereIdx = findClause(/\bWHERE\b/i);
+    const groupIdx = findClause(/\bGROUP\s+BY\b/i);
+    const orderIdx = findClause(/\bORDER\s+BY\b/i);
+    const limitIdx = findClause(/\bLIMIT\b/i);
 
     // First clause boundary after FROM (where the table name ends)
     const boundaries = [...joinPositions, whereIdx, groupIdx, orderIdx, limitIdx].filter(i => i >= 0);
@@ -796,20 +972,19 @@ const parseRawSqlToBlocks = (sql: string) => {
     // Parse JOINs
     for (let ji = 0; ji < joinPositions.length; ji++) {
       const start = joinPositions[ji];
-      const _end = ji + 1 < joinPositions.length ? joinPositions[ji + 1] : firstBoundary;
       // Also check against WHERE, GROUP BY, etc.
       const clauseEnd = boundaries.filter(b => b > start).reduce((min, b) => Math.min(min, b), afterFrom.length);
       const joinStr = afterFrom.substring(start, clauseEnd).trim();
 
-      const jParsed = joinStr.match(/^(?:(INNER|LEFT|RIGHT|FULL|LEFT\s+OUTER|RIGHT\s+OUTER)\s+)?JOIN\s+("?\w+"?(?:\s+(?:AS\s+)?\w+)?)\s+ON\s+(\S+)\s*=\s*(\S+)/i);
-      if (jParsed) {
+      const jParsed = matchOutsideQuotes(joinStr, new RegExp(`^(?:(INNER|LEFT|RIGHT|FULL|LEFT\\s+OUTER|RIGHT\\s+OUTER)\\s+)?JOIN\\s+(${IDENT_CHAIN_SRC}(?:\\s+(?:AS\\s+)?\\w+)?)\\s+ON\\s+(${IDENT_CHAIN_SRC}|\\S+)\\s*=\\s*(${IDENT_CHAIN_SRC}|\\S+)`, 'i'));
+      if (jParsed && jParsed[2] && jParsed[3] && jParsed[4]) {
         let joinType = (jParsed[1] || 'INNER').toUpperCase().replace(/\s+OUTER/, '') as 'INNER' | 'LEFT' | 'RIGHT' | 'FULL';
         newBlocks.push({
           type: 'join',
           joinType,
           table: extractTableName(jParsed[2]),
-          onLeft: jParsed[3],
-          onRight: jParsed[4]
+          onLeft: unquoteColumn(jParsed[3]),
+          onRight: unquoteColumn(jParsed[4])
         });
       }
     }
@@ -826,19 +1001,20 @@ const parseRawSqlToBlocks = (sql: string) => {
     if (groupIdx >= 0) {
       const gEnd = [orderIdx, limitIdx].filter(i => i > groupIdx);
       const endPos = gEnd.length > 0 ? Math.min(...gEnd) : afterFrom.length;
-      const match = afterFrom.substring(groupIdx, endPos).match(/^GROUP\s+BY\s+([\s\S]+)/i);
-      if (match) newBlocks.push({ type: 'groupBy', columns: match[1].trim().split(',').map(c => c.trim()) });
+      const match = matchOutsideQuotes(afterFrom.substring(groupIdx, endPos), /^GROUP\s+BY\s+([\s\S]+)/i);
+      if (match && match[1]) newBlocks.push({ type: 'groupBy', columns: splitTopLevel(match[1].trim(), /,/).map(c => unquoteColumn(c)) });
     }
 
     // Parse ORDER BY
     if (orderIdx >= 0) {
       const oEnd = [limitIdx].filter(i => i > orderIdx);
       const endPos = oEnd.length > 0 ? Math.min(...oEnd) : afterFrom.length;
-      const match = afterFrom.substring(orderIdx, endPos).match(/^ORDER\s+BY\s+([\s\S]+)/i);
-      if (match) {
-        const cols = match[1].trim().split(',').map(c => {
-          const parts = c.trim().split(/\s+/);
-          return { column: parts[0], direction: (parts[1]?.toUpperCase() === 'DESC' ? 'DESC' : 'ASC') as 'ASC' | 'DESC' };
+      const match = matchOutsideQuotes(afterFrom.substring(orderIdx, endPos), /^ORDER\s+BY\s+([\s\S]+)/i);
+      if (match && match[1]) {
+        const cols = splitTopLevel(match[1].trim(), /,/).map(c => {
+          const om = c.trim().match(/^([\s\S]*?)(?:\s+(ASC|DESC))?$/i);
+          const column = unquoteColumn(om ? om[1] : c);
+          return { column, direction: (om?.[2]?.toUpperCase() === 'DESC' ? 'DESC' : 'ASC') as 'ASC' | 'DESC' };
         });
         newBlocks.push({ type: 'orderBy', columns: cols });
       }
@@ -1617,7 +1793,7 @@ onMounted(() => {
             <span class="text-[10px] font-bold uppercase tracking-wider text-gray-500">SQL</span>
             <button
               v-if="generatedSql"
-              @click="navigator.clipboard.writeText(generatedSql); addToast(t('viewer.queryCopied'), 'success')"
+              @click="copyGeneratedSql"
               class="text-[10px] text-gray-500 hover:text-gray-300 transition-colors flex items-center gap-1"
             >
               <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">

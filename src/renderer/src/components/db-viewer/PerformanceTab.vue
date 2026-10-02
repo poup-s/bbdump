@@ -5,22 +5,27 @@ import { useI18n } from '../../composables/useI18n';
 import { useToast } from '../../composables/useToast';
 import { ipcRenderer } from '../../electron';
 import { useConfirm } from '../../composables/useConfirm';
+import type { Database, QueryStat } from '../../types';
+import AppModal from '../ui/AppModal.vue';
+import { btnGhost, btnSecondary } from '../ui/classes';
+
+const ICON_QUERY = 'M13 10V3L4 14h7v7l9-11h-7z';
 
 const props = defineProps<{
-  db: any;
+  db: Database | null;
 }>();
 
 const { t } = useI18n();
 const { addToast } = useToast();
 const { showConfirm } = useConfirm();
 
-const stats = ref<any[]>([]);
+const stats = ref<QueryStat[]>([]);
 const isLoading = ref(false);
 const extensionActive = ref(true);
 const isNotPreloaded = ref(false);
 const isConfigPresent = ref(false);
 const dataDirectory = ref('');
-const selectedQuery = ref<any | null>(null);
+const selectedQuery = ref<QueryStat | null>(null);
 
 const loadStats = async () => {
   if (!props.db) return;
@@ -42,10 +47,10 @@ const loadStats = async () => {
         }
       }
     } else {
-      addToast(result.error || 'Failed to load stats', 'error');
+      addToast(t('toasts.statsLoadError'), 'error', { detail: result.error });
     }
   } catch (error) {
-    addToast(getErrorMessage(error) || 'Error loading stats', 'error');
+    addToast(t('toasts.statsLoadError'), 'error', { detail: getErrorMessage(error) });
   } finally {
     isLoading.value = false;
   }
@@ -58,28 +63,34 @@ const resetStats = () => {
     confirmText: t('common.confirm'),
     type: 'danger',
     onConfirm: async () => {
+      if (!props.db) return;
       try {
         const result = await ipcRenderer.invoke('reset-postgres-performance-stats', props.db.name, props.db.port);
         if (result.success) {
           addToast(t('viewer.statsResetSuccess'), 'success');
           loadStats();
         } else {
-          addToast(result.error || t('viewer.statsResetError'), 'error');
+          addToast(t('viewer.statsResetError'), 'error', { detail: result.error });
         }
       } catch (error) {
-        addToast(getErrorMessage(error) || t('viewer.statsResetError'), 'error');
+        addToast(t('viewer.statsResetError'), 'error', { detail: getErrorMessage(error) });
       }
     }
   });
 };
 
-const formatNumber = (num: number) => {
-  return new Intl.NumberFormat().format(num);
+// bigint counters (calls, rows) arrive from pg as strings
+const formatNumber = (num: number | string) => {
+  return new Intl.NumberFormat().format(Number(num));
 };
 
-const copyToClipboard = (text: string) => {
-  navigator.clipboard.writeText(text);
-  addToast(t('viewer.queryCopied'), 'success');
+const copyToClipboard = async (text: string) => {
+  try {
+    await navigator.clipboard.writeText(text);
+    addToast(t('viewer.queryCopied'), 'success');
+  } catch {
+    addToast(t('toasts.copyFailed'), 'error');
+  }
 };
 
 const isRestarting = ref(false);
@@ -101,11 +112,11 @@ const restartServer = async () => {
             isRestarting.value = false;
           }, 2000);
         } else {
-          addToast(result.error || t('viewer.restartError'), 'error');
+          addToast(t('viewer.restartError'), 'error', { detail: result.error });
           isRestarting.value = false;
         }
       } catch (error) {
-        addToast(getErrorMessage(error) || t('viewer.restartError'), 'error');
+        addToast(t('viewer.restartError'), 'error', { detail: getErrorMessage(error) });
         isRestarting.value = false;
       }
     }
@@ -121,10 +132,10 @@ const fixConfig = async () => {
       addToast(t('viewer.fixConfigSuccess'), 'success');
       isConfigPresent.value = true;
     } else {
-      addToast(result.error || t('viewer.fixConfigError'), 'error');
+      addToast(t('viewer.fixConfigError'), 'error', { detail: result.error });
     }
   } catch (error) {
-    addToast(getErrorMessage(error) || t('viewer.fixConfigError'), 'error');
+    addToast(t('viewer.fixConfigError'), 'error', { detail: getErrorMessage(error) });
   } finally {
     isFixing.value = false;
   }
@@ -168,7 +179,7 @@ onMounted(() => {
           <svg v-else class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
-          {{ t('common.refresh') || 'Refresh' }}
+          {{ t('common.refresh') }}
         </button>
       </div>
     </div>
@@ -243,7 +254,7 @@ onMounted(() => {
                   <svg class="w-3.5 h-3.5 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                   </svg>
-                  <span class="text-[10px] font-bold text-emerald-600 dark:text-emerald-500 uppercase tracking-tight">Configuration OK</span>
+                  <span class="text-[10px] font-bold text-emerald-600 dark:text-emerald-500 uppercase tracking-tight">{{ t('viewer.configOk') }}</span>
                 </div>
               </div>
             </li>
@@ -291,8 +302,6 @@ onMounted(() => {
 
       <!-- Stats Table -->
       <div v-else class="h-full overflow-y-auto custom-scrollbar p-6">
-        <!-- Dashboard removed as requested -->
-
         <div class="space-y-4">
           <div class="flex items-center justify-between px-2">
             <h4 class="text-xs font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest">{{ t('viewer.slowQueries') }}</h4>
@@ -362,70 +371,41 @@ onMounted(() => {
     </div>
   </div>
 
-    <!-- Query Detail Modal -->
-    <div 
-      v-if="selectedQuery" 
-      class="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/40 backdrop-blur-md"
-      @click.self="selectedQuery = null"
-    >
-      <div class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col overflow-hidden border border-gray-200 dark:border-zinc-800 animate-in zoom-in-95 duration-200">
-        <div class="px-6 py-4 border-b border-gray-200 dark:border-zinc-800 flex justify-between items-center bg-gray-50 dark:bg-zinc-900">
-          <h3 class="text-sm font-black text-gray-900 dark:text-white uppercase tracking-widest">{{ t('viewer.queryDetails') }}</h3>
-          <button @click="selectedQuery = null" class="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-xl transition-colors">
-            <svg class="w-5 h-5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-        <div class="flex-1 overflow-y-auto p-8 space-y-8">
-          <!-- Stats Grid -->
-          <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
-            <div class="bg-gray-50 dark:bg-zinc-950/50 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800">
-              <span class="text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest block mb-2">{{ t('viewer.impactTitle') }}</span>
-              <div class="flex items-baseline gap-2">
-                <p class="text-2xl font-black text-blue-600 dark:text-blue-400">{{ selectedQuery.percentage.toFixed(1) }}%</p>
-              </div>
-              <p class="text-[9px] text-gray-500 mt-2 leading-tight">{{ t('viewer.impactDesc', { percent: selectedQuery.percentage.toFixed(1) }) }}</p>
-            </div>
-            <div class="bg-gray-50 dark:bg-zinc-950/50 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800">
-              <span class="text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest block mb-2">{{ t('viewer.calls') }}</span>
-              <p class="text-2xl font-black text-gray-900 dark:text-white">{{ formatNumber(selectedQuery.calls) }}</p>
-              <p class="text-[9px] text-gray-500 mt-2 leading-tight">{{ t('viewer.callsDesc') }}</p>
-            </div>
-            <div class="bg-gray-50 dark:bg-zinc-950/50 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800">
-              <span class="text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest block mb-2">{{ t('viewer.meanTime') }}</span>
-              <p class="text-2xl font-black text-gray-900 dark:text-white">{{ selectedQuery.mean_time.toFixed(2) }}ms</p>
-            </div>
-            <div class="bg-gray-50 dark:bg-zinc-950/50 p-4 rounded-2xl border border-gray-100 dark:border-zinc-800">
-              <span class="text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest block mb-2">{{ t('viewer.rows') }}</span>
-              <p class="text-2xl font-black text-gray-900 dark:text-white">{{ formatNumber(selectedQuery.rows) }}</p>
-              <p class="text-[9px] text-gray-500 mt-2 leading-tight">{{ t('viewer.rowsDesc') }}</p>
-            </div>
+    <!-- Query detail (in body: the viewer pane would clip the backdrop) -->
+    <Teleport to="body">
+      <AppModal
+        v-if="selectedQuery"
+        :title="t('viewer.queryDetails')"
+        :icon="ICON_QUERY"
+        :meta="db?.name"
+        width="lg"
+        layer="top"
+        :close-label="t('common.close')"
+        @close="selectedQuery = null"
+      >
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+          <div v-for="tile in [
+            { label: t('viewer.impactTitle'), value: `${selectedQuery.percentage.toFixed(1)}%`, hint: t('viewer.impactDesc', { percent: selectedQuery.percentage.toFixed(1) }), accent: true },
+            { label: t('viewer.calls'), value: formatNumber(selectedQuery.calls), hint: t('viewer.callsDesc') },
+            { label: t('viewer.meanTime'), value: `${selectedQuery.mean_time.toFixed(2)} ms`, hint: '' },
+            { label: t('viewer.rows'), value: formatNumber(selectedQuery.rows), hint: t('viewer.rowsDesc') },
+          ]" :key="tile.label" class="rounded-xl border border-gray-200 dark:border-zinc-800 bg-gray-50/70 dark:bg-zinc-800/30 px-3.5 py-3">
+            <div class="text-[11px] text-gray-500 dark:text-zinc-400">{{ tile.label }}</div>
+            <div class="mt-1 text-xl font-semibold tabular-nums" :class="tile.accent ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-900 dark:text-zinc-100'">{{ tile.value }}</div>
+            <div v-if="tile.hint" class="mt-1 text-[11px] leading-snug text-gray-400 dark:text-zinc-500">{{ tile.hint }}</div>
           </div>
+        </div>
 
-          <!-- Query Text -->
-          <div class="space-y-3">
-            <div class="flex items-center justify-between">
-              <span class="text-[10px] font-black text-gray-400 dark:text-zinc-500 uppercase tracking-widest">{{ t('viewer.sqlQuery') }}</span>
-              <button 
-                @click="copyToClipboard(selectedQuery.query)"
-                class="text-[10px] font-black text-blue-600 hover:text-blue-500 uppercase tracking-widest flex items-center gap-1.5"
-              >
-                <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                </svg>
-                {{ t('viewer.copySql') }}
-              </button>
-            </div>
-            <div class="bg-gray-50 dark:bg-zinc-950 p-6 rounded-2xl border border-gray-100 dark:border-zinc-800">
-              <code class="text-xs font-mono text-gray-700 dark:text-zinc-300 whitespace-pre-wrap leading-relaxed break-words">
-                {{ selectedQuery.query }}
-              </code>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+        <div class="text-[12px] font-medium text-gray-700 dark:text-zinc-200 mb-1.5">{{ t('viewer.sqlQuery') }}</div>
+        <pre class="rounded-xl border border-gray-200 dark:border-zinc-800 bg-gray-50 dark:bg-zinc-950 px-4 py-3 text-xs font-mono text-gray-700 dark:text-zinc-300 whitespace-pre-wrap break-words leading-relaxed max-h-[40vh] overflow-y-auto">{{ selectedQuery.query }}</pre>
+
+        <template #footer>
+          <span class="flex-1" />
+          <button type="button" :class="btnGhost" @click="selectedQuery = null">{{ t('common.close') }}</button>
+          <button type="button" :class="btnSecondary" @click="copyToClipboard(selectedQuery.query)">{{ t('viewer.copySql') }}</button>
+        </template>
+      </AppModal>
+    </Teleport>
   </div>
 </template>
 

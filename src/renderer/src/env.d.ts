@@ -25,8 +25,8 @@ interface ElectronAPI {
     platform: NodeJS.Platform;
 }
 
-declare global {
-    interface Window {
-        electron: ElectronAPI;
-    }
+// This file is a global script (no top-level import/export), so Window can be
+// augmented directly. `electron` is undefined when the preload did not run.
+interface Window {
+    electron?: ElectronAPI;
 }

@@ -1,16 +1,20 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { useI18n } from '../../composables/useI18n';
+import type { ViewerTable } from '../../types';
 
 const props = defineProps<{
-  tables: any[];
+  tables: ViewerTable[];
+  schemas?: { name: string; table_count: number }[];
+  selectedSchema?: string;
   selectedTable: string | null;
   loading?: boolean;
   viewMode: string;
   isLocalBbdump?: boolean;
 }>();
 
-const emit = defineEmits(['select', 'visualize', 'performance', 'query']);
+// select: single click (preview tab) · open: double click (tab that stays)
+const emit = defineEmits(['select', 'open', 'select-schema', 'visualize', 'performance', 'query']);
 const { t } = useI18n();
 
 const filter = ref('');
@@ -20,6 +24,20 @@ const filteredTables = computed(() => {
   const lower = filter.value.toLowerCase();
   return props.tables.filter(t => t.name.toLowerCase().includes(lower));
 });
+
+const compactNumber = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
+
+const formatRowCount = (table: ViewerTable): string => {
+  if (table.row_count === null || table.row_count === undefined) return '?';
+  const n = Math.max(0, Number(table.row_count) || 0);
+  const text = n >= 10000 ? compactNumber.format(n) : String(n);
+  return table.row_count_estimated ? `~${text}` : text;
+};
+
+const rowCountTitle = (table: ViewerTable): string => {
+  if (table.row_count === null || table.row_count === undefined) return t('viewer.rowCountUnknown');
+  return table.row_count_estimated ? t('viewer.rowCountEstimated') : t('viewer.rowCountExact');
+};
 </script>
 
 <template>
@@ -92,6 +110,19 @@ const filteredTables = computed(() => {
         <span class="font-medium">{{ t('viewer.sqlBuilder') }}</span>
       </button>
 
+      <!-- Schema selector -->
+      <div v-if="schemas && schemas.length > 0" class="flex items-center gap-1.5">
+        <label for="viewer-schema-select" class="text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500 shrink-0">{{ t('viewer.schema') }}</label>
+        <select
+          id="viewer-schema-select"
+          :value="selectedSchema"
+          @change="emit('select-schema', ($event.target as HTMLSelectElement).value)"
+          class="flex-1 min-w-0 px-1.5 py-1 bg-white dark:bg-surface/50 border border-gray-200 dark:border-white/10 rounded-md text-xs font-mono text-gray-900 dark:text-white focus:ring-1 focus:ring-blue-500 focus:border-transparent outline-none truncate"
+        >
+          <option v-for="s in schemas" :key="s.name" :value="s.name">{{ s.name }} ({{ s.table_count }})</option>
+        </select>
+      </div>
+
       <div class="relative">
         <input
           v-model="filter"
@@ -122,6 +153,7 @@ const filteredTables = computed(() => {
         >
           <button
             @click="emit('select', table.name)"
+            @dblclick="emit('open', table.name)"
             :class="[
               'w-full px-2 py-1.5 text-left text-xs flex justify-between items-center rounded-md transition-all duration-200 group',
               selectedTable === table.name
@@ -131,6 +163,7 @@ const filteredTables = computed(() => {
           >
             <span class="truncate font-medium">{{ table.name }}</span>
             <span
+              :title="rowCountTitle(table)"
               :class="[
                 'text-[10px] tabular-nums px-1 py-px rounded transition-colors shrink-0 ml-1',
                 selectedTable === table.name
@@ -138,7 +171,7 @@ const filteredTables = computed(() => {
                   : 'bg-black/5 dark:bg-white/5 text-gray-400'
               ]"
             >
-              {{ Math.max(0, table.row_count || 0) }}
+              {{ formatRowCount(table) }}
             </span>
           </button>
         </li>

@@ -2,7 +2,7 @@
 import { ref, computed, watch } from 'vue';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
-import { store } from '../store';
+import { store, isRemoteOnly } from '../store';
 import { Database, Project } from '../types';
 import DatabaseCardCompact from './DatabaseCardCompact.vue';
 
@@ -56,6 +56,23 @@ const proxyState = computed(() => {
   if (props.proxyStatus?.running) return 'running';
   return 'stopped';
 });
+
+/** Database the proxy routes to (shown in the header pill and the switch) */
+const proxyTarget = computed(() => props.databases.find(db => db.id === props.project.proxyTargetDbId) ?? null);
+const dbLabel = (db: Database) => (db.masked ? '••••••••' : (db.displayName || db.name));
+
+// Needs a target: open the switch so the choice is right there
+watch(proxyState, (state) => {
+  if (state === 'needs-target') {
+    proxyPanelOpen.value = true;
+    collapsed.value = false;
+  }
+}, { immediate: true });
+
+const toggleProxyPanel = () => {
+  proxyPanelOpen.value = !proxyPanelOpen.value;
+  if (proxyPanelOpen.value) collapsed.value = false;
+};
 
 // Auto-expand panel and project when proxy is first enabled
 watch(() => props.project.proxyEnabled, (newVal, oldVal) => {
@@ -183,40 +200,53 @@ const onDrop = (event: DragEvent) => {
         </button>
       </div>
       <div class="flex items-center gap-2">
-        <!-- Proxy toggle switch -->
-        <div @click.stop="emit('proxy-toggle', project)" class="flex items-center gap-1.5 cursor-pointer" :title="project.proxyEnabled ? t('proxy.disable') : t('proxy.enable')">
-          <span class="text-[10px] font-semibold uppercase tracking-wide" :class="project.proxyEnabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400 dark:text-gray-500'">Proxy</span>
-          <div
-            class="relative w-8 h-[18px] rounded-full transition-colors duration-200"
-            :class="project.proxyEnabled ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-zinc-600'"
-          >
-            <div
-              class="absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow-sm transition-transform duration-200"
-              :class="project.proxyEnabled ? 'translate-x-[16px]' : 'translate-x-[2px]'"
-            />
-          </div>
-        </div>
-        <!-- Proxy panel expand (when enabled) -->
+        <!-- Proxy: off → a quiet button; on → a pill ":port → target" that opens the switch -->
         <button
-          v-if="project.proxyEnabled"
-          @click.stop="proxyPanelOpen = !proxyPanelOpen; if (proxyPanelOpen) collapsed = false"
-          class="px-2 py-1 rounded-lg transition-colors text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 flex items-center gap-1"
-          :title="t('proxy.configureProxy')"
+          v-if="!project.proxyEnabled"
+          @click.stop="emit('proxy-toggle', project)"
+          class="px-2 py-1 rounded-lg text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors flex items-center gap-1"
+          :title="t('proxy.enable')"
         >
-          <span v-if="proxyStatus?.running" class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-          <span v-else-if="proxyState === 'needs-target'" class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-          <span v-else-if="project.proxyEnabled" class="w-1.5 h-1.5 rounded-full bg-gray-400" />
-          <svg
-            class="w-3.5 h-3.5 transition-transform duration-200"
-            :class="proxyPanelOpen ? '' : '-rotate-90'"
-            fill="none" viewBox="0 0 24 24" stroke="currentColor"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 22v-5M9 8V2m6 6V2m3 6v5a4 4 0 01-4 4h-4a4 4 0 01-4-4V8z" />
           </svg>
-          <span class="text-[10px] font-medium">{{ t('proxy.configureProxy') }}</span>
+          <span class="text-[10px] font-medium">Proxy</span>
         </button>
-        <!-- Create DB in this project -->
         <button
+          v-else
+          @click.stop="toggleProxyPanel"
+          class="proxy-pill flex items-center gap-1.5 pl-2.5 pr-1 py-0.5 rounded-full border text-[11px] transition-colors max-w-[260px]"
+          :class="proxyState === 'running'
+            ? 'border-emerald-200 dark:border-emerald-800/60 bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 hover:border-emerald-300'
+            : proxyState === 'needs-target'
+              ? 'border-amber-200 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 hover:border-amber-300'
+              : 'border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/60 text-gray-500 dark:text-gray-400 hover:border-gray-300'"
+          :title="proxyState === 'running' ? t('proxy.statusRunning') : proxyState === 'needs-target' ? t('proxy.selectTargetFirst') : t('proxy.statusStopped')"
+          :aria-expanded="proxyPanelOpen"
+        >
+          <span
+            class="w-1.5 h-1.5 rounded-full shrink-0"
+            :class="proxyState === 'running' ? 'bg-emerald-500 animate-pulse' : proxyState === 'needs-target' ? 'bg-amber-500 animate-pulse' : 'bg-gray-400'"
+          />
+          <span class="font-mono shrink-0">:{{ effectivePort || '—' }}</span>
+          <svg class="w-3 h-3 shrink-0 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+          </svg>
+          <span
+            class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap rounded-full px-2 py-px"
+            :class="proxyTarget ? 'bg-white dark:bg-zinc-900 text-gray-700 dark:text-gray-200' : 'italic'"
+          >{{ proxyTarget ? dbLabel(proxyTarget) : t('proxy.pickTarget') }}</span>
+          <svg
+            class="w-3 h-3 shrink-0 mr-0.5 transition-transform duration-200"
+            :class="proxyPanelOpen ? 'rotate-180' : ''"
+            fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+        <!-- Create DB in this project (needs a local server) -->
+        <button
+          v-if="!isRemoteOnly()"
           @click.stop="store.createDatabaseForProjectId = project.id; store.showCreateDatabaseModal = true"
           class="px-2 py-1 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-gray-400 hover:text-blue-500 transition-colors flex items-center gap-1"
           :title="t('modal.createDatabase')"
@@ -264,126 +294,143 @@ const onDrop = (event: DragEvent) => {
       class="overflow-hidden transition-all duration-300 ease-in-out"
       :style="{ maxHeight: collapsed ? '0px' : '2000px', opacity: collapsed ? 0 : 1 }"
     >
-      <!-- Proxy Panel (when proxy is enabled AND panel is open) -->
+      <!-- Proxy switch: your app → stable URL → the database it routes to -->
       <div
         v-if="project.proxyEnabled && proxyPanelOpen"
-        class="mx-4 mb-3 mt-1 rounded-xl border overflow-hidden"
-        :class="proxyState === 'running'
-          ? 'border-emerald-200 dark:border-emerald-800/40 bg-emerald-50/20 dark:bg-emerald-950/10'
-          : proxyState === 'needs-target'
-            ? 'border-amber-200 dark:border-amber-800/40 bg-amber-50/20 dark:bg-amber-950/10'
-            : 'border-gray-200 dark:border-zinc-700 bg-gray-50/50 dark:bg-zinc-800/30'"
+        class="mx-4 mb-3 mt-1 rounded-xl border border-gray-200 dark:border-zinc-700 bg-gray-50/70 dark:bg-zinc-800/30 px-4 py-3 space-y-3"
+        @click.stop
       >
-        <!-- Guidance banner when no target selected -->
-        <div v-if="proxyState === 'needs-target'" class="px-4 py-3 flex items-start gap-3">
-          <div class="w-5 h-5 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center shrink-0 mt-0.5">
-            <svg class="w-3 h-3 text-amber-600 dark:text-amber-400" fill="currentColor" viewBox="0 0 20 20">
-              <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
+        <div class="flex items-center gap-2.5 flex-wrap">
+          <span class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 shrink-0">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
             </svg>
-          </div>
-          <div>
-            <p class="text-sm font-medium text-amber-800 dark:text-amber-300">{{ t('proxy.selectTargetFirst') }}</p>
-            <p class="text-xs text-amber-600/80 dark:text-amber-400/80 mt-0.5">{{ t('proxy.selectTargetHint') }}</p>
-          </div>
-        </div>
-
-        <!-- Connection string + actions (only when target is selected) -->
-        <div v-else class="px-4 py-2.5 flex items-center justify-between gap-3">
-          <!-- URL display (clickable to copy) -->
+            {{ t('proxy.yourApp') }}
+          </span>
+          <svg class="w-3.5 h-3.5 text-gray-300 dark:text-zinc-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+          </svg>
+          <!-- Stable URL (click to copy) -->
           <button
             v-if="effectivePort"
             @click.stop="copyProxyUrl"
-            class="flex items-center gap-0 font-mono text-xs hover:opacity-70 transition-opacity truncate"
-            :class="proxyStatus?.running
-              ? 'text-gray-600 dark:text-gray-300'
-              : 'text-gray-400 dark:text-gray-500'"
+            class="group flex items-center gap-1.5 font-mono text-xs px-2 py-1 rounded-lg bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 hover:border-gray-300 dark:hover:border-zinc-600 transition-colors min-w-0"
             :title="t('proxy.copyUrl')"
           >
-            <span class="w-1.5 h-1.5 rounded-full mr-2 shrink-0" :class="proxyStatus?.running ? 'bg-emerald-500 animate-pulse' : 'bg-gray-300 dark:bg-gray-600'" />
-            <span class="opacity-50">postgresql://</span>
-            <span>{{ slugifiedName }}:{{ slugifiedName }}@localhost:</span>
-            <span class="font-semibold" :class="proxyStatus?.running ? 'text-emerald-600 dark:text-emerald-400' : ''">{{ effectivePort }}</span>
-            <span>/{{ slugifiedName }}</span>
+            <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-gray-600 dark:text-gray-300">
+              <span class="opacity-50">postgresql://</span>{{ slugifiedName }}:{{ slugifiedName }}@localhost:<span class="font-semibold" :class="proxyStatus?.running ? 'text-emerald-600 dark:text-emerald-400' : ''">{{ effectivePort }}</span>/{{ slugifiedName }}
+            </span>
+            <svg class="w-3.5 h-3.5 shrink-0 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-200" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
           </button>
           <span v-else class="text-xs text-gray-400 italic">{{ t('proxy.configurePort') }}</span>
-
-          <!-- Right actions -->
-          <div class="flex items-center gap-1.5 shrink-0">
-            <!-- Active connections -->
-            <span v-if="proxyStatus?.running && proxyStatus.activeConnections > 0" class="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium bg-emerald-100 dark:bg-emerald-900/30 px-1.5 py-0.5 rounded-full">
-              {{ proxyStatus.activeConnections }} conn.
-            </span>
-            <!-- Edit port button -->
+          <svg class="w-3.5 h-3.5 text-gray-300 dark:text-zinc-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+          </svg>
+          <!-- Target: one click switches the database behind the URL -->
+          <div
+            role="radiogroup"
+            :aria-label="t('proxy.targetPicker')"
+            class="flex flex-wrap gap-1 p-1 rounded-lg bg-white dark:bg-zinc-900 border transition-colors"
+            :class="proxyState === 'needs-target' ? 'border-amber-300 dark:border-amber-700 ring-2 ring-amber-200/60 dark:ring-amber-900/40' : 'border-gray-200 dark:border-zinc-700'"
+          >
             <button
-              @click.stop="startEditPort"
-              class="p-1.5 rounded-lg transition-colors"
-              :class="editingPort
-                ? 'text-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                : 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-zinc-700'"
-              :title="t('proxy.configurePort')"
+              v-for="db in databases"
+              :key="db.id"
+              type="button"
+              role="radio"
+              :aria-checked="project.proxyTargetDbId === db.id"
+              class="px-2.5 py-1 rounded-md text-xs transition-colors"
+              :class="project.proxyTargetDbId === db.id
+                ? 'bg-emerald-500 text-white font-medium shadow-sm'
+                : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-800'"
+              @click.stop="project.proxyTargetDbId !== db.id && emit('set-proxy-target', project.id, db.id)"
             >
-              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-              </svg>
+              {{ dbLabel(db) }}
             </button>
-            <!-- Copy button -->
-            <button
-              v-if="effectivePort"
-              @click.stop="copyProxyUrl"
-              class="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors"
-              :title="t('proxy.copyUrl')"
-            >
-              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
-            </button>
-            <!-- Logs button -->
-            <button
-              @click.stop="emit('show-proxy-logs', project.id)"
-              class="p-1.5 rounded-lg text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors flex items-center gap-1"
-              :title="t('proxy.activity.title')"
-            >
-              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h10M4 18h6" />
-              </svg>
-              <span class="text-[10px] font-medium">Logs</span>
-            </button>
+            <span v-if="!databases.length" class="px-2 py-1 text-xs text-gray-400 italic">{{ t('project.noDatabases') }}</span>
           </div>
         </div>
 
-        <!-- Inline port edit (expandable) -->
-        <div
-          v-if="editingPort"
-          class="px-4 pb-3 pt-2 border-t border-gray-200/50 dark:border-zinc-700/50"
-          @click.stop
-        >
-          <div class="flex items-center gap-2">
-            <label class="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide shrink-0">{{ t('proxy.portLabel') }}</label>
+        <!-- Status, port, logs, on/off -->
+        <div class="flex items-center gap-3 flex-wrap text-xs text-gray-500 dark:text-gray-400">
+          <span v-if="proxyState === 'running'" class="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-medium">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            {{ t('proxy.statusRunning') }}
+            <span class="font-normal text-gray-500 dark:text-gray-400">· {{ t('proxy.connections', { count: proxyStatus?.activeConnections ?? 0 }) }}</span>
+          </span>
+          <span v-else-if="proxyState === 'needs-target'" class="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+            <span class="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+            {{ t('proxy.selectTargetHint') }}
+          </span>
+          <span v-else class="flex items-center gap-1.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-gray-400" />
+            {{ t('proxy.statusStopped') }}
+          </span>
+
+          <!-- Port (inline edit) -->
+          <span v-if="!editingPort" class="flex items-center gap-1">
+            {{ t('proxy.portLabel') }}
+            <span class="font-mono text-gray-700 dark:text-gray-300">{{ effectivePort || '—' }}</span>
+            <button
+              @click.stop="startEditPort"
+              class="p-0.5 rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+              :title="t('proxy.configurePort')"
+            >
+              <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+            </button>
+          </span>
+          <span v-else class="flex items-center gap-1.5">
+            <label class="shrink-0">{{ t('proxy.portLabel') }}</label>
             <input
               v-model="portInput"
               type="number"
               min="1024"
               max="65535"
               :placeholder="t('proxy.portPlaceholder')"
-              class="w-28 px-2.5 py-1.5 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg text-xs font-mono focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
+              class="w-24 px-2 py-1 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-md text-xs font-mono focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
               @input="portError = ''"
               @keydown.enter.stop="savePort"
               @keydown.escape.stop="cancelEditPort"
             />
-            <button
-              @click.stop="savePort"
-              class="px-2.5 py-1.5 rounded-lg text-xs text-white bg-blue-600 hover:bg-blue-700 transition-all font-medium active:scale-95"
-            >
+            <button @click.stop="savePort" class="px-2 py-1 rounded-md text-xs text-white bg-blue-600 hover:bg-blue-700 font-medium">
               {{ t('proxy.saveConfig') }}
             </button>
-            <button
-              @click.stop="cancelEditPort"
-              class="px-2.5 py-1.5 rounded-lg text-xs text-gray-500 hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors font-medium"
-            >
+            <button @click.stop="cancelEditPort" class="px-2 py-1 rounded-md text-xs text-gray-500 hover:bg-gray-200 dark:hover:bg-zinc-700">
               {{ t('common.cancel') }}
             </button>
-            <p v-if="portError" class="text-xs text-red-500 ml-1">{{ portError }}</p>
-          </div>
+            <span v-if="portError" class="text-red-500">{{ portError }}</span>
+          </span>
+
+          <button
+            @click.stop="emit('show-proxy-logs', project.id)"
+            class="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+            :title="t('proxy.activity.title')"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h10M4 18h6" />
+            </svg>
+            Logs
+          </button>
+
+          <span class="flex-1" />
+
+          <!-- On / off (same switch as before, now with the proxy it controls) -->
+          <button
+            @click.stop="emit('proxy-toggle', project)"
+            class="flex items-center gap-1.5"
+            :title="t('proxy.disable')"
+            role="switch"
+            aria-checked="true"
+          >
+            <span class="text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">Proxy</span>
+            <span class="relative w-8 h-[18px] rounded-full bg-emerald-500">
+              <span class="absolute left-0 top-[2px] translate-x-[16px] w-[14px] h-[14px] rounded-full bg-white shadow-sm" />
+            </span>
+          </button>
         </div>
       </div>
       <div v-if="databases.length > 0" class="flex flex-col gap-1.5 mt-3 pl-6 pr-1">
@@ -395,7 +442,6 @@ const onDrop = (event: DragEvent) => {
           :size="dbSizes?.[db.id]"
           :proxy-enabled="project.proxyEnabled || false"
           :is-proxy-target="project.proxyTargetDbId === db.id"
-          :proxy-needs-target="proxyState === 'needs-target'"
           @backup="emit('backup', $event)"
           @view="emit('view', $event)"
           @duplicate="emit('duplicate', $event)"

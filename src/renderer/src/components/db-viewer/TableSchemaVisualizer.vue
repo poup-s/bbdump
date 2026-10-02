@@ -1,27 +1,39 @@
 <script setup lang="ts">
-import { ref, onMounted, markRaw, nextTick } from 'vue';
+import { ref, onMounted, markRaw, nextTick, watch } from 'vue';
 import { getErrorMessage } from '../../utils';
-import { VueFlow, useVueFlow } from '@vue-flow/core';
+import { VueFlow, useVueFlow, type Node, type Edge, type NodeMouseEvent } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { ipcRenderer } from '../../electron';
-import { Database, buildDbConfig } from '../../types';
+import { Database, buildDbConfig, type FullSchema, type SchemaForeignKey, type SchemaTable, type SchemaColumn, type SchemaPrimaryKey, type TableNodeData } from '../../types';
 import { useI18n } from '../../composables/useI18n';
 import TableNode from './TableNode.vue';
 import dagre from 'dagre';
+import { DEFAULT_SCHEMA, tableId, displayTableName } from './schemaNames';
 
 // Import Vue Flow styles
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/core/dist/theme-default.css';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   db: Database | null;
+  schema?: string;
+}>(), {
+  schema: DEFAULT_SCHEMA
+});
+
+const emit = defineEmits<{
+  (e: 'select-table', target: { schema: string; table: string }): void;
 }>();
+
+const handleNodeDoubleClick = ({ node }: NodeMouseEvent) => {
+  if (node?.data?.table) emit('select-table', { schema: node.data.schema, table: node.data.table });
+};
 
 const { t } = useI18n();
 const { fitView } = useVueFlow();
-const nodes = ref<any[]>([]);
-const edges = ref<any[]>([]);
+const nodes = ref<Node<TableNodeData>[]>([]);
+const edges = ref<Edge[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
 
@@ -29,7 +41,7 @@ const nodeTypes = {
   table: markRaw(TableNode),
 };
 
-const layoutNodes = (nodesToLayout: any[], edgesToLayout: any[]) => {
+const layoutNodes = (nodesToLayout: Node<TableNodeData>[], edgesToLayout: Edge[]) => {
   const dagreGraph = new dagre.graphlib.Graph();
   dagreGraph.setDefaultEdgeLabel(() => ({}));
   
@@ -47,7 +59,7 @@ const layoutNodes = (nodesToLayout: any[], edgesToLayout: any[]) => {
     // We need an estimate of the node size. 
     // Table nodes vary in height based on columns. 
     // Approx: width 280, height = 60 + (colCount * 32)
-    const height = 60 + (node.data.columns.length * 32);
+    const height = 60 + ((node.data?.columns.length ?? 0) * 32);
     dagreGraph.setNode(node.id, { width: 280, height });
   });
 
@@ -81,21 +93,24 @@ const loadFullSchema = async () => {
   try {
     const dbConfig = buildDbConfig(props.db);
 
-    const schema = await ipcRenderer.invoke('get-db-full-schema', { db: dbConfig });
-    
-    // 1. Prepare raw nodes
-    const rawNodes = schema.tables.map((table: any) => {
-      const tableColumns = schema.columns.filter((c: any) => c.table_name === table.name);
+    // Tables of the selected schema + tables of other schemas linked to them by a FK
+    const schema: FullSchema = await ipcRenderer.invoke('get-db-full-schema', { db: dbConfig, schema: props.schema });
+
+    // 1. Prepare raw nodes (ids are schema-qualified: the same name may exist in several schemas)
+    const rawNodes = schema.tables.map((table: SchemaTable): Node<TableNodeData> => {
+      const tableColumns = schema.columns.filter((c: SchemaColumn) => c.table_schema === table.schema && c.table_name === table.name);
       const tablePks = schema.primaryKeys
-        .filter((pk: any) => pk.table_name === table.name)
-        .map((pk: any) => pk.column_name);
+        .filter((pk: SchemaPrimaryKey) => pk.table_schema === table.schema && pk.table_name === table.name)
+        .map((pk: SchemaPrimaryKey) => pk.column_name);
 
       return {
-        id: table.name,
+        id: tableId(table.schema, table.name),
         type: 'table',
         position: { x: 0, y: 0 },
         data: {
-          label: table.name,
+          label: displayTableName(table.schema, table.name, props.schema),
+          schema: table.schema,
+          table: table.name,
           columns: tableColumns,
           primaryKeys: tablePks
         }
@@ -103,10 +118,10 @@ const loadFullSchema = async () => {
     });
 
     // 2. Prepare raw edges
-    const rawEdges = schema.foreignKeys.map((fk: any, index: number) => ({
-      id: `e-${fk.constraint_name}-${index}`,
-      source: fk.target_table,
-      target: fk.source_table,
+    const rawEdges = schema.foreignKeys.map((fk: SchemaForeignKey, index: number): Edge => ({
+      id: `e-${tableId(fk.source_schema, fk.source_table)}-${fk.constraint_name}-${index}`,
+      source: tableId(fk.target_schema, fk.target_table),
+      target: tableId(fk.source_schema, fk.source_table),
       sourceHandle: `source-${fk.target_column}`,
       targetHandle: `target-${fk.source_column}`,
       animated: true,
@@ -119,16 +134,20 @@ const loadFullSchema = async () => {
     nodes.value = layoutNodes(rawNodes, rawEdges);
     edges.value = rawEdges;
 
-    // 4. Center the view after layout
-    await nextTick();
-    fitView({ padding: 0.2, duration: 800 });
+    // 4. The view is centered once Vue Flow has measured the nodes (see onNodesInitialized)
 
   } catch (err) {
     console.error('Error loading full schema:', err);
-    error.value = getErrorMessage(err) || 'Failed to load schema';
+    error.value = getErrorMessage(err) || t('viewer.schemaLoadError');
   } finally {
     loading.value = false;
   }
+};
+
+// Fit the view each time a (re)loaded graph has been measured. A plain fitView() right
+// after loading runs before the remounted graph exists (e.g. after a schema switch).
+const onNodesInitialized = () => {
+  fitView({ padding: 0.2 });
 };
 
 const triggerLayout = async () => {
@@ -137,6 +156,10 @@ const triggerLayout = async () => {
   fitView({ padding: 0.2, duration: 800 });
 };
 onMounted(() => {
+  loadFullSchema();
+});
+
+watch(() => props.schema, () => {
   loadFullSchema();
 });
 </script>
@@ -168,6 +191,8 @@ onMounted(() => {
       :max-zoom="4"
       fit-view-on-init
       class="h-full w-full"
+      @node-double-click="handleNodeDoubleClick"
+      @nodes-initialized="onNodesInitialized"
     >
       <Background pattern-color="#aaa" :gap="20" />
       <Controls />

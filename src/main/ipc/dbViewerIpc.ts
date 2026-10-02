@@ -2,7 +2,10 @@ import { ipcMain } from 'electron';
 import { getErrorMessage } from '../utils';
 import * as dbViewer from '../dbViewer';
 import { logger } from '../logger';
-import { encryptionManager } from '../encryption';
+import { credentialsForConnectionTest, toRuntimeDatabase } from '../dbSecrets';
+import { connectionParamsFor } from '../savedConnection';
+import { tunnelled } from '../sshTunnel';
+import { DatabaseConfig } from '../../types/config';
 import { getConfig } from './configIpc';
 import * as postgresConfig from '../postgresConfig';
 
@@ -10,42 +13,51 @@ export async function closeAllPools() {
     await dbViewer.closeAllPools();
 }
 
-// Helper to get db config from the shared config state (lookup by id)
-const getDbConfig = (dbId: string) => {
-    const config = getConfig();
-    if (!config || !config.databases || !Array.isArray(config.databases)) {
-        throw new Error(`Configuration not loaded or databases array is missing`);
-    }
-
-    const db = config.databases.find(d => d.id === dbId);
-    if (!db) {
-        throw new Error(`Database with id "${dbId}" not found in configuration`);
-    }
-
-    let password = db.password;
-    try {
-        if (db.encrypted) {
-            password = encryptionManager.decrypt(db.password);
-        }
-    } catch (error) {
-        logger.error(`Failed to decrypt password for ${db.name}: ${error}`);
-        throw new Error(`Failed to decrypt password for ${db.name}`);
-    }
-
-    return {
-        host: db.host,
-        port: db.port,
-        user: db.user,
-        password: password,
-        database: db.name,
-        connectionString: db.connectionString,
-        ssl: db.ssl
-    };
-};
+// Connection parameters of a saved database (lookup by id, password decrypted)
+const getDbConfig = (dbId: string) => connectionParamsFor(dbId);
 
 export function registerDbViewerHandlers() {
     // Database Viewer Handlers
-    ipcMain.handle('get-database-tables', async (_, params: { host: string; port: number; user: string; password: string; database: string; connectionString?: string }) => {
+    /**
+     * Database dialogs: test the connection being edited. An empty password with the id of a
+     * saved database means "unchanged": the stored one is used (decrypted here, never sent back).
+     */
+    ipcMain.handle('test-database-connection', async (_, params: {
+        id?: string; host: string; port: number; user: string; password?: string; database: string;
+        connectionString?: string; sslMode?: DatabaseConfig['sslMode']; sslRootCert?: string;
+        ssh?: DatabaseConfig['ssh'];
+    }) => {
+        const saved = params.id ? getConfig()?.databases?.find(db => db.id === params.id) : undefined;
+        const { password, connectionString } = credentialsForConnectionTest(
+            params,
+            saved ? () => toRuntimeDatabase(saved).password : null,
+        );
+        // A database on a server: through its SSH tunnel (opened for the test, then reused)
+        const reached = await tunnelled({
+            host: params.host, port: params.port, connectionString, sslMode: params.sslMode || 'disable', ssh: params.ssh,
+            viaTunnel: undefined as boolean | undefined,
+        });
+        const sslMode = reached.sslMode || 'disable';
+        try {
+            return await dbViewer.testConnection({
+                host: reached.host,
+                port: reached.port,
+                user: params.user,
+                password,
+                database: params.database,
+                connectionString: reached.connectionString,
+                ssl: ['require', 'verify-ca', 'verify-full'].includes(sslMode),
+                sslMode,
+                sslRootCert: sslMode === 'disable' ? undefined : params.sslRootCert,
+                viaTunnel: reached.viaTunnel,
+            });
+        } catch (error) {
+            logger.warn(`Connection test failed for ${params.database}@${params.host}: ${getErrorMessage(error)}`);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('get-database-tables', async (_, params: { host: string; port: number; user: string; password: string; database: string; connectionString?: string; schema?: string }) => {
         try {
             logger.info(`Getting tables for database: ${params.database}`);
             return await dbViewer.getDatabaseTables(params);
@@ -55,60 +67,83 @@ export function registerDbViewerHandlers() {
         }
     });
 
-    // Alias for compatibility with frontend usage via store.viewerDb
-    ipcMain.handle('get-db-tables', async (_, params: { db: { id: string } }) => {
+    ipcMain.handle('get-db-schemas', async (_, params: { db: { id: string } }) => {
         try {
-            logger.info(`Getting tables for database: ${params.db.id}`);
-            const dbConfig = getDbConfig(params.db.id);
-            return await dbViewer.getDatabaseTables(dbConfig);
+            logger.info(`Getting schemas for database: ${params.db.id}`);
+            const dbConfig = await getDbConfig(params.db.id);
+            return await dbViewer.getDatabaseSchemas(dbConfig);
+        } catch (error) {
+            logger.error(`Error getting database schemas: ${getErrorMessage(error) || error}`);
+            throw error;
+        }
+    });
+
+    // Alias for compatibility with frontend usage via store.viewerDb
+    ipcMain.handle('get-db-tables', async (_, params: { db: { id: string }, schema?: string }) => {
+        try {
+            logger.info(`Getting tables for database: ${params.db.id} (schema: ${params.schema || dbViewer.DEFAULT_SCHEMA})`);
+            const dbConfig = await getDbConfig(params.db.id);
+            return await dbViewer.getDatabaseTables({ ...dbConfig, schema: params.schema });
         } catch (error) {
             logger.error(`Error getting database tables: ${getErrorMessage(error) || error}`);
             throw error;
         }
     });
 
-    ipcMain.handle('get-db-full-schema', async (_, params: { db: { id: string } }) => {
+    ipcMain.handle('get-db-full-schema', async (_, params: { db: { id: string }, schema?: string }) => {
         try {
-            logger.info(`Getting full schema for database: ${params.db.id}`);
-            const dbConfig = getDbConfig(params.db.id);
-            return await dbViewer.getDatabaseFullSchema(dbConfig);
+            logger.info(`Getting full schema for database: ${params.db.id}${params.schema ? ` (schema: ${params.schema})` : ''}`);
+            const dbConfig = await getDbConfig(params.db.id);
+            return await dbViewer.getDatabaseFullSchema({ ...dbConfig, schema: params.schema });
         } catch (error) {
             logger.error(`Error getting database full schema: ${getErrorMessage(error) || error}`);
             throw error;
         }
     });
 
-    ipcMain.handle('get-table-schema', async (_, params: { db: { id: string }, table: string }) => {
+    ipcMain.handle('count-table-rows', async (_, params: { db: { id: string }, schema?: string, table: string }) => {
         try {
-            logger.info(`Getting schema for table: ${params.table}`);
-            const dbConfig = getDbConfig(params.db.id);
-            return await dbViewer.getTableSchema({ ...dbConfig, table: params.table });
+            logger.info(`Counting rows of table: ${params.schema || dbViewer.DEFAULT_SCHEMA}.${params.table}`);
+            const dbConfig = await getDbConfig(params.db.id);
+            return await dbViewer.countTableRows({ ...dbConfig, schema: params.schema, table: params.table });
+        } catch (error) {
+            logger.error(`Error counting table rows: ${error}`);
+            throw error;
+        }
+    });
+
+    ipcMain.handle('get-table-schema', async (_, params: { db: { id: string }, schema?: string, table: string }) => {
+        try {
+            logger.info(`Getting schema for table: ${params.schema || dbViewer.DEFAULT_SCHEMA}.${params.table}`);
+            const dbConfig = await getDbConfig(params.db.id);
+            return await dbViewer.getTableSchema({ ...dbConfig, schema: params.schema, table: params.table });
         } catch (error) {
             logger.error(`Error getting table schema: ${error}`);
             throw error;
         }
     });
 
-    ipcMain.handle('get-table-relations', async (_, params: { db: { id: string }, table: string }) => {
+    ipcMain.handle('get-table-relations', async (_, params: { db: { id: string }, schema?: string, table: string }) => {
         try {
-            logger.info(`Getting relations for table: ${params.table}`);
-            const dbConfig = getDbConfig(params.db.id);
-            return await dbViewer.getTableRelations({ ...dbConfig, table: params.table });
+            logger.info(`Getting relations for table: ${params.schema || dbViewer.DEFAULT_SCHEMA}.${params.table}`);
+            const dbConfig = await getDbConfig(params.db.id);
+            return await dbViewer.getTableRelations({ ...dbConfig, schema: params.schema, table: params.table });
         } catch (error) {
             logger.error(`Error getting table relations: ${error}`);
             throw error;
         }
     });
 
-    ipcMain.handle('get-table-data', async (_, params: { db: { id: string }, table: string, limit?: number, page?: number, pageSize?: number, search?: string, sortBy?: string, sortOrder?: 'asc' | 'desc' }) => {
+    ipcMain.handle('get-table-data', async (_, params: { db: { id: string }, schema?: string, table: string, limit?: number, page?: number, pageSize?: number, search?: string, sortBy?: string, sortOrder?: 'asc' | 'desc' }) => {
         try {
             const limit = params.limit || params.pageSize || 50;
             const offset = params.page ? (params.page - 1) * limit : 0;
 
             logger.info(`Getting data for table: ${params.table} (limit: ${limit}, offset: ${offset}, search: ${params.search || ''}, sort: ${params.sortBy || ''} ${params.sortOrder || ''})`);
-            const dbConfig = getDbConfig(params.db.id);
+            const dbConfig = await getDbConfig(params.db.id);
             return await dbViewer.getTableData({
                 ...dbConfig,
+                schema: params.schema,
                 table: params.table,
                 limit,
                 offset,
@@ -124,14 +159,16 @@ export function registerDbViewerHandlers() {
 
     ipcMain.handle('get-fk-row', async (_, params: {
         db: { id: string };
+        schema?: string;
         table: string;
         column: string;
-        value: any;
+        value: unknown;
     }) => {
         try {
-            const dbConfig = getDbConfig(params.db.id);
+            const dbConfig = await getDbConfig(params.db.id);
             return await dbViewer.getFkRow({
                 ...dbConfig,
+                schema: params.schema,
                 table: params.table,
                 column: params.column,
                 value: params.value
@@ -144,14 +181,16 @@ export function registerDbViewerHandlers() {
 
     ipcMain.handle('update-table-data', async (_, params: {
         db: { id: string };
+        schema?: string;
         table: string;
-        changes: Array<any>;
+        changes: Parameters<typeof dbViewer.updateTableData>[0]['changes'];
     }) => {
         try {
             logger.info(`Updating table data: ${params.table} (${params.changes.length} changes)`);
-            const dbConfig = getDbConfig(params.db.id);
+            const dbConfig = await getDbConfig(params.db.id);
             return await dbViewer.updateTableData({
                 ...dbConfig,
+                schema: params.schema,
                 table: params.table,
                 changes: params.changes
             });
@@ -163,15 +202,17 @@ export function registerDbViewerHandlers() {
 
     ipcMain.handle('delete-table-row', async (_, params: {
         db: { id: string };
+        schema?: string;
         table: string;
-        rowId: any;
+        rowId: unknown;
         primaryKeyColumn: string;
     }) => {
         try {
             logger.info(`Deleting row from table: ${params.table}`);
-            const dbConfig = getDbConfig(params.db.id);
+            const dbConfig = await getDbConfig(params.db.id);
             return await dbViewer.deleteTableRow({
                 ...dbConfig,
+                schema: params.schema,
                 table: params.table,
                 rowId: params.rowId,
                 primaryKeyColumn: params.primaryKeyColumn
@@ -184,14 +225,16 @@ export function registerDbViewerHandlers() {
 
     ipcMain.handle('insert-table-row', async (_, params: {
         db: { id: string };
+        schema?: string;
         table: string;
-        rowData: any;
+        rowData: Record<string, unknown>;
     }) => {
         try {
             logger.info(`Inserting row into table: ${params.table}`);
-            const dbConfig = getDbConfig(params.db.id);
+            const dbConfig = await getDbConfig(params.db.id);
             return await dbViewer.insertTableRow({
                 ...dbConfig,
+                schema: params.schema,
                 table: params.table,
                 rowData: params.rowData
             });
@@ -204,13 +247,15 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('get-enum-values', async (_, params: {
         db: { id: string };
         typeName: string;
+        typeSchema?: string;
     }) => {
         try {
             logger.info(`Getting enum values for type: ${params.typeName}`);
-            const dbConfig = getDbConfig(params.db.id);
+            const dbConfig = await getDbConfig(params.db.id);
             return await dbViewer.getEnumValues({
                 ...dbConfig,
-                typeName: params.typeName
+                typeName: params.typeName,
+                typeSchema: params.typeSchema
             });
         } catch (error) {
             logger.error(`Error getting enum values: ${error}`);
@@ -226,7 +271,7 @@ export function registerDbViewerHandlers() {
     }) => {
         try {
             logger.info(`Executing SQL query on ${params.db.id} (maxRows: ${params.maxRows || 500})`);
-            const dbConfig = getDbConfig(params.db.id);
+            const dbConfig = await getDbConfig(params.db.id);
             return await dbViewer.executeQuery({
                 ...dbConfig,
                 sql: params.sql,
@@ -251,7 +296,7 @@ export function registerDbViewerHandlers() {
                 throw new Error('SQL mutations are disabled in settings');
             }
             logger.info(`Executing SQL mutation on ${params.db.id}`);
-            const dbConfig = getDbConfig(params.db.id);
+            const dbConfig = await getDbConfig(params.db.id);
             return await dbViewer.executeMutationQuery({
                 ...dbConfig,
                 sql: params.sql,
@@ -337,6 +382,83 @@ export function registerDbViewerHandlers() {
         }
     });
 
+    // Update a local database from another one (schema additions, missing rows)
+    ipcMain.handle('sync-analyze', async (_, targetId: string, sourceId: string) => {
+        const { analyzeSync } = await import('../sync/syncEngine');
+        try {
+            return { success: true, analysis: await analyzeSync(String(targetId), String(sourceId)) };
+        } catch (error) {
+            logger.error(`Sync analysis failed: ${getErrorMessage(error)}`);
+            return { success: false, error: getErrorMessage(error) };
+        }
+    });
+
+    ipcMain.handle('sync-apply', async (event, targetId: string, sourceId: string, choices: unknown) => {
+        const { applySync } = await import('../sync/syncEngine');
+        const c = (choices ?? {}) as Record<string, unknown>;
+        const safeChoices = {
+            changes: Array.isArray(c.changes) ? c.changes.map(String) : [],
+            tables: Array.isArray(c.tables) ? (c.tables as Array<{ key: unknown; recentDays?: unknown }>).map(t => ({
+                key: String(t.key),
+                recentDays: typeof t.recentDays === 'number' && t.recentDays > 0 ? t.recentDays : undefined,
+            })) : [],
+            anonymize: Array.isArray(c.anonymize) ? (c.anonymize as Array<{ table: unknown; column: unknown; kind: unknown }>)
+                .filter(a => ['email', 'phone', 'name', 'address', 'ip', 'secret'].includes(String(a.kind)))
+                .map(a => ({ table: String(a.table), column: String(a.column), kind: String(a.kind) as 'email' })) : [],
+            backup: c.backup !== false,
+        };
+        return applySync(String(targetId), String(sourceId), safeChoices, (progress) => {
+            if (!event.sender.isDestroyed()) event.sender.send('sync-progress', progress);
+        });
+    });
+
+    // Journal of the changes made by AI clients (MCP), and their undo
+    ipcMain.handle('ai-journal-list', async (_, databaseId?: string) => {
+        const { listJournal } = await import('../aiJournal');
+        return listJournal(typeof databaseId === 'string' ? databaseId : undefined);
+    });
+
+    ipcMain.handle('ai-journal-preview', async (_, id: string) => {
+        const { previewUndo } = await import('../aiJournal');
+        try {
+            return { success: true, ...(await previewUndo(String(id))) };
+        } catch (error) {
+            return { success: false, error: getErrorMessage(error) };
+        }
+    });
+
+    ipcMain.handle('ai-journal-undo', async (_, id: string) => {
+        const { undoChange } = await import('../aiJournal');
+        return undoChange(String(id));
+    });
+
+    ipcMain.handle('get-extension-catalog', async (_, dbName: string, port: number = 5432) => {
+        const { EXTENSION_CATALOG, extensionPackage, packageInstallCommand } = await import('../extensionCatalog');
+        try {
+            const server = await postgresConfig.getExtensionServerInfo(dbName, port);
+            const manager = server.packageManager;
+            // Package and command for THIS server (Homebrew formula, postgresql-17-x, x_17…)
+            const entries = EXTENSION_CATALOG.map(entry => ({
+                ...entry,
+                package: manager ? extensionPackage(entry, manager, server.major) : null,
+                command: manager ? packageInstallCommand(entry, manager, server.major) : null,
+            }));
+            return { entries, server };
+        } catch (error) {
+            logger.warn(`Extension server info unavailable: ${getErrorMessage(error)}`);
+            return { entries: EXTENSION_CATALOG, server: null };
+        }
+    });
+
+    ipcMain.handle('install-extension-package', async (_, dbName: string, extensionName: string, port: number = 5432) => {
+        try {
+            return await postgresConfig.installExtensionPackage(dbName, extensionName, port);
+        } catch (error) {
+            logger.error(`Error installing extension package: ${getErrorMessage(error)}`);
+            return { success: false, error: getErrorMessage(error) };
+        }
+    });
+
     ipcMain.handle('get-postgres-performance-stats', async (_, dbName: string, port: number = 5432) => {
         try {
             return await postgresConfig.getPostgresPerformanceStats(dbName, port);
@@ -384,7 +506,7 @@ export function registerDbViewerHandlers() {
 
     ipcMain.handle('get-database-size', async (_, dbId: string): Promise<number | null> => {
         try {
-            const dbConfig = getDbConfig(dbId);
+            const dbConfig = await getDbConfig(dbId);
             const result = await dbViewer.executeQuery({
                 ...dbConfig,
                 sql: 'SELECT pg_database_size(current_database()) as size',

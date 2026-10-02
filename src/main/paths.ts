@@ -43,16 +43,9 @@ class PathManager {
     return path.join(this._appDataPath, '.encryption.key');
   }
 
-  get claudeDesktopConfigPath(): string {
-    const home = app.getPath('home');
-    switch (process.platform) {
-      case 'darwin':
-        return path.join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
-      case 'win32':
-        return path.join(process.env.APPDATA || '', 'Claude', 'claude_desktop_config.json');
-      default:
-        return path.join(home, '.config', 'Claude', 'claude_desktop_config.json');
-    }
+  /** Port + auth token of the MCP confirmation server (see mcpConfirmServer.ts). */
+  get mcpConfirmPortFilePath(): string {
+    return path.join(this._appDataPath, '.mcp-confirm-port');
   }
 
   get mcpServerPath(): string {

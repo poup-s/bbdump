@@ -62,7 +62,7 @@ export async function installHomebrew(
     logger.error(`Failed to open Terminal for Homebrew installation: ${getErrorMessage(error)}`);
     return {
       success: false,
-      error: `Impossible d'ouvrir le Terminal. Veuillez installer Homebrew manuellement en exécutant cette commande dans le Terminal :\n\n/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+      error: `Impossible d'ouvrir le Terminal. Installe Homebrew toi-même en lançant cette commande dans le Terminal :\n\n/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
     };
   }
 }
@@ -83,7 +83,7 @@ export async function installPostgreSQL(
   } else {
     return {
       success: false,
-      error: 'L\'installation de PostgreSQL sur Windows n\'est pas encore supportée. Veuillez l\'installer manuellement depuis https://www.postgresql.org/download/windows/'
+      error: 'L\'installation de PostgreSQL sur Windows n\'est pas encore supportée. Installe-le toi-même depuis https://www.postgresql.org/download/windows/'
     };
   }
 }
@@ -110,7 +110,7 @@ async function installPostgresMacOS(
     if (!brewPath) {
       return {
         success: false,
-        error: 'Homebrew n\'est pas installé. Veuillez installer Homebrew d\'abord, puis revérifier.'
+        error: 'Homebrew n\'est pas installé. Installe Homebrew d\'abord, puis revérifie.'
       };
     }
 
@@ -217,7 +217,7 @@ async function installPostgresLinux(
         } catch {
           return {
             success: false,
-            error: 'Distribution Linux non supportée. Veuillez installer PostgreSQL manuellement.'
+            error: 'Distribution Linux non prise en charge. Installe PostgreSQL toi-même.'
           };
         }
       }
@@ -227,8 +227,8 @@ async function installPostgresLinux(
 
     // Try to open a terminal with the command
     const terminals = [
-      { cmd: 'gnome-terminal', args: ['--', 'bash', '-c', `${installCommand}; echo ""; echo "Installation terminée. Vous pouvez fermer cette fenêtre."; read -p "Appuyez sur Entrée pour fermer..."`] },
-      { cmd: 'konsole', args: ['-e', 'bash', '-c', `${installCommand}; echo ""; echo "Installation terminée. Vous pouvez fermer cette fenêtre."; read -p "Appuyez sur Entrée pour fermer..."`] },
+      { cmd: 'gnome-terminal', args: ['--', 'bash', '-c', `${installCommand}; echo ""; echo "Installation terminée. Tu peux fermer cette fenêtre."; read -p "Appuie sur Entrée pour fermer..."`] },
+      { cmd: 'konsole', args: ['-e', 'bash', '-c', `${installCommand}; echo ""; echo "Installation terminée. Tu peux fermer cette fenêtre."; read -p "Appuie sur Entrée pour fermer..."`] },
       { cmd: 'xfce4-terminal', args: ['-e', `bash -c '${installCommand}; echo ""; echo "Installation terminée."; read -p "Appuyez sur Entrée..."'`] },
       { cmd: 'xterm', args: ['-e', `bash -c '${installCommand}; echo ""; echo "Installation terminée."; read -p "Appuyez sur Entrée..."'`] },
     ];
@@ -259,7 +259,7 @@ async function installPostgresLinux(
     // Fallback: show the command to copy-paste
     return {
       success: false,
-      error: `Impossible d'ouvrir un terminal automatiquement. Veuillez exécuter cette commande manuellement :\n\n${installCommand}`
+      error: `Impossible d'ouvrir un terminal automatiquement. Lance cette commande toi-même :\n\n${installCommand}`
     };
   } catch (error) {
     return {

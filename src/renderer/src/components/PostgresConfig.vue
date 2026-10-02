@@ -6,6 +6,9 @@ import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { ipcRenderer } from '../electron';
 import { store } from '../store';
+import AppModal from './ui/AppModal.vue';
+import FormField from './ui/FormField.vue';
+import { btnGhost, btnPrimary, inputClass } from './ui/classes';
 
 const { t } = useI18n();
 const { addToast } = useToast();
@@ -55,7 +58,9 @@ const expandedSections = ref({
 const showPasswordModal = ref(false);
 const passwordModalDbName = ref('');
 const passwordInput = ref('');
+const passwordError = ref('');
 const isConnecting = ref(false);
+const ICON_LOCK = 'M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z';
 const copyToClipboard = (text: string) => {
   navigator.clipboard.writeText(text);
   addToast(t('postgresConfig.pathCopied'), 'success');
@@ -80,7 +85,7 @@ const loadConfig = async () => {
 
     configInfo.value = info;
   } catch (error) {
-    addToast(`Error loading PostgreSQL config: ${getErrorMessage(error)}`, 'error');
+    addToast(t('toasts.postgresConfigLoadError'), 'error', { detail: getErrorMessage(error) });
     configInfo.value = null;
   } finally {
     isLoading.value = false;
@@ -101,10 +106,10 @@ const killConnection = async (pid: number) => {
           await new Promise(resolve => setTimeout(resolve, 500));
           await loadConfig();
         } else {
-          addToast(result.error || t('postgresConfig.killError'), 'error');
+          addToast(t('postgresConfig.killError'), 'error', { detail: result.error });
         }
       } catch (error) {
-        addToast(`Error killing connection: ${getErrorMessage(error)}`, 'error');
+        addToast(t('toasts.connectionKillError'), 'error', { detail: getErrorMessage(error) });
       }
     }
   });
@@ -123,10 +128,10 @@ const dropDatabase = async (dbName: string) => {
           addToast(t('postgresConfig.databaseDropped', { name: dbName }), 'success');
           await loadConfig();
         } else {
-          addToast(result.error || t('postgresConfig.dropError'), 'error');
+          addToast(t('postgresConfig.dropError'), 'error', { detail: result.error });
         }
       } catch (error) {
-        addToast(`Error dropping database: ${getErrorMessage(error)}`, 'error');
+        addToast(t('toasts.databaseDropError'), 'error', { detail: getErrorMessage(error) });
       }
     }
   });
@@ -136,8 +141,8 @@ const isRestarting = ref(false);
 const restartPostgres = async () => {
   showConfirm({
     title: t('viewer.restartPostgres'),
-    message: 'Are you sure you want to restart the PostgreSQL server? Active connections will be terminated.',
-    confirmText: t('common.confirm') || 'Confirm',
+    message: t('postgresConfig.restartConfirm'),
+    confirmText: t('common.confirm'),
     type: 'danger',
     onConfirm: async () => {
       isRestarting.value = true;
@@ -150,18 +155,26 @@ const restartPostgres = async () => {
             isRestarting.value = false;
           }, 2000);
         } else {
-          addToast(result.error || t('viewer.restartError'), 'error');
+          addToast(t('viewer.restartError'), 'error', { detail: result.error });
           isRestarting.value = false;
         }
       } catch (error) {
-        addToast(getErrorMessage(error) || t('viewer.restartError'), 'error');
+        addToast(t('viewer.restartError'), 'error', { detail: getErrorMessage(error) });
         isRestarting.value = false;
       }
     }
   });
 };
 
-const addDatabaseToConfig = async (connectionInfo: any) => {
+interface ConnectionInfo {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password?: string;
+}
+
+const addDatabaseToConfig = async (connectionInfo: ConnectionInfo) => {
   try {
     const existingDb = store.databases.find(db =>
       db.name === connectionInfo.database &&
@@ -170,7 +183,7 @@ const addDatabaseToConfig = async (connectionInfo: any) => {
     );
 
     if (existingDb) {
-      addToast(t('postgresConfig.databaseAlreadyExists', { name: connectionInfo.database }), 'info');
+      addToast(t('postgresConfig.databaseAlreadyExists', { name: connectionInfo.database }), 'warning');
       return;
     }
 
@@ -207,7 +220,7 @@ const addDatabaseToConfig = async (connectionInfo: any) => {
     store.activeTab = 'databases';
     addToast(t('postgresConfig.databaseAdded', { name: connectionInfo.database }), 'success');
   } catch (error) {
-    addToast(`Error adding database: ${getErrorMessage(error)}`, 'error');
+    addToast(t('toasts.databaseAddError'), 'error', { detail: getErrorMessage(error) });
   }
 };
 
@@ -219,6 +232,7 @@ const testDatabase = async (dbName: string) => {
     if (result.needsPassword) {
       passwordModalDbName.value = dbName;
       passwordInput.value = '';
+      passwordError.value = '';
       showPasswordModal.value = true;
       isConnecting.value = false;
       return;
@@ -227,17 +241,18 @@ const testDatabase = async (dbName: string) => {
     if (result.success && result.connectionInfo) {
       await addDatabaseToConfig(result.connectionInfo);
     } else {
-      addToast(result.error || t('postgresConfig.connectionError'), 'error');
+      addToast(t('postgresConfig.connectionError'), 'error', { detail: result.error });
     }
   } catch (error) {
-    addToast(`Error testing connection: ${getErrorMessage(error)}`, 'error');
+    addToast(t('toasts.connectionTestFailed'), 'error', { detail: getErrorMessage(error) });
   } finally {
     isConnecting.value = false;
   }
 };
 
 const testConnectionWithPassword = async () => {
-  if (!passwordModalDbName.value) return;
+  if (!passwordModalDbName.value || !passwordInput.value || isConnecting.value) return;
+  passwordError.value = '';
 
   isConnecting.value = true;
   try {
@@ -254,19 +269,21 @@ const testConnectionWithPassword = async () => {
       passwordModalDbName.value = '';
       await addDatabaseToConfig(result.connectionInfo);
     } else {
-      addToast(result.error || t('postgresConfig.connectionError'), 'error');
+      passwordError.value = result.error || t('postgresConfig.connectionError');
     }
   } catch (error) {
-    addToast(`Error testing connection: ${getErrorMessage(error)}`, 'error');
+    passwordError.value = t('toasts.connectionTestError', { error: getErrorMessage(error) });
   } finally {
     isConnecting.value = false;
   }
 };
 
 const cancelPasswordModal = () => {
+  if (isConnecting.value) return;
   showPasswordModal.value = false;
   passwordInput.value = '';
   passwordModalDbName.value = '';
+  passwordError.value = '';
 };
 
 const truncateQuery = (query?: string, maxLength: number = 50) => {
@@ -298,7 +315,7 @@ const disconnectDatabase = async (dbName: string) => {
         );
         await loadConfig();
       } catch (error) {
-        addToast(`Error removing database from list: ${getErrorMessage(error)}`, 'error');
+        addToast(t('toasts.databaseRemoveError'), 'error', { detail: getErrorMessage(error) });
       }
     }
   });
@@ -312,7 +329,7 @@ const openExtensionsModal = async (dbName: string) => {
       port: selectedPort.value,
       host: 'localhost',
       user: 'postgres'
-    } as any;
+    };
     store.showExtensionsModal = true;
   }
 };
@@ -413,7 +430,7 @@ onMounted(() => {
           <table class="w-full text-left">
             <thead class="sticky top-0 z-10">
               <tr class="bg-gray-50 dark:bg-zinc-800/80 border-b border-gray-100 dark:border-zinc-800">
-                <th class="px-3 py-2 text-[10px] font-bold text-gray-400 uppercase tracking-wider">{{ t('postgresConfig.name') || 'Name' }}</th>
+                <th class="px-3 py-2 text-[10px] font-bold text-gray-400 uppercase tracking-wider">{{ t('postgresConfig.name') }}</th>
                 <th class="px-3 py-2 text-[10px] font-bold text-gray-400 uppercase tracking-wider">{{ t('postgresConfig.size') }}</th>
                 <th class="px-3 py-2 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wider">{{ t('postgresConfig.actions') }}</th>
               </tr>
@@ -551,58 +568,40 @@ onMounted(() => {
       {{ t('postgresConfig.notAvailable') }}
     </div>
 
-    <!-- Password Modal -->
-    <div
+    <!-- Password for a database of the local server -->
+    <AppModal
       v-if="showPasswordModal"
-      class="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-zinc-950/40 backdrop-blur-md"
-      @click.self="cancelPasswordModal"
+      :title="t('postgresConfig.passwordRequired')"
+      :icon="ICON_LOCK"
+      :meta="passwordModalDbName"
+      width="sm"
+      layer="top"
+      :busy="isConnecting"
+      :close-label="t('common.cancel')"
+      @close="cancelPasswordModal"
+      @submit="testConnectionWithPassword"
     >
-      <div class="bg-white dark:bg-zinc-900 rounded-2xl p-6 border border-gray-200 dark:border-zinc-800 shadow-2xl max-w-sm w-full">
-        <div class="w-12 h-12 rounded-xl bg-amber-500/10 flex items-center justify-center mx-auto mb-4">
-          <svg class="w-6 h-6 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-          </svg>
-        </div>
+      <p class="mb-4 text-[13px] leading-relaxed text-gray-600 dark:text-zinc-400">{{ t('postgresConfig.passwordRequiredMessage', { name: passwordModalDbName }) }}</p>
+      <FormField :label="t('postgresConfig.password')" for="pg-db-password" :error="passwordError || undefined">
+        <input
+          id="pg-db-password"
+          v-model="passwordInput"
+          type="password"
+          autocomplete="current-password"
+          :class="inputClass"
+          :placeholder="t('postgresConfig.passwordPlaceholder')"
+          @input="passwordError = ''"
+        />
+      </FormField>
 
-        <h3 class="text-lg font-bold text-center text-gray-900 dark:text-white mb-1">{{ t('postgresConfig.passwordRequired') }}</h3>
-        <p class="text-xs text-gray-500 text-center mb-5">
-          {{ t('postgresConfig.passwordRequiredMessage', { name: passwordModalDbName }) }}
-        </p>
-
-        <div class="space-y-3">
-          <div>
-            <label class="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1 block">{{ t('postgresConfig.password') }}</label>
-            <input
-              v-model="passwordInput"
-              type="password"
-              class="w-full h-10 px-3 bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
-              :placeholder="t('postgresConfig.passwordPlaceholder')"
-              @keyup.enter="testConnectionWithPassword"
-              autofocus
-            />
-          </div>
-
-          <div class="flex gap-2 pt-1">
-            <button
-              @click="cancelPasswordModal"
-              class="flex-1 h-9 bg-gray-50 dark:bg-zinc-800 text-gray-500 rounded-lg text-xs font-medium hover:bg-gray-100 dark:hover:bg-zinc-700 transition-colors border border-gray-200 dark:border-zinc-700"
-            >
-              {{ t('common.cancel') }}
-            </button>
-            <button
-              @click="testConnectionWithPassword"
-              :disabled="isConnecting || !passwordInput"
-              class="flex-[2] h-9 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              <svg v-if="isConnecting" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              {{ t('postgresConfig.connect') }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+      <template #footer>
+        <button type="button" :class="btnGhost" :disabled="isConnecting" @click="cancelPasswordModal">{{ t('common.cancel') }}</button>
+        <span class="flex-1" />
+        <button type="button" :class="btnPrimary" :disabled="isConnecting || !passwordInput" @click="testConnectionWithPassword">
+          <span v-if="isConnecting" class="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+          {{ t('postgresConfig.connect') }}
+        </button>
+      </template>
+    </AppModal>
   </div>
 </template>

@@ -61,11 +61,8 @@ async function checkPostgresServer(port: number, password?: string): Promise<{ a
       }
     }
 
-    // TCP connections with various passwords
-    const passwords = isLinux ? ['postgres', 'admin', 'password'] : ['', 'postgres', 'admin', 'password'];
-    if (password) {
-      passwords.unshift(password);
-    }
+    // TCP: the provided password, then none (trust auth) — never guess common passwords
+    const passwords = password ? [password, ''] : [''];
 
     for (const user of usersToTry) {
       if (!user) continue;
@@ -204,11 +201,8 @@ async function connectToPostgresServer(port: number, password?: string): Promise
     }
   }
 
-  // Try to connect with different passwords
-  const passwords = isLinux ? ['postgres', 'admin', 'password'] : ['', 'postgres', 'admin', 'password'];
-  if (password) {
-    passwords.unshift(password);
-  }
+  // The provided password, then none (trust auth) — never guess common passwords
+  const passwords = password ? [password, ''] : [''];
 
   for (const pwd of passwords) {
     const client = new Client({
@@ -382,7 +376,7 @@ export async function duplicateExternalToLocal(
   _newPort: number,
   _existingPorts: number[],
   _onProgress?: (progress: DuplicateDatabaseProgress) => void
-): Promise<{ success: boolean; error?: string; database?: any }> {
+): Promise<CreateDatabaseResult> {
   // This function orchestrates backup and restore
   // But since it depends on backupManager which depends on config...
   // Ideally this orchestration should be done in the IPC handler or a higher-level module.

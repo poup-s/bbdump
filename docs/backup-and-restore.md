@@ -11,7 +11,7 @@ bbdump uses `pg_dump` under the hood to create PostgreSQL backups.
 3. The backup starts immediately
 4. Progress is streamed in real time to the **Logs** tab
 
-The backup file is saved to your configured backup directory (default: `~/.bbdump/backups/`).
+The backup file is saved to your configured backup directory (default: `<data dir>/backups/` (see [Configuration](configuration.md))).
 
 ### Backup Formats
 
@@ -93,6 +93,6 @@ The **Backups** tab lists all backup files with:
 
 ## Backup Storage
 
-By default, backups are stored in `~/.bbdump/backups/`. You can change this location in **Settings > Backup Location**.
+By default, backups are stored in `<data dir>/backups/` (see [Configuration](configuration.md)). You can change this location in **Settings > Backup Location**.
 
 All backup files in the configured directory are scanned and displayed in the Backups tab, regardless of which database they belong to.

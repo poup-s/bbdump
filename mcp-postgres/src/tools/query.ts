@@ -1,103 +1,157 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { getClient, executeReadOnly, getActiveConnectionInfo } from '../db.js';
-import { jsonResult, errorResult, config } from '../types.js';
+import { withClient, executeReadOnly, getActiveConnectionInfo } from '../db.js';
+import { jsonResult, errorResult, textResult, config, MAX_TIMEOUT_MS } from '../types.js';
 import { recordQuery } from '../history.js';
+import { findWriteKeyword, isRowQuery, limitedQuery, toCsv, toMarkdown, trimStatement } from '../sql.js';
+import { READ, databaseParam, formatParam } from './common.js';
 
-// Defense-in-depth: early rejection of write operations with a clear error message.
-// The real protection is the BEGIN READ ONLY transaction in executeReadOnly().
-// This regex can be bypassed (comments, CTEs, etc.) but that's fine — PostgreSQL
-// will reject the write attempt anyway. This just provides a better UX.
-const WRITE_PATTERN = /\b(DROP|DELETE|UPDATE|INSERT\s+INTO|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|COPY)\b/i;
+const paramValue = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+
+interface PlanNode {
+  'Node Type': string;
+  'Relation Name'?: string;
+  'Index Name'?: string;
+  'Total Cost'?: number;
+  'Plan Rows'?: number;
+  'Actual Rows'?: number;
+  'Actual Total Time'?: number;
+  'Actual Loops'?: number;
+  'Rows Removed by Filter'?: number;
+  Plans?: PlanNode[];
+}
+
+/** Planned vs actual rows off by more than 10x either way */
+function misestimated(node: PlanNode): boolean {
+  if (node['Actual Rows'] === undefined || node['Plan Rows'] === undefined) return false;
+  const actual = Math.max(node['Actual Rows'], 1);
+  const planned = Math.max(node['Plan Rows'], 1);
+  return actual / planned > 10 || planned / actual > 10;
+}
+
+/** What to look at first in a JSON plan: slowest nodes, sequential scans, bad estimates */
+export function summarizePlan(root: { Plan: PlanNode; 'Execution Time'?: number; 'Planning Time'?: number }) {
+  const nodes: PlanNode[] = [];
+  const walk = (node: PlanNode) => { nodes.push(node); node.Plans?.forEach(walk); };
+  walk(root.Plan);
+  const analyzed = root['Execution Time'] !== undefined;
+  const nodeTime = (n: PlanNode) => (n['Actual Total Time'] ?? 0) * (n['Actual Loops'] ?? 1);
+  return {
+    total_cost: root.Plan['Total Cost'],
+    ...(analyzed ? { execution_ms: root['Execution Time'], planning_ms: root['Planning Time'] } : {}),
+    sequential_scans: nodes.filter(n => n['Node Type'] === 'Seq Scan').map(n => ({
+      table: n['Relation Name'],
+      rows: analyzed ? n['Actual Rows'] : n['Plan Rows'],
+      ...(n['Rows Removed by Filter'] ? { rows_removed_by_filter: n['Rows Removed by Filter'] } : {}),
+    })),
+    indexes_used: Array.from(new Set(nodes.map(n => n['Index Name']).filter(Boolean))),
+    ...(analyzed
+      ? {
+        slowest_nodes: [...nodes].sort((a, b) => nodeTime(b) - nodeTime(a)).slice(0, 3)
+          .map(n => ({ node: n['Node Type'], relation: n['Relation Name'] ?? n['Index Name'], total_ms: Math.round(nodeTime(n) * 100) / 100 })),
+        row_misestimates: nodes.filter(misestimated)
+          .map(n => ({ node: n['Node Type'], relation: n['Relation Name'], planned_rows: n['Plan Rows'], actual_rows: n['Actual Rows'] })),
+      }
+      : {}),
+  };
+}
 
 export function registerQueryTools(server: McpServer) {
-  server.tool(
+  server.registerTool(
     'execute_query',
-    'Execute a read-only SQL query. Runs inside a READ ONLY transaction with a statement timeout. Only SELECT queries are allowed — write operations (INSERT, UPDATE, DELETE, DROP, etc.) are rejected.',
     {
-      sql: z.string().describe('SQL query to execute (SELECT only)'),
-      database: z.string().optional().describe('Database name'),
-      timeout_ms: z.number().default(60000).describe('Timeout in milliseconds (default: 60000)'),
-      max_rows: z.number().min(1).max(5000).default(1000).describe('Max rows returned (default: 1000)'),
+      title: 'Run a read-only query',
+      description: `Run a read-only SQL query (SELECT, WITH, SHOW, EXPLAIN…) inside a READ ONLY transaction with a timeout. Rows are limited on the server (max_rows, at most ${config.maxRows}), so large results never load entirely. Use params for values ($1, $2…). Writes go through execute_write_query.`,
+      inputSchema: {
+        sql: z.string().describe('One SQL statement'),
+        params: z.array(paramValue).optional().describe('Values for $1, $2… placeholders'),
+        database: databaseParam,
+        timeout_ms: z.number().int().min(1000).max(MAX_TIMEOUT_MS).default(60000).describe('Timeout in milliseconds (default 60000)'),
+        max_rows: z.number().int().min(1).max(5000).default(1000).describe('Max rows returned (default 1000)'),
+        format: formatParam,
+      },
+      annotations: READ,
     },
-    async ({ sql, database, timeout_ms, max_rows }) => {
-      // Pre-execution validation: reject write operations
-      if (WRITE_PATTERN.test(sql)) {
-        return errorResult(
-          'Write operations are not allowed. Only SELECT queries can be executed. ' +
-          'Detected forbidden keyword in query.'
-        );
+    async ({ sql, params, database, timeout_ms, max_rows, format }) => {
+      // Early, clear refusal; the READ ONLY transaction is the real protection
+      const keyword = findWriteKeyword(sql);
+      if (keyword) {
+        return errorResult(`${keyword} changes the database: this tool is read-only. Use execute_write_query (confirmed by the user in bbdump).`);
       }
-
-      const client = await getClient(database);
-      try {
-        const effectiveMaxRows = Math.min(max_rows, config.maxRows);
+      return withClient(database, async (client) => {
+        const limit = Math.min(max_rows, config.maxRows);
         const startTime = Date.now();
-
-        const result = await executeReadOnly(client, sql, undefined, timeout_ms);
+        let result;
+        let limitedOnServer = false;
+        if (isRowQuery(sql)) {
+          try {
+            // One extra row says whether the result was cut
+            result = await executeReadOnly(client, limitedQuery(sql, limit + 1), params ?? [], timeout_ms);
+            limitedOnServer = true;
+          } catch (err: any) {
+            // Not wrappable (syntax only valid at top level): run it as is
+            if (err?.code !== '42601' && err?.code !== '42P10' && err?.code !== '42702') throw err;
+          }
+        }
+        if (!result) result = await executeReadOnly(client, trimStatement(sql), params ?? [], timeout_ms);
         const duration = Date.now() - startTime;
 
         const dbName = database || getActiveConnectionInfo().database;
-        recordQuery({ tool: 'execute_query', database: dbName, sql, duration_ms: duration });
+        recordQuery({ tool: 'execute_query', database: dbName, sql, duration_ms: duration, rows_affected: result.rowCount ?? undefined });
 
-        const truncated = result.rows.length > effectiveMaxRows;
-        const rows = truncated ? result.rows.slice(0, effectiveMaxRows) : result.rows;
+        const truncated = result.rows.length > limit;
+        const rows = truncated ? result.rows.slice(0, limit) : result.rows;
         const fields = result.fields?.map(f => f.name) || [];
-
-        return jsonResult({
-          rows,
-          fields,
+        const meta = {
           row_count: rows.length,
-          total_row_count: result.rowCount,
           truncated,
+          ...(truncated ? { note: `More than ${limit} rows: add a LIMIT/WHERE or raise max_rows.` } : {}),
+          ...(!limitedOnServer && result.rowCount !== null ? { total_row_count: result.rowCount } : {}),
           duration_ms: duration,
-        });
-      } catch (err: any) {
-        return errorResult(err.message);
-      } finally {
-        client.release();
-      }
+        };
+        if (format === 'json') return jsonResult({ ...meta, fields, rows });
+        const body = format === 'csv' ? toCsv(fields, rows) : toMarkdown(fields, rows);
+        return textResult(`${Object.entries(meta).map(([k, v]) => `${k}: ${v}`).join(' · ')}\n\n${body}`);
+      });
     }
   );
 
-  server.tool(
+  server.registerTool(
     'explain_query',
-    'Show the execution plan of a SQL query using EXPLAIN ANALYZE. Useful for performance analysis. Runs inside a READ ONLY transaction.',
     {
-      sql: z.string().describe('SQL query to analyze'),
-      database: z.string().optional().describe('Database name'),
-      analyze: z.boolean().default(true).describe('Use ANALYZE (actually executes the query, default: true)'),
-      format: z.enum(['text', 'json']).default('text').describe('Output format (default: text)'),
+      title: 'Explain a query',
+      description: 'Execution plan of a query with a summary of what matters: total time, sequential scans, indexes used, slowest nodes, bad row estimates. analyze runs the query (in a READ ONLY transaction) to get real timings.',
+      inputSchema: {
+        sql: z.string().describe('Query to analyze (one statement)'),
+        params: z.array(paramValue).optional().describe('Values for $1, $2… placeholders'),
+        database: databaseParam,
+        analyze: z.boolean().default(true).describe('Run the query for real timings (default true; read-only)'),
+        buffers: z.boolean().default(false).describe('Include buffer (cache/disk) usage'),
+        format: z.enum(['text', 'json']).default('text').describe('Plan format (the summary is always included)'),
+        timeout_ms: z.number().int().min(1000).max(MAX_TIMEOUT_MS).default(60000).describe('Timeout in milliseconds'),
+      },
+      annotations: READ,
     },
-    async ({ sql, database, analyze, format }) => {
-      // Pre-execution validation
-      if (WRITE_PATTERN.test(sql)) {
-        return errorResult(
-          'Write operations are not allowed. Only SELECT queries can be analyzed.'
-        );
-      }
-
-      const client = await getClient(database);
-      try {
-        const analyzeFlag = analyze ? 'ANALYZE true,' : '';
-        const explainSql = `EXPLAIN (${analyzeFlag} FORMAT ${format}) ${sql}`;
-
+    async ({ sql, params, database, analyze, buffers, format, timeout_ms }) => {
+      const keyword = findWriteKeyword(sql);
+      if (keyword) return errorResult(`${keyword} changes the database: only read queries can be explained here.`);
+      return withClient(database, async (client) => {
+        const body = trimStatement(sql);
+        const options = `ANALYZE ${analyze}, BUFFERS ${buffers && analyze}`;
         const startTime = Date.now();
-        const result = await executeReadOnly(client, explainSql);
+        const json = await executeReadOnly(client, `EXPLAIN (${options}, FORMAT JSON) ${body}`, params ?? [], timeout_ms);
+        const plan = json.rows[0]['QUERY PLAN'][0];
         const dbName = database || getActiveConnectionInfo().database;
-        recordQuery({ tool: 'explain_query', database: dbName, sql: explainSql, duration_ms: Date.now() - startTime });
+        recordQuery({ tool: 'explain_query', database: dbName, sql, duration_ms: Date.now() - startTime });
 
-        if (format === 'json') {
-          return jsonResult(result.rows[0]['QUERY PLAN']);
-        }
-
-        const plan = result.rows.map((r: any) => r['QUERY PLAN']).join('\n');
-        return { content: [{ type: 'text' as const, text: plan }] };
-      } catch (err: any) {
-        return errorResult(err.message);
-      } finally {
-        client.release();
-      }
+        const summary = summarizePlan(plan);
+        if (format === 'json') return jsonResult({ summary, plan });
+        // A text plan reads best; with analyze, a second run would execute the query twice
+        const text = analyze
+          ? JSON.stringify(plan.Plan, null, 2)
+          : (await executeReadOnly(client, `EXPLAIN (FORMAT TEXT) ${body}`, params ?? [], timeout_ms)).rows.map((r: any) => r['QUERY PLAN']).join('\n');
+        return textResult(`Summary:\n${JSON.stringify(summary, null, 2)}\n\nPlan:\n${text}`);
+      });
     }
   );
 }

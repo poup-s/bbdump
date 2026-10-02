@@ -1,46 +1,39 @@
 <script setup lang="ts">
+/** The app's confirmation (useConfirm), in the shared dialog shell, above everything else. */
+import { computed } from 'vue';
 import { useConfirm } from '../composables/useConfirm';
+import AppModal from './ui/AppModal.vue';
+import { btnDanger, btnGhost, btnPrimary } from './ui/classes';
 
 const { state, confirm, cancel } = useConfirm();
+
+const ICONS = {
+  danger: 'M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16',
+  warning: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z',
+  info: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
+};
+
+const tone = computed(() => (state.type === 'danger' || state.type === 'error' ? 'danger' : state.type === 'warning' ? 'warning' : 'default'));
+const icon = computed(() => (tone.value === 'danger' ? ICONS.danger : tone.value === 'warning' ? ICONS.warning : ICONS.info));
 </script>
 
 <template>
-  <Transition
-    enter-active-class="transition duration-200 ease-out"
-    enter-from-class="opacity-0"
-    enter-to-class="opacity-100"
-    leave-active-class="transition duration-150 ease-in"
-    leave-from-class="opacity-100"
-    leave-to-class="opacity-0"
+  <AppModal
+    v-if="state.show"
+    :title="state.title"
+    :icon="icon"
+    :tone="tone"
+    width="sm"
+    layer="top"
+    :close-label="state.cancelText"
+    @close="cancel"
+    @submit="confirm"
   >
-    <div v-if="state.show" class="fixed inset-0 z-500 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <div 
-        class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-md w-full border border-border overflow-hidden transform transition-all scale-100"
-        @click.stop
-      >
-        <div class="p-6">
-          <h3 class="text-xl font-bold mb-2">{{ state.title }}</h3>
-          <p class="text-gray-500">{{ state.message }}</p>
-        </div>
-        
-        <div class="bg-surface px-6 py-4 flex justify-end gap-3">
-          <button
-            @click="cancel"
-            class="px-4 py-2 rounded-xl text-gray-600 hover:bg-white dark:hover:bg-zinc-800 transition-colors font-medium"
-          >
-            {{ state.cancelText }}
-          </button>
-          <button
-            @click="confirm"
-            :class="[
-              'px-4 py-2 rounded-xl text-white font-medium transition-transform active:scale-95',
-              state.type === 'danger' ? 'bg-red-600 hover:bg-red-700' : 'bg-foreground hover:bg-zinc-800'
-            ]"
-          >
-            {{ state.confirmText }}
-          </button>
-        </div>
-      </div>
-    </div>
-  </Transition>
+    <p class="text-[13px] leading-relaxed text-gray-600 dark:text-zinc-300 whitespace-pre-line break-words">{{ state.message }}</p>
+    <template #footer>
+      <span class="flex-1" />
+      <button type="button" :class="btnGhost" @click="cancel">{{ state.cancelText }}</button>
+      <button type="button" :class="tone === 'danger' ? btnDanger : btnPrimary" @click="confirm">{{ state.confirmText }}</button>
+    </template>
+  </AppModal>
 </template>

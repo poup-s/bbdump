@@ -1,18 +1,23 @@
 {
   "name": "bbdump",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Cross-platform PostgreSQL manager with automated scheduling, encryption, and modern UI",
   "main": "dist/main/main.js",
   "scripts": {
-    "build": "tsc && npm run copy:assets && npm run build:renderer",
+    "build": "tsc && vue-tsc --noEmit -p src/renderer/tsconfig.json && npm run copy:assets && npm run build:renderer",
     "copy:assets": "mkdir -p dist/main/assets && cp src/main/assets/* dist/main/assets/",
     "build:renderer": "vite build",
     "dev": "npm run build && electron .",
-    "dist": "npm run build && electron-builder",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:linux": "npm run build && electron-builder --linux",
+    "build:mcp": "cd mcp-postgres && npm ci && npm run build",
+    "bundle:mcp": "npm run build:mcp && node scripts/bundle-mcp.mjs",
+    "dist": "npm run build && npm run bundle:mcp && electron-builder",
+    "postdist": "node scripts/set-update-min-os.mjs",
+    "dist:mac": "npm run build && npm run bundle:mcp && electron-builder --mac",
+    "postdist:mac": "node scripts/set-update-min-os.mjs",
+    "dist:linux": "npm run build && npm run bundle:mcp && electron-builder --linux",
     "start": "electron .",
     "lint": "eslint src/",
+    "test": "tsc && node --test test/",
     "lint:fix": "eslint src/ --fix"
   },
   "keywords": [
@@ -40,13 +45,13 @@
   "devDependencies": {
     "@eslint/js": "^9.39.3",
     "@tailwindcss/postcss": "^4.1.17",
+    "@types/dagre": "^0.7.54",
     "@types/node": "^20.10.0",
-    "@types/node-cron": "^3.0.11",
     "@types/pg-format": "^1.0.5",
     "@vitejs/plugin-vue": "^6.0.2",
     "autoprefixer": "^10.4.22",
-    "electron": "^28.0.0",
-    "electron-builder": "^24.9.1",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
     "eslint": "^9.39.3",
     "eslint-plugin-vue": "^10.8.0",
     "postcss": "^8.5.6",
@@ -67,8 +72,8 @@
     "@vue-flow/core": "^1.48.1",
     "@vueuse/core": "^14.0.0",
     "dagre": "^0.8.5",
-    "electron-updater": "^6.7.3",
-    "node-cron": "^3.0.3",
+    "electron-updater": "^6.8.9",
+    "node-cron": "^4.6.0",
     "pg": "^8.16.3",
     "pg-format": "^1.0.4",
     "three": "^0.181.2",
@@ -91,14 +96,15 @@
     ],
     "extraResources": [
       {
-        "from": "mcp-postgres/build",
+        "from": "mcp-postgres/bundle",
         "to": "mcp-postgres",
         "filter": [
-          "**/*.js"
+          "**/*",
+          "!node_modules{,/**/*}"
         ]
       },
       {
-        "from": "mcp-postgres/node_modules",
+        "from": "mcp-postgres/bundle/node_modules",
         "to": "mcp-postgres/node_modules",
         "filter": [
           "**/*"
@@ -129,9 +135,7 @@
       "gatekeeperAssess": false,
       "entitlements": null,
       "entitlementsInherit": null,
-      "extendInfo": {
-        "LSMinimumSystemVersion": "10.13"
-      }
+      "minimumSystemVersion": "13.0"
     },
     "dmg": {
       "title": "${productName} ${version}",
@@ -154,6 +158,9 @@
         "height": 380
       },
       "format": "UDZO"
+    },
+    "toolsets": {
+      "appimage": "1.0.3"
     },
     "linux": {
       "target": [

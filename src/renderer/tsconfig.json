@@ -9,6 +9,9 @@
             "DOM.Iterable"
         ],
         "skipLibCheck": true,
+        /* No Node typings in the renderer: `process` does not exist there (Vite
+           compiles `process.env` to {}), which is how issue #4 slipped through */
+        "types": ["vite/client"],
         /* Bundler mode */
         "moduleResolution": "bundler",
         "allowImportingTsExtensions": true,

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell, screen } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { backupManager } from './backup';
@@ -7,15 +7,21 @@ import { logger } from './logger';
 import { pathManager } from './paths';
 
 // Import IPC registrars
-import { registerConfigHandlers, loadConfig, saveConfig, getConfig } from './ipc/configIpc';
+import { registerConfigHandlers, loadConfig, saveConfig, getConfig, repairLocalDatabaseUsers } from './ipc/configIpc';
+import { registerCloudHandlers } from './ipc/cloudIpc';
 import { registerDbViewerHandlers, closeAllPools } from './ipc/dbViewerIpc';
 import { registerSystemHandlers } from './ipc/systemIpc';
+import { registerSetupHandlers } from './ipc/setupIpc';
 import { registerDatabaseCreationHandlers } from './ipc/databaseCreationIpc';
-import { encryptionManager } from './encryption';
 import { initAutoUpdater, setUpdaterWindow } from './updateChecker';
-import { startConfirmServer, onConfirmRequest, stopConfirmServer } from './mcpConfirmServer';
-import { registerProxyHandlers } from './ipc/proxyIpc';
+import { startConfirmServer, onConfirmRequest, stopConfirmServer, getConfirmToken, writePortFile } from './mcpConfirmServer';
+import { registerProxyHandlers, resolveProxyTarget, releaseProxyTunnel } from './ipc/proxyIpc';
+import { closeAllTunnels, cleanUpOrphanTunnels } from './sshTunnel';
+import { registerSshHandlers } from './ipc/sshIpc';
+import { prepareMcpRuntime } from './mcpLaunch';
 import { tcpProxyManager } from './tcpProxy';
+import { wasStartedHidden } from './loginItem';
+import { toRuntimeDatabase } from './dbSecrets';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -25,6 +31,34 @@ let isQuitting = false;
 let mcpConfirmActive = false;
 const isMcpConfirmLaunch = process.argv.includes('--mcp-confirm');
 
+function isSafeExternalUrl(url: string): boolean {
+  try {
+    const { protocol } = new URL(url);
+    return protocol === 'https:' || protocol === 'mailto:';
+  } catch {
+    return false;
+  }
+}
+
+// Every window only ever shows the bundled renderer: links open in the system browser,
+// and nothing (target=_blank, window.open, navigation) may load remote content in-app,
+// where it would inherit the preload and its IPC access.
+app.on('web-contents-created', (_event, contents) => {
+  contents.setWindowOpenHandler(({ url }) => {
+    if (isSafeExternalUrl(url)) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+  contents.on('will-navigate', (event, url) => {
+    if (url.startsWith('file://')) return;
+    event.preventDefault();
+    if (isSafeExternalUrl(url)) {
+      shell.openExternal(url);
+    }
+  });
+});
+
 // Create the main window
 function createWindow(): void {
   const isMac = process.platform === 'darwin';
@@ -32,7 +66,8 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    show: !isMcpConfirmLaunch,
+    // Started at login: stay in the tray, scheduled backups run in the background
+    show: !isMcpConfirmLaunch && !wasStartedHidden(),
     // macOS: hidden titlebar with custom traffic light position
     // Linux/Windows: default system titlebar
     ...(isMac ? {
@@ -82,8 +117,9 @@ function createWindow(): void {
     }
   });
 
-  mainWindow.on('minimize', (e: Electron.Event) => {
-    e.preventDefault();
+  // 'minimize' cannot be cancelled: the window is minimized, then hidden to the tray.
+  // showWindow() restores it.
+  mainWindow.on('minimize', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.hide();
     }
@@ -118,14 +154,21 @@ function createWindow(): void {
 
   // Register Window-dependent handlers (only once)
   if (!handlersRegistered) {
-    registerSystemHandlers(mainWindow);
-    registerDatabaseCreationHandlers(mainWindow);
+    // Handlers outlive the window (it is re-created after being destroyed): resolve it on each use
+    registerSystemHandlers(getMainWindow);
+    registerSetupHandlers(getMainWindow);
+    registerDatabaseCreationHandlers(getMainWindow);
     handlersRegistered = true;
   }
 }
 
+function getMainWindow(): BrowserWindow | null {
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+}
+
 function showWindow(): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
   } else {
@@ -169,6 +212,30 @@ function createTrayPopup(): void {
   });
 }
 
+/**
+ * Places the tray popup under the tray icon. Tray bounds are only known on macOS/Windows
+ * (Linux returns an empty rectangle), so fall back to the cursor position, kept inside the
+ * work area. On Wayland windows cannot position themselves and the compositor decides.
+ */
+function positionTrayPopup(): void {
+  if (!trayPopup || trayPopup.isDestroyed()) return;
+  try {
+    const popup = trayPopup.getBounds();
+    const trayBounds = tray && !tray.isDestroyed() ? tray.getBounds() : null;
+    const anchor = trayBounds && trayBounds.width > 0 && trayBounds.height > 0
+      ? { x: trayBounds.x + trayBounds.width / 2, y: trayBounds.y + trayBounds.height + 4, below: true }
+      : { ...screen.getCursorScreenPoint(), below: false };
+    const { workArea } = screen.getDisplayNearestPoint({ x: Math.round(anchor.x), y: Math.round(anchor.y) });
+    let x = Math.round(anchor.x - popup.width / 2);
+    let y = Math.round(anchor.below ? anchor.y : anchor.y - popup.height - 4);
+    x = Math.min(Math.max(x, workArea.x), workArea.x + workArea.width - popup.width);
+    y = Math.min(Math.max(y, workArea.y), workArea.y + workArea.height - popup.height);
+    trayPopup.setPosition(x, y);
+  } catch (error) {
+    logger.warn(`Unable to position the tray popup: ${error}`);
+  }
+}
+
 function toggleTrayPopup(): void {
   if (!trayPopup) return;
   if (trayPopup.isVisible()) {
@@ -178,11 +245,7 @@ function toggleTrayPopup(): void {
   // Reload data each time popup is shown
   trayPopup.webContents.send('tray-refresh');
 
-  const trayBounds = tray!.getBounds();
-  const popupBounds = trayPopup.getBounds();
-  const x = Math.round(trayBounds.x + trayBounds.width / 2 - popupBounds.width / 2);
-  const y = Math.round(trayBounds.y + trayBounds.height + 4);
-  trayPopup.setPosition(x, y);
+  positionTrayPopup();
   trayPopup.show();
 }
 
@@ -249,15 +312,16 @@ app.whenReady().then(async () => {
   }
 
   // Load the configuration
-  const config = loadConfig();
+  loadConfig();
+  // Logs written by v1.0.2 may contain connection URIs with passwords
+  logger.scrubSecretsFromLogs();
+  await repairLocalDatabaseUsers();
+  const config = getConfig();
 
   // Initialize the scheduled task manager with decrypted passwords
   const decryptedDatabases = (config.databases || []).map(db => {
     try {
-      return {
-        ...db,
-        password: db.encrypted ? encryptionManager.decrypt(db.password) : db.password
-      };
+      return toRuntimeDatabase(db);
     } catch (error) {
       logger.error(`Failed to decrypt password for ${db.name} during startup: ${error}`);
       return { ...db, enabled: false }; // Disable the DB if decryption fails
@@ -265,42 +329,51 @@ app.whenReady().then(async () => {
   });
   cronManager.rescheduleAll(decryptedDatabases);
 
+  // Backups scheduled while the app was closed: run them once, shortly after startup
+  if (!isMcpConfirmLaunch) {
+    setTimeout(() => {
+      cronManager.catchUpMissedBackups(decryptedDatabases).catch(error =>
+        logger.error(`Catch-up of missed backups failed: ${error}`));
+    }, 30_000);
+  }
+
   // Register IPC handlers
   registerConfigHandlers(); // Config handlers don't need window
+  ipcMain.handle('open-external', async (_e, url: string) => {
+    if (typeof url !== 'string' || !isSafeExternalUrl(url)) {
+      throw new Error('Only https/mailto URLs can be opened');
+    }
+    await shell.openExternal(url);
+  });
+  ipcMain.handle('show-item-in-folder', async (_e, itemPath: string) => {
+    if (typeof itemPath === 'string' && path.isAbsolute(itemPath) && fs.existsSync(itemPath)) {
+      shell.showItemInFolder(itemPath);
+    }
+  });
   registerDbViewerHandlers(); // DbViewer handlers don't need window
   registerProxyHandlers(); // Proxy handlers don't need window
+  registerCloudHandlers();
+  registerSshHandlers();
+  cleanUpOrphanTunnels().catch(() => { /* best effort */ });
 
   // Restore TCP proxies that were enabled before shutdown
   for (const project of config.projects || []) {
     if (project.proxyEnabled && project.proxyPort && project.proxyTargetDbId) {
       const db = config.databases.find(d => d.id === project.proxyTargetDbId);
       if (db) {
-        // Decrypt password for proxy target
-        let password = db.password || '';
-        if (password && db.encrypted) {
-          try { password = encryptionManager.decrypt(password); } catch { /* use raw */ }
-        }
-
-        let target = { host: db.host || 'localhost', port: db.port || 5432, user: db.user || 'postgres', password, database: db.name || 'postgres', ssl: db.ssl };
-        if (db.connectionString) {
-          try {
-            const url = new URL(db.connectionString);
-            target = {
-              host: url.hostname || 'localhost',
-              port: parseInt(url.port) || 5432,
-              user: decodeURIComponent(url.username) || 'postgres',
-              password: decodeURIComponent(url.password) || password,
-              database: url.pathname.replace(/^\//, '') || db.name || 'postgres',
-              ssl: db.ssl || url.searchParams.get('sslmode') === 'require',
-            };
-          } catch { /* fallback to individual fields */ }
-        }
         const dbName = db.displayName || db.name;
-        tcpProxyManager.startProxy(project.id, project.proxyPort, target, dbName).catch(err => {
-          logger.error(`Failed to restore proxy for project ${project.name}: ${err.message}`);
-          project.proxyEnabled = false;
-          saveConfig(config);
-        });
+        const port = project.proxyPort;
+        resolveProxyTarget(db.id, project.id)
+          .then(target => {
+            if (!target) throw new Error('Target database not found');
+            return tcpProxyManager.startProxy(project.id, port, target, dbName);
+          })
+          .catch(err => {
+            logger.error(`Failed to restore proxy for project ${project.name}: ${err.message}`);
+            releaseProxyTunnel(project.id);
+            project.proxyEnabled = false;
+            saveConfig(config);
+          });
       }
     }
   }
@@ -308,6 +381,9 @@ app.whenReady().then(async () => {
   createWindow();
   createTrayPopup();
   createTray();
+
+  // AppImage only: keep a copy of the MCP server outside the ephemeral mount
+  prepareMcpRuntime();
 
   // Start MCP confirmation HTTP server and write port file
   try {
@@ -329,14 +405,7 @@ app.whenReady().then(async () => {
       // Resize tray popup to accommodate the confirmation UI
       trayPopup.setSize(320, 520);
 
-      // Position near the tray icon
-      if (tray) {
-        const trayBounds = tray.getBounds();
-        const popupBounds = trayPopup.getBounds();
-        const x = Math.round(trayBounds.x + trayBounds.width / 2 - popupBounds.width / 2);
-        const y = Math.round(trayBounds.y + trayBounds.height + 4);
-        trayPopup.setPosition(x, y);
-      }
+      positionTrayPopup();
 
       trayPopup.show();
       return trayPopup;
@@ -351,8 +420,8 @@ app.whenReady().then(async () => {
       }
     });
 
-    const portFilePath = path.join(pathManager.appDataPath, '.mcp-confirm-port');
-    fs.writeFileSync(portFilePath, String(confirmPort), 'utf-8');
+    const portFilePath = pathManager.mcpConfirmPortFilePath;
+    writePortFile(portFilePath, confirmPort, getConfirmToken());
     logger.info(`MCP confirm port file written: ${portFilePath} (port ${confirmPort})`);
   } catch (error) {
     logger.error(`Failed to start MCP confirm server: ${error}`);
@@ -377,6 +446,7 @@ app.on('before-quit', async () => {
   } catch (error) {
     logger.error(`Error closing connection pools: ${error}`);
   }
+  closeAllTunnels();
   logger.info('Cleanup complete');
 });
 

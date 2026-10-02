@@ -1,6 +1,6 @@
 import { autoUpdater, UpdateInfo as ElectronUpdateInfo } from 'electron-updater';
 import { getErrorMessage } from './utils';
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, shell } from 'electron';
 import { logger } from './logger';
 
 export interface UpdateInfo {
@@ -12,12 +12,42 @@ export interface UpdateInfo {
 }
 
 let mainWindow: BrowserWindow | null = null;
+let latestVersion = '';
+let listenersRegistered = false;
+
+const RELEASES_URL = 'https://github.com/poup-s/bbdump/releases';
+
+/**
+ * In-place updates only work for the Linux AppImage. macOS builds are unsigned, so
+ * Squirrel.Mac rejects them, and .deb installs cannot self-update: those platforms
+ * are sent to the release page instead.
+ */
+export function supportsAutoInstall(): boolean {
+  return process.platform === 'linux' && !!process.env.APPIMAGE;
+}
+
+function isNewerVersion(candidate: string, current: string): boolean {
+  const parse = (v: string) => v.replace(/^v/, '').split('-')[0].split('.').map(n => parseInt(n, 10) || 0);
+  const a = parse(candidate);
+  const b = parse(current);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  }
+  return false;
+}
+
+function releaseUrl(version: string): string {
+  return version ? `${RELEASES_URL}/tag/v${version}` : `${RELEASES_URL}/latest`;
+}
 
 export function initAutoUpdater(win: BrowserWindow): void {
   mainWindow = win;
+  // Called again when the main window is re-created: only swap the target window
+  if (listenersRegistered) return;
+  listenersRegistered = true;
 
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoInstallOnAppQuit = supportsAutoInstall();
 
   autoUpdater.on('update-available', (info: ElectronUpdateInfo) => {
     logger.info(`Update available: ${info.version}`);
@@ -74,11 +104,12 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
     }
     const info = result.updateInfo;
     const currentVersion = autoUpdater.currentVersion.version;
-    const updateAvailable = info.version !== currentVersion;
+    const updateAvailable = isNewerVersion(info.version, currentVersion);
+    latestVersion = info.version;
     return {
       updateAvailable,
       version: info.version,
-      url: `https://github.com/poup-s/bbdump/releases/tag/v${info.version}`,
+      url: releaseUrl(info.version),
       releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
     };
   } catch (error) {
@@ -93,11 +124,21 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
   }
 }
 
-export async function downloadUpdate(): Promise<void> {
+export async function downloadUpdate(): Promise<{ manual: boolean }> {
+  if (!supportsAutoInstall()) {
+    await shell.openExternal(releaseUrl(latestVersion));
+    return { manual: true };
+  }
   await autoUpdater.downloadUpdate();
+  return { manual: false };
 }
 
 export function quitAndInstall(): void {
+  if (!supportsAutoInstall()) {
+    // Tearing down the windows before a doomed install left the app with no window
+    shell.openExternal(releaseUrl(latestVersion));
+    return;
+  }
   logger.info('Quitting and installing update...');
   
   // Allow time for IPC to return the response to the renderer

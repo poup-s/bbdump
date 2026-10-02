@@ -25,6 +25,15 @@ backups/
 
 # Configuration (contains encrypted passwords - DO NOT COMMIT)
 config.json
+config.json.bak
+config.json.tmp
+config.json.corrupt-*
+cloud-credentials.json
+cloud-credentials.json.tmp
+backup-history.json
+backup-history.json.tmp
+ssh-tunnels.json
+ai-journal/
 
 # Encryption key (CRITICAL - DO NOT COMMIT)
 .encryption.key
@@ -108,3 +117,6 @@ coverage/
 # Electron builder
 electron-builder.yml
 
+
+# MCP server staged for packaging (scripts/bundle-mcp.mjs)
+mcp-postgres/bundle/

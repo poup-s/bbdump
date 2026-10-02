@@ -43,7 +43,7 @@ class FileEncryptionManager {
     return new Promise((resolve, reject) => {
       let settled = false;
       const safeResolve = () => { if (!settled) { settled = true; resolve(); } };
-      const safeReject = (err: any) => { if (!settled) { settled = true; reject(err); } };
+      const safeReject = (err: unknown) => { if (!settled) { settled = true; reject(err); } };
 
       try {
         const key = encryptionManager['encryptionKey']; // Access to the private key
@@ -128,7 +128,7 @@ class FileEncryptionManager {
     return new Promise((resolve, reject) => {
       let settled = false;
       const safeResolve = () => { if (!settled) { settled = true; resolve(); } };
-      const safeReject = (err: any) => { if (!settled) { settled = true; reject(err); } };
+      const safeReject = (err: unknown) => { if (!settled) { settled = true; reject(err); } };
 
       try {
         const key = encryptionManager['encryptionKey'];

@@ -1,7 +1,18 @@
-import { Client } from 'pg';
+import { Client, QueryConfig } from 'pg';
 import { getErrorMessage } from './utils';
 import { logger } from './logger';
 import { checkPostgresInstalled } from './postgresManager';
+import { catalogEntry, extensionPackage, linuxExtensionScript, parseLibraryList, preloadLiterals, withPreloadLibrary, type PackageManager } from './extensionCatalog';
+
+/** pkexec on the PATH (graphical root prompt on Linux desktops) */
+async function findPkexec(): Promise<string | null> {
+  const fs = await import('fs');
+  for (const dir of (process.env.PATH || '').split(':').concat(['/usr/bin', '/bin'])) {
+    const candidate = `${dir}/pkexec`;
+    if (dir && fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
 
 export interface PostgresDatabase {
   name: string;
@@ -49,8 +60,10 @@ async function createPostgresConnection(port: number = 5432, database: string = 
   // Helper to apply monkey-patch to a connected client
   const patchClient = (client: Client, user: string): Client => {
     logger.info(`Connected to PostgreSQL as ${user} on port ${port}`);
-    const originalQuery = client.query;
-    client.query = function (this: Client, queryTextOrConfig: any, values?: any, callback?: any) {
+    // pg's query() has many overloads; the wrapper only rewrites the SQL text and forwards the rest untouched
+    type RawQuery = (this: Client, queryTextOrConfig: string | QueryConfig, values?: unknown, callback?: unknown) => unknown;
+    const originalQuery = client.query as unknown as RawQuery;
+    const taggedQuery: RawQuery = function (this: Client, queryTextOrConfig, values, callback) {
       const tag = '/* bbdump-internal */ ';
       if (typeof queryTextOrConfig === 'string') {
         if (!queryTextOrConfig.includes(tag)) {
@@ -61,8 +74,9 @@ async function createPostgresConnection(port: number = 5432, database: string = 
           queryTextOrConfig.text = tag + queryTextOrConfig.text;
         }
       }
-      return (originalQuery as any).apply(this, [queryTextOrConfig, values, callback]);
-    } as any;
+      return originalQuery.apply(this, [queryTextOrConfig, values, callback]);
+    };
+    client.query = taggedQuery as unknown as Client['query'];
     return client;
   };
 
@@ -95,7 +109,8 @@ async function createPostgresConnection(port: number = 5432, database: string = 
   for (const user of usersToTry) {
     if (!user) continue;
 
-    const passwords = isLinux ? ['postgres', 'admin', 'password'] : ['', 'postgres', 'admin', 'password'];
+    // No password (trust auth) only — never guess common passwords
+    const passwords = [''];
 
     for (const pwd of passwords) {
       const client = new Client({
@@ -450,8 +465,8 @@ export async function testDatabaseConnection(
     }
   }
 
-  // Essayer sans mot de passe (macOS trust auth) ou avec des mots de passe courants
-  const passwordsToTry = isLinux ? ['postgres'] : [''];
+  // Without a password (trust auth); never guess common passwords
+  const passwordsToTry = [''];
   for (const user of usersToTry) {
     if (!user) continue;
 
@@ -577,10 +592,28 @@ export async function getPostgresConfigInfo(port: number = 5432): Promise<Postgr
   }
 }
 
+export interface PostgresExtension {
+  name: string;
+  default_version: string | null;
+  installed_version: string | null;
+  comment: string | null;
+  is_installed: boolean;
+}
+
+/** One row of pg_stat_statements (bigint columns come back from pg as strings) */
+export interface QueryStat {
+  query: string;
+  calls: string;
+  total_time: number;
+  mean_time: number;
+  rows: string;
+  percentage: number;
+}
+
 /**
  * Lists available and installed extensions for a database
  */
-export async function listPostgresExtensions(dbName: string, port: number = 5432): Promise<any[]> {
+export async function listPostgresExtensions(dbName: string, port: number = 5432): Promise<PostgresExtension[]> {
   const client = await createPostgresConnection(port, dbName);
 
   try {
@@ -595,7 +628,7 @@ export async function listPostgresExtensions(dbName: string, port: number = 5432
       ORDER BY name;
     `;
 
-    const result = await client.query(query);
+    const result = await client.query<PostgresExtension>(query);
     return result.rows;
   } catch (error) {
     logger.error(`Error listing extensions for ${dbName}: ${getErrorMessage(error)}`);
@@ -605,25 +638,113 @@ export async function listPostgresExtensions(dbName: string, port: number = 5432
   }
 }
 
+/** Libraries loaded now, and the value the next restart will load (postgresql.conf + ALTER SYSTEM) */
+async function readPreloadLibraries(client: Client): Promise<{ loaded: string[]; next: string[] }> {
+  const shown = await client.query<{ shared_preload_libraries: string }>('SHOW shared_preload_libraries');
+  const loaded = parseLibraryList(shown.rows[0]?.shared_preload_libraries);
+  try {
+    // Superuser only; the highest seqno is the value that wins at the next start
+    // (its error column reads "setting could not be applied" until the restart)
+    const pending = await client.query<{ setting: string }>(
+      "SELECT setting FROM pg_file_settings WHERE name = 'shared_preload_libraries' ORDER BY seqno DESC LIMIT 1"
+    );
+    return { loaded, next: pending.rows.length ? parseLibraryList(pending.rows[0].setting) : loaded };
+  } catch {
+    return { loaded, next: loaded };
+  }
+}
+
+export interface ExtensionServerInfo {
+  /** Major version of the server (17, 18…) */
+  major: number;
+  /** Package manager the server's extensions come from, when bbdump can tell */
+  packageManager: PackageManager | null;
+  /** bbdump can install packages itself (Homebrew: no admin password) */
+  autoInstall: boolean;
+  preloaded: string[];
+  /** Added to shared_preload_libraries, active after a restart */
+  pendingPreload: string[];
+}
+
 /**
- * Installs an extension on a database
+ * Where the local server comes from, so the Extensions dialog can say how to add an extension
+ * that is not on it (Homebrew: one click; PGDG apt / dnf: the command to run).
  */
-export async function installExtension(dbName: string, extensionName: string, port: number = 5432): Promise<{ success: boolean; error?: string }> {
+export async function getExtensionServerInfo(dbName: string, port: number = 5432): Promise<ExtensionServerInfo> {
+  const client = await createPostgresConnection(port, dbName);
+  try {
+    const version = await client.query<{ server_version_num: string }>('SHOW server_version_num');
+    const major = Math.floor(Number(version.rows[0]?.server_version_num || 0) / 10000);
+
+    let sharedir = '';
+    try {
+      const result = await client.query<{ setting: string }>("SELECT setting FROM pg_config WHERE name = 'SHAREDIR'");
+      sharedir = result.rows[0]?.setting || '';
+    } catch {
+      // pg_config is superuser only: the source stays unknown
+    }
+
+    const os = await import('os');
+    let packageManager: PackageManager | null = null;
+    let autoInstall = false;
+    if (os.platform() === 'darwin' && /^\/(opt\/homebrew|usr\/local)\/(share|Cellar)\/postgresql@\d+/.test(sharedir)) {
+      const { findBrewPath } = await import('./postgresManager');
+      packageManager = 'brew';
+      autoInstall = !!(await findBrewPath());
+    } else if (os.platform() === 'linux') {
+      // Debian / Ubuntu (distro or PGDG), PGDG for RHEL-like, Fedora's own packages
+      if (sharedir.startsWith('/usr/share/postgresql/')) packageManager = 'apt';
+      else if (/^\/usr\/pgsql-\d+\//.test(sharedir)) packageManager = 'dnf';
+      else if (sharedir === '/usr/share/pgsql') packageManager = 'fedora';
+      // One graphical password prompt (pkexec), as in the onboarding
+      autoInstall = !!packageManager && !!(await findPkexec());
+    }
+
+    const { loaded, next } = await readPreloadLibraries(client);
+    return {
+      major,
+      packageManager,
+      autoInstall,
+      preloaded: loaded,
+      pendingPreload: next.filter(lib => !loaded.includes(lib)),
+    };
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * Installs an extension on a database. Extensions that must be preloaded are added to
+ * shared_preload_libraries (ALTER SYSTEM): `needsRestart` says the server must restart first.
+ */
+export async function installExtension(dbName: string, extensionName: string, port: number = 5432): Promise<{ success: boolean; error?: string; needsRestart?: boolean }> {
   const client = await createPostgresConnection(port, dbName);
 
   try {
     const format = await import('pg-format');
-    const query = format.default('CREATE EXTENSION IF NOT EXISTS %I', extensionName);
-    await client.query(query);
-    logger.info(`Extension "${extensionName}" installed on database "${dbName}"`);
+    let needsRestart = false;
 
-    // Automatically update shared_preload_libraries for pg_stat_statements
-    if (extensionName === 'pg_stat_statements') {
-      const { updateSharedPreloadLibraries } = await import('./postgresManager');
-      await updateSharedPreloadLibraries('pg_stat_statements', 'add');
+    if (catalogEntry(extensionName)?.preload) {
+      const { loaded, next } = await readPreloadLibraries(client);
+      if (!next.includes(extensionName)) {
+        const libraries = withPreloadLibrary(next, extensionName);
+        // One literal per library: a single 'a,b' string would be read as ONE library named "a,b"
+        // and the server would no longer start
+        await client.query(`ALTER SYSTEM SET shared_preload_libraries = ${preloadLiterals(libraries, format.default)}`);
+        logger.info(`Added "${extensionName}" to shared_preload_libraries (restart required)`);
+      }
+      needsRestart = !loaded.includes(extensionName);
     }
 
-    return { success: true };
+    try {
+      await client.query(format.default('CREATE EXTENSION IF NOT EXISTS %I CASCADE', extensionName));
+    } catch (error) {
+      // Most preloaded extensions refuse CREATE EXTENSION until the server has loaded them
+      if (needsRestart) return { success: false, needsRestart: true, error: getErrorMessage(error) };
+      throw error;
+    }
+    logger.info(`Extension "${extensionName}" installed on database "${dbName}"${needsRestart ? ' (active after a restart)' : ''}`);
+    return { success: true, needsRestart };
   } catch (error) {
     logger.error(`Error installing extension ${extensionName} on ${dbName}: ${getErrorMessage(error)}`);
     return { success: false, error: getErrorMessage(error) };
@@ -633,7 +754,8 @@ export async function installExtension(dbName: string, extensionName: string, po
 }
 
 /**
- * Uninstalls an extension from a database
+ * Uninstalls an extension from a database. shared_preload_libraries is left as is: other
+ * databases of the server may still use the library.
  */
 export async function uninstallExtension(dbName: string, extensionName: string, port: number = 5432): Promise<{ success: boolean; error?: string }> {
   const client = await createPostgresConnection(port, dbName);
@@ -643,13 +765,6 @@ export async function uninstallExtension(dbName: string, extensionName: string, 
     const query = format.default('DROP EXTENSION IF EXISTS %I', extensionName);
     await client.query(query);
     logger.info(`Extension "${extensionName}" uninstalled from database "${dbName}"`);
-
-    // Automatiquement retirer pg_stat_statements de shared_preload_libraries
-    if (extensionName === 'pg_stat_statements') {
-      const { updateSharedPreloadLibraries } = await import('./postgresManager');
-      await updateSharedPreloadLibraries('pg_stat_statements', 'remove');
-    }
-
     return { success: true };
   } catch (error) {
     logger.error(`Error uninstalling extension ${extensionName} from ${dbName}: ${getErrorMessage(error)}`);
@@ -660,11 +775,77 @@ export async function uninstallExtension(dbName: string, extensionName: string, 
 }
 
 /**
+ * Installs the package of a catalog extension on the local server:
+ * - macOS, Homebrew server: `brew install <formula>` (no password);
+ * - Linux (apt, PGDG dnf, Fedora): a root script run through ONE pkexec prompt.
+ * Only packages from the catalog are accepted.
+ */
+export async function installExtensionPackage(
+  dbName: string,
+  extensionName: string,
+  port: number = 5432,
+): Promise<{ success: boolean; error?: string; cancelled?: boolean }> {
+  const entry = catalogEntry(extensionName);
+  if (!entry) return { success: false, error: `Unknown extension ${extensionName}` };
+
+  const server = await getExtensionServerInfo(dbName, port);
+  const manager = server.packageManager;
+  const pkg = manager ? extensionPackage(entry, manager, server.major) : null;
+  if (!manager || !server.autoInstall || !pkg) {
+    return { success: false, error: `No package bbdump can install for ${extensionName} on this server` };
+  }
+
+  if (manager !== 'brew') {
+    const pkexec = await findPkexec();
+    if (!pkexec) return { success: false, error: 'pkexec not found' };
+    const { runScriptWithPkexec } = await import('./platform/linux');
+    logger.info(`Installing ${pkg} for extension "${extensionName}" (pkexec, ${manager})`);
+    const result = await runScriptWithPkexec(linuxExtensionScript(entry, manager, server.major), pkexec, line => logger.info(`[${pkg}] ${line}`));
+    if (result.cancelled) return { success: false, cancelled: true, error: 'Cancelled' };
+    if (result.code !== 0) {
+      const detail = result.output.trim().split('\n').filter(Boolean).slice(-3).join(' ');
+      logger.error(`Installing ${pkg} failed (${result.code}): ${detail}`);
+      return { success: false, error: detail || `exit code ${result.code}` };
+    }
+    logger.info(`${pkg} installed`);
+    return { success: true };
+  }
+
+  const { findBrewPath } = await import('./postgresManager');
+  const brewPath = await findBrewPath();
+  if (!brewPath) return { success: false, error: 'Homebrew not found' };
+
+  const { execFile } = await import('child_process');
+  logger.info(`Installing Homebrew formula "${pkg}" for extension "${extensionName}"`);
+  return await new Promise(resolve => {
+    execFile(
+      brewPath,
+      ['install', pkg],
+      {
+        timeout: 20 * 60 * 1000,
+        maxBuffer: 16 * 1024 * 1024,
+        env: { ...process.env, HOMEBREW_NO_AUTO_UPDATE: '1', HOMEBREW_NO_ENV_HINTS: '1', NONINTERACTIVE: '1' },
+      },
+      (error, _stdout, stderr) => {
+        if (error) {
+          const detail = (stderr || '').trim().split('\n').filter(Boolean).slice(-3).join(' ') || getErrorMessage(error);
+          logger.error(`brew install ${pkg} failed: ${detail}`);
+          resolve({ success: false, error: detail });
+        } else {
+          logger.info(`Homebrew formula "${pkg}" installed`);
+          resolve({ success: true });
+        }
+      }
+    );
+  });
+}
+
+/**
  * Retrieves performance statistics (pg_stat_statements)
  */
 export async function getPostgresPerformanceStats(dbName: string, port: number = 5432): Promise<{
   success: boolean;
-  stats?: any[];
+  stats?: QueryStat[];
   summary?: { totalCalls: number; totalTime: number };
   error?: string;
   extensionActive?: boolean;
@@ -703,7 +884,7 @@ export async function getPostgresPerformanceStats(dbName: string, port: number =
       LIMIT 20;
     `;
 
-    const result = await client.query(query);
+    const result = await client.query<QueryStat>(query);
 
     // Retrieve the global total for the dashboard (excluding bbdump)
     const summaryQuery = `

@@ -1,4 +1,8 @@
 <script setup lang="ts">
+/**
+ * Add a remote database (3 steps: method, connection, backup) or edit one (rail: connection,
+ * backup, schedule). Same shell and fields as the other dialogs (components/ui).
+ */
 import { ref, computed, watch, onMounted } from 'vue';
 import { getErrorMessage } from '../utils';
 import { store } from '../store';
@@ -6,33 +10,56 @@ import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
 import { ipcRenderer } from '../electron';
 import { Database } from '../types';
+import { parsePgUrl } from '../pgUrl';
+import { PROVIDERS, detectProvider, poolerAdvice, hasPasswordPlaceholder, urlSetsSsl, type CloudProvider } from '../cloudProviders';
 import CronEditor from './CronEditor.vue';
+import NeonPicker from './NeonPicker.vue';
+import SshConnectionFields from './SshConnectionFields.vue';
+import SslOptions from './SslOptions.vue';
+import AppModal from './ui/AppModal.vue';
+import ModalHeading from './ui/ModalHeading.vue';
+import FormField from './ui/FormField.vue';
+import SegmentedControl from './ui/SegmentedControl.vue';
+import SwitchRow from './ui/SwitchRow.vue';
+import ChoiceCard from './ui/ChoiceCard.vue';
+import { btnGhost, btnPrimary, btnSecondary, inputClass, monoInputClass, panelClass } from './ui/classes';
+
+const MASKED_PASSWORD = '••••••••';
+const TEST_TIMEOUT_MS = 12000;
+
+const ICONS = {
+  database: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4',
+  globe: 'M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9',
+  link: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1',
+  edit: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z',
+  eye: 'M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z',
+  eyeOff: 'M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21',
+  folder: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z',
+  terminal: 'M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z',
+};
 
 const { t } = useI18n();
 const { addToast } = useToast();
 
 const isEditing = computed(() => !!store.editingDatabase);
 const isLoading = ref(false);
-const currentStep = ref(1);
-const connectionMode = ref<'manual' | 'url' | null>(null);
+/** Wizard (add): 0 method · 1 connection · 2 backup */
+const currentStep = ref(0);
+/** Edit: the section shown */
+const section = ref<'connection' | 'backup' | 'schedule'>('connection');
+const connectionMode = ref<'manual' | 'url' | 'ssh' | null>(null);
+/** "Server via SSH": the tunnel's settings (the database fields stay in `form`) */
+const emptySsh = (): NonNullable<Database['ssh']> => ({ host: '', remoteHost: 'localhost', remotePort: 5432, envFile: '', envVar: 'DATABASE_URL' });
+const sshDraft = ref<NonNullable<Database['ssh']>>(emptySsh());
 const connectionUrl = ref('');
+/** Required fields are flagged once the user tried to go on */
+const attempted = ref(false);
 
-// Cloud providers for quick connect
-const providers = [
-  { id: 'supabase', name: 'Supabase', color: '#3ECF8E',
-    placeholder: 'postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres',
-    defaults: { ssl: true, port: 6543 },
-    hint: 'database.providers.supabaseHint' },
-  { id: 'neon', name: 'Neon', color: '#00E599',
-    placeholder: 'postgresql://[user]:[password]@[host].neon.tech/neondb?sslmode=require',
-    defaults: { ssl: true, port: 5432 },
-    hint: 'database.providers.neonHint' },
-] as const;
+// Hosts with a guide to their connection URL
+const guides = PROVIDERS.filter(p => p.guide);
+const selectedProvider = ref<CloudProvider | null>(null);
 
-type Provider = typeof providers[number];
-const selectedProvider = ref<Provider | null>(null);
-
-const form = ref<Database>({
+const emptyForm = (output = ''): Database => ({
   id: '',
   name: '',
   displayName: '',
@@ -40,189 +67,296 @@ const form = ref<Database>({
   port: 5432,
   user: 'postgres',
   password: '',
-  output: '',
+  output,
   cron: '0 0 * * *',
   enabled: false,
   encryptBackups: false,
+  verifyBackups: true,
   connectionString: '',
-  ssl: false
+  ssl: false,
+  sslMode: 'disable',
+  sslRootCert: undefined
 });
 
+const form = ref<Database>(emptyForm());
 const passwordVisible = ref(false);
 
 onMounted(async () => {
   if (store.editingDatabase) {
-    // Edit mode - skip wizard, show all fields
     form.value = { ...store.editingDatabase };
+    // The saved password never reaches the renderer (get-config masks it): empty = unchanged
+    if (form.value.password === MASKED_PASSWORD) form.value.password = '';
+    // Databases saved by v1.0.2 only have the boolean
+    form.value.sslMode = form.value.sslMode || (form.value.ssl ? 'require' : 'disable');
+    form.value.verifyBackups = form.value.verifyBackups !== false;
+    form.value.cron = form.value.cron || '0 0 * * *';
 
     // If output path is missing (e.g. auto-imported), fallback to global default
     if (!form.value.output) {
       try {
         const defaultPath = await ipcRenderer.invoke('get-default-path');
-        if (defaultPath) {
-          form.value.output = defaultPath;
-        }
+        if (defaultPath) form.value.output = defaultPath;
       } catch (e) {
         console.error('Failed to get default path during edit', e);
       }
     }
 
-    if (form.value.connectionString) {
-      connectionMode.value = 'url';
-      connectionUrl.value = form.value.connectionString;
-    } else {
-      connectionMode.value = 'manual';
-      connectionUrl.value = '';
+    connectionMode.value = form.value.ssh ? 'ssh' : form.value.connectionString ? 'url' : 'manual';
+    if (form.value.ssh) sshDraft.value = { ...emptySsh(), ...form.value.ssh, envVar: form.value.ssh.envVar || 'DATABASE_URL' };
+    connectionUrl.value = form.value.connectionString || '';
+    // Opened from the tasks page: straight to the schedule
+    if (store.modalTargetSection === 'schedule') {
+      section.value = 'schedule';
+      store.modalTargetSection = null;
     }
-    currentStep.value = 1; // Will be bypassed in edit mode
   } else {
-    // New database - start wizard
-    currentStep.value = 1;
+    currentStep.value = 0;
     connectionMode.value = null;
     connectionUrl.value = '';
-
-    // Get default path from settings
     let defaultPath = '';
     try {
       defaultPath = await ipcRenderer.invoke('get-default-path');
     } catch (e) {
       console.error('Failed to get default path', e);
     }
-
-    form.value = {
-      id: '',
-      name: '',
-      displayName: '',
-      host: 'localhost',
-      port: 5432,
-      user: 'postgres',
-      password: '',
-      output: defaultPath,
-      cron: '0 0 * * *',
-      enabled: false,
-      encryptBackups: false,
-      connectionString: '',
-      ssl: false
-    };
-  }
-
-  if (store.modalTargetSection) {
-    scrollToSection(store.modalTargetSection);
+    form.value = emptyForm(defaultPath);
   }
 });
 
+// --- URL --------------------------------------------------------------------
+
+/** Fills the fields from the URL; false when it is not a usable PostgreSQL URL */
 const parseConnectionUrl = (url: string) => {
-  try {
-    // Updated regex to handle special characters in user, password, and database name
-    // Supports: underscores, hyphens, special chars in password, query params
-    const regex = /^postgres(?:ql)?:\/\/(?:([^:@]+)(?::([^@]+))?@)?([^:/]+)(?::(\d+))?(?:\/([^?]+))?(?:\?(.*))?$/;
-    const match = url.match(regex);
-
-    if (match) {
-      const [_, user, password, host, port, dbname, query] = match;
-      
-      if (user) form.value.user = user;
-      if (password) form.value.password = password;
-      if (host) form.value.host = host;
-      if (port) form.value.port = parseInt(port);
-      if (dbname) form.value.name = dbname;
-      
-      if (query && query.includes('sslmode=require')) {
-        form.value.ssl = true;
-      } else {
-        form.value.ssl = false;
-      }
-
-      return true;
-    }
-    return false;
-  } catch {
-    return false;
-  }
+  const parsed = parsePgUrl(url);
+  if (!parsed || !parsed.database) return false;
+  if (parsed.user) form.value.user = parsed.user;
+  if (parsed.password) form.value.password = parsed.password;
+  form.value.host = parsed.host;
+  form.value.port = parsed.port;
+  form.value.name = parsed.database;
+  if (parsed.sslMode) form.value.sslMode = parsed.sslMode;
+  // Cloud hosts only accept SSL: on unless the URL says otherwise (an edit keeps a stricter mode)
+  else if (detectProvider(parsed.host)) { if (!isEditing.value || form.value.sslMode === 'disable') form.value.sslMode = 'require'; }
+  else if (!isEditing.value) form.value.sslMode = 'disable';
+  if (parsed.sslRootCert) form.value.sslRootCert = parsed.sslRootCert;
+  return true;
 };
 
+const urlValid = ref(true);
 watch(connectionUrl, (newUrl) => {
-  if (connectionMode.value === 'url' && newUrl) {
-    parseConnectionUrl(newUrl);
-    form.value.connectionString = newUrl;
-  }
+  if (connectionMode.value !== 'url') return;
+  urlValid.value = !newUrl.trim() || parseConnectionUrl(newUrl);
+  form.value.connectionString = newUrl.trim();
 });
 
-const selectOutput = async () => {
-  const path = await ipcRenderer.invoke('select-directory');
-  if (path) {
-    form.value.output = path;
+/** The host recognized from the URL, and what to tell about it */
+const detectedProvider = computed(() => (connectionMode.value === 'url' && urlValid.value && connectionUrl.value.trim() ? detectProvider(form.value.host) : null));
+const sslFromUrl = computed(() => urlSetsSsl(connectionUrl.value));
+const pooler = computed(() => (detectedProvider.value ? poolerAdvice(connectionUrl.value.trim(), form.value.host, form.value.port) : null));
+const placeholderPassword = computed(() => connectionMode.value === 'url' && hasPasswordPlaceholder(connectionUrl.value));
+const guideSteps = (provider: CloudProvider) => [1, 2, 3].map(n => t(`dbModal.guide.${provider.id}.step${n}`));
+const openDashboard = (provider: CloudProvider) => { if (provider.dashboardUrl) window.open(provider.dashboardUrl, '_blank'); };
+
+/** A database picked with the Neon API key: its URL, and a name when none was typed */
+const neonConnected = ref(false);
+let neonName = '';
+let neonUri = '';
+const onNeonPick = (uri: string, label: string) => {
+  connectionUrl.value = uri;
+  neonUri = uri;
+  // A name typed by the user stays; the one suggested for the previous pick follows the new one
+  const current = form.value.displayName?.trim() ?? '';
+  if (!current || current === neonName) form.value.displayName = label;
+  neonName = label;
+};
+const onNeonUnpick = () => {
+  if (connectionUrl.value === neonUri) connectionUrl.value = '';
+  if (form.value.displayName === neonName) form.value.displayName = '';
+  neonUri = neonName = '';
+};
+
+const pasteFailed = ref(false);
+/** Reads the clipboard only on this click */
+const pasteUrl = async () => {
+  pasteFailed.value = false;
+  try {
+    const text = (await navigator.clipboard.readText()).trim();
+    if (text) connectionUrl.value = text;
+  } catch {
+    pasteFailed.value = true;
   }
 };
 
-const selectMode = (mode: 'url' | 'manual') => {
+// --- Validation ---------------------------------------------------------------
+
+const connectionErrors = computed(() => {
+  const errors: Record<string, string> = {};
+  if (connectionMode.value === 'url') {
+    if (!connectionUrl.value.trim()) errors.url = t('dbModal.required');
+    else if (!urlValid.value) errors.url = t('dbModal.urlInvalid');
+  } else if (connectionMode.value === 'ssh') {
+    if (!sshDraft.value.host?.trim()) errors.sshHost = t('dbModal.required');
+    if (!form.value.name?.trim()) errors.name = t('dbModal.required');
+    if (!form.value.user?.trim()) errors.user = t('dbModal.required');
+    // Empty means PostgreSQL's default (5432)
+    const remotePort = Number(sshDraft.value.remotePort) || 5432;
+    if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) errors.remotePort = t('dbModal.portInvalid');
+  } else {
+    if (!form.value.name?.trim()) errors.name = t('dbModal.required');
+    if (!form.value.host?.trim()) errors.host = t('dbModal.required');
+    if (!form.value.user?.trim()) errors.user = t('dbModal.required');
+    if (!form.value.port || form.value.port < 1 || form.value.port > 65535) errors.port = t('dbModal.portInvalid');
+  }
+  return errors;
+});
+const backupErrors = computed(() => {
+  const errors: Record<string, string> = {};
+  if (!form.value.output?.trim()) errors.output = t('dbModal.required');
+  return errors;
+});
+const shownError = (errors: Record<string, string>, key: string) => (attempted.value ? errors[key] : undefined);
+const connectionValid = computed(() => Object.keys(connectionErrors.value).length === 0);
+const backupValid = computed(() => Object.keys(backupErrors.value).length === 0);
+
+// --- Navigation ---------------------------------------------------------------
+
+const steps = computed(() => [t('dbModal.steps.method'), t('dbModal.steps.connection'), t('dbModal.steps.backup')]);
+const sections = computed(() => [
+  { id: 'connection', label: t('dbModal.sections.connection'), attention: attempted.value && !connectionValid.value },
+  { id: 'backup', label: t('dbModal.sections.backup'), attention: attempted.value && !backupValid.value },
+  { id: 'schedule', label: t('dbModal.sections.schedule') },
+]);
+
+const modalRef = ref<InstanceType<typeof AppModal> | null>(null);
+
+const selectMode = (mode: 'url' | 'manual' | 'ssh') => {
   connectionMode.value = mode;
   selectedProvider.value = null;
-  if (mode === 'url') {
-    connectionUrl.value = '';
+  if (mode === 'url') connectionUrl.value = '';
+  if (mode === 'ssh') {
+    // New databases default to localhost / postgres: not what a server's database is
+    form.value.user = '';
+    form.value.name = '';
   }
 };
 
-const selectProvider = (provider: Provider) => {
+/** The tunnel's settings as saved: empty optional values left out */
+const cleanSsh = (): NonNullable<Database['ssh']> => {
+  const d = sshDraft.value;
+  return {
+    host: d.host.trim(),
+    user: typeof d.user === 'string' && d.user.trim() ? d.user.trim() : undefined,
+    port: typeof d.port === 'number' && d.port > 0 ? d.port : undefined,
+    remoteHost: d.remoteHost?.trim() || 'localhost',
+    remotePort: Number(d.remotePort) || 5432,
+    envFile: d.envFile?.trim() || undefined,
+    envVar: d.envVar?.trim() || undefined,
+  };
+};
+
+const selectProvider = (provider: CloudProvider) => {
   selectedProvider.value = provider;
   connectionMode.value = 'url';
   connectionUrl.value = '';
-  form.value.ssl = provider.defaults.ssl;
-  form.value.port = provider.defaults.port;
-  currentStep.value = 2;
+  goToStep(1);
+};
+
+const goToStep = (step: number) => {
+  currentStep.value = step;
+  attempted.value = false;
+  modalRef.value?.focusBody();
 };
 
 const nextStep = () => {
-  if (currentStep.value === 1) {
+  if (currentStep.value === 0) {
     if (!connectionMode.value) {
-      addToast(t('toasts.fillRequired'), 'error');
+      addToast(t('dbModal.pickMethod'), 'warning');
       return;
     }
-    currentStep.value = 2;
-  } else if (currentStep.value === 2) {
-    // Validate step 2
-    if (connectionMode.value === 'url') {
-      if (!connectionUrl.value) {
-        addToast(t('toasts.fillRequired'), 'error');
-        return;
-      }
-      parseConnectionUrl(connectionUrl.value);
-      form.value.connectionString = connectionUrl.value;
-    } else {
-      if (!form.value.name || !form.value.host || !form.value.user) {
-        addToast(t('toasts.fillRequired'), 'error');
-        return;
-      }
-      form.value.connectionString = undefined;
+    goToStep(1);
+  } else if (currentStep.value === 1) {
+    if (!connectionValid.value) {
+      attempted.value = true;
+      return;
     }
-    currentStep.value = 3;
+    form.value.connectionString = connectionMode.value === 'url' ? connectionUrl.value.trim() : undefined;
+    goToStep(2);
   }
 };
 
 const previousStep = () => {
-  if (currentStep.value > 1) {
-    currentStep.value--;
+  if (currentStep.value > 0) goToStep(currentStep.value - 1);
+};
+
+const submit = () => {
+  if (!isEditing.value && currentStep.value < 2) nextStep();
+  else save();
+};
+
+// --- Connection test --------------------------------------------------------------
+
+const test = ref<{ status: 'idle' | 'testing' | 'ok' | 'error'; version?: string; tables?: number; error?: string }>({ status: 'idle' });
+
+// Any change to what the test used makes its result stale
+watch(
+  () => [connectionMode.value, connectionUrl.value, form.value.host, form.value.port, form.value.user, form.value.password, form.value.name, form.value.sslMode, form.value.sslRootCert],
+  () => { if (test.value.status !== 'testing') test.value = { status: 'idle' }; },
+);
+
+const testConnection = async () => {
+  if (!connectionValid.value) {
+    attempted.value = true;
+    return;
+  }
+  test.value = { status: 'testing' };
+  try {
+    const result = await Promise.race([
+      ipcRenderer.invoke('test-database-connection', {
+        id: isEditing.value ? store.editingDatabase!.id : undefined,
+        host: form.value.host,
+        port: form.value.port,
+        user: form.value.user,
+        password: form.value.password,
+        database: form.value.name,
+        connectionString: connectionMode.value === 'url' ? connectionUrl.value.trim() : undefined,
+        sslMode: form.value.sslMode,
+        sslRootCert: form.value.sslRootCert,
+      }),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(t('dbModal.testTimeout'))), TEST_TIMEOUT_MS)),
+    ]) as { version: string; tables: number };
+    test.value = { status: 'ok', version: result.version, tables: result.tables };
+  } catch (error) {
+    test.value = { status: 'error', error: getErrorMessage(error).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') };
   }
 };
 
+// --- Save -------------------------------------------------------------------------
+
+const selectOutput = async () => {
+  const path = await ipcRenderer.invoke('select-directory');
+  if (path) form.value.output = path;
+};
+
 const save = async () => {
-  // Final validation
-  if (!form.value.name || !form.value.host || !form.value.user || !form.value.output) {
-    addToast(t('toasts.fillRequired'), 'error');
+  if (!connectionValid.value || !backupValid.value) {
+    attempted.value = true;
+    if (isEditing.value) section.value = !connectionValid.value ? 'connection' : 'backup';
+    else if (!connectionValid.value) goToStep(1);
+    addToast(t('dbModal.fillHighlighted'), 'warning');
     return;
   }
 
+  if (connectionMode.value === 'url') form.value.connectionString = connectionUrl.value.trim();
+  else form.value.connectionString = undefined;
+
   // Check for duplicates
   if (!isEditing.value) {
-    const duplicate = store.databases.find(db => 
-      (db.host === form.value.host && 
-       db.port === form.value.port && 
-       db.name === form.value.name) ||
-      (connectionMode.value === 'url' && db.connectionString === form.value.connectionString)
+    const duplicate = store.databases.find(db =>
+      (db.host === form.value.host && db.port === form.value.port && db.name === form.value.name) ||
+      (connectionMode.value === 'url' && db.connectionString && db.connectionString === form.value.connectionString)
     );
-
     if (duplicate) {
-      addToast(t('toasts.databaseExists'), 'error');
+      addToast(t('toasts.databaseExists'), 'warning');
       return;
     }
   }
@@ -236,13 +370,21 @@ const save = async () => {
       host: form.value.host,
       port: form.value.port,
       user: form.value.user,
+      // Empty while editing: the saved password is kept by the main process
       password: form.value.password,
       output: form.value.output,
       cron: form.value.cron,
       enabled: form.value.enabled,
       encryptBackups: form.value.encryptBackups,
-      connectionString: form.value.connectionString,
-      ssl: form.value.ssl
+      retentionCount: form.value.retentionCount && form.value.retentionCount > 0 ? form.value.retentionCount : undefined,
+      verifyBackups: form.value.verifyBackups !== false,
+      connectionString: connectionMode.value === 'ssh' ? undefined : form.value.connectionString,
+      // Through SSH, host / port are the server and the remote port (see config.d.ts)
+      ssh: connectionMode.value === 'ssh' ? cleanSsh() : undefined,
+      // `ssl` kept in sync for versions that only know the boolean
+      ssl: ['require', 'verify-ca', 'verify-full'].includes(form.value.sslMode || 'disable'),
+      sslMode: form.value.sslMode,
+      sslRootCert: form.value.sslMode === 'disable' ? undefined : form.value.sslRootCert
     };
 
     if (isEditing.value) {
@@ -251,711 +393,347 @@ const save = async () => {
     } else {
       await ipcRenderer.invoke('add-database', dbData);
       addToast(t('toasts.databaseAdded'), 'success');
-      // After refresh, find the newly added DB by name to highlight it
-      const config = await ipcRenderer.invoke('get-config');
-      store.databases = config.databases;
-      const newDb = store.databases.find((d: any) => d.name === dbData.name && !d.id || d.name === dbData.name);
+    }
+
+    const config = await ipcRenderer.invoke('get-config');
+    store.databases = config.databases;
+    if (!isEditing.value) {
+      // Highlight the database that was just added
+      const newDb = store.databases.find(d => d.name === dbData.name && d.host === dbData.host && d.port === dbData.port)
+        ?? store.databases.find(d => d.name === dbData.name);
       if (newDb) {
         store.newlyAddedDbId = newDb.id;
         setTimeout(() => { store.newlyAddedDbId = null; }, 2000);
       }
     }
-    
-    const config = await ipcRenderer.invoke('get-config');
-    store.databases = config.databases;
+    isLoading.value = false;
     close();
   } catch (error) {
-    addToast('Error saving database: ' + getErrorMessage(error), 'error');
+    addToast(t('toasts.databaseSaveError'), 'error', { detail: getErrorMessage(error) });
   } finally {
     isLoading.value = false;
   }
 };
 
 const close = () => {
+  if (isLoading.value) return;
   store.showDatabaseModal = false;
   store.editingDatabase = null;
-  currentStep.value = 1;
+  store.modalTargetSection = null;
+  currentStep.value = 0;
   connectionMode.value = null;
 };
 
-// Skip wizard in edit mode
-const showWizard = computed(() => !isEditing.value);
+// What is shown
+const showMethod = computed(() => !isEditing.value && currentStep.value === 0);
+const showConnection = computed(() => isEditing.value ? section.value === 'connection' : currentStep.value === 1);
+const showBackup = computed(() => isEditing.value ? section.value === 'backup' : currentStep.value === 2);
+const showSchedule = computed(() => isEditing.value ? section.value === 'schedule' : currentStep.value === 2);
 
-const scrollToSection = async (section: 'schedule') => {
-  await new Promise(resolve => setTimeout(resolve, 100)); // Wait for modal transition
-  const container = document.querySelector('.overflow-y-auto.custom-scrollbar');
-  const target = document.querySelector(`[data-${section}-section]`);
-  if (container && target) {
-    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    // Clear the target after scrolling
-    store.modalTargetSection = null;
-  }
-};
-
+const title = computed(() => isEditing.value ? t('dbModal.editTitle') : t('dbModal.addTitle'));
+const meta = computed(() => isEditing.value ? `${form.value.host}:${form.value.port}` : `${currentStep.value + 1} / 3`);
+const modeOptions = computed(() => [
+  { value: 'url' as const, label: t('database.modeUrl'), icon: ICONS.link },
+  { value: 'manual' as const, label: t('database.modeManual'), icon: ICONS.edit },
+  { value: 'ssh' as const, label: t('ssh.modeShort'), icon: ICONS.terminal },
+]);
+const parsedPreview = computed(() => connectionMode.value === 'url' && connectionUrl.value.trim() && urlValid.value);
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-      <div 
-        class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-3xl w-full border border-border overflow-hidden flex flex-col max-h-[90vh]"
-        @click.stop
-      >
-        <!-- Header -->
-        <div class="px-6 py-4 border-b border-border flex justify-between items-center bg-surface">
-          <div class="flex items-center gap-4">
-            <h3 class="text-xl font-bold">{{ isEditing ? t('modal.editDatabase') : t('modal.addDatabase') }}</h3>
-            <span v-if="showWizard" class="text-xs text-gray-500 dark:text-gray-400 px-3 py-1 bg-gray-100 dark:bg-zinc-800 rounded-full">
-              {{ t('database.wizard.stepIndicator', { current: currentStep, total: 3 }) }}
-            </span>
-          </div>
-          <button @click="close" class="text-gray-500 hover:text-foreground transition-colors">
-            <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-        
-        <!-- Progress Bar -->
-        <div v-if="showWizard" class="h-1 bg-gray-100 dark:bg-zinc-800 relative overflow-hidden">
-          <div 
-            class="h-full bg-foreground transition-all duration-500 ease-out"
-            :style="{ width: `${(currentStep / 3) * 100}%` }"
-          ></div>
-        </div>
-        
-        <div class="p-6 overflow-y-auto space-y-6 custom-scrollbar flex-1">
-          <!-- Step 1: Choose Mode -->
-          <Transition
-            enter-active-class="transition duration-300 ease-out"
-            enter-from-class="opacity-0 translate-y-4"
-            enter-to-class="opacity-100 translate-y-0"
-            leave-active-class="transition duration-200 ease-in"
-            leave-from-class="opacity-100 translate-y-0"
-            leave-to-class="opacity-0 -translate-y-4"
-            mode="out-in"
-          >
-            <div v-if="showWizard && currentStep === 1" key="step1" class="space-y-6">
-              <div class="text-center space-y-2">
-                <h4 class="text-2xl font-bold">{{ t('database.wizard.step1Title') }}</h4>
-                <p class="text-gray-500 dark:text-gray-400">{{ t('database.wizard.step1Description') }}</p>
-              </div>
-              
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-8">
-                <!-- URL Mode Card -->
-                <button
-                  @click="selectMode('url')"
-                  :class="[
-                    'group relative p-6 rounded-xl border-2 transition-all duration-300 text-left',
-                    connectionMode === 'url'
-                      ? 'border-foreground bg-foreground/5 shadow-lg scale-105'
-                      : 'border-border hover:border-foreground/50 hover:bg-surface'
-                  ]"
-                >
-                  <div class="flex items-start gap-4">
-                    <div :class="[
-                      'p-3 rounded-lg transition-colors',
-                      connectionMode === 'url' ? 'bg-foreground text-background' : 'bg-gray-100 dark:bg-zinc-800'
-                    ]">
-                      <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                      </svg>
-                    </div>
-                    <div class="flex-1">
-                      <h5 class="font-semibold text-lg mb-1">{{ t('database.wizard.modeUrlTitle') }}</h5>
-                      <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('database.wizard.modeUrlDesc') }}</p>
-                    </div>
-                    <div v-if="connectionMode === 'url'" class="absolute top-4 right-4">
-                      <div class="w-6 h-6 rounded-full bg-foreground flex items-center justify-center">
-                        <svg class="w-4 h-4 text-background" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                        </svg>
-                      </div>
-                    </div>
-                  </div>
-                </button>
-
-                <!-- Manual Mode Card -->
-                <button
-                  @click="selectMode('manual')"
-                  :class="[
-                    'group relative p-6 rounded-xl border-2 transition-all duration-300 text-left',
-                    connectionMode === 'manual'
-                      ? 'border-foreground bg-foreground/5 shadow-lg scale-105'
-                      : 'border-border hover:border-foreground/50 hover:bg-surface'
-                  ]"
-                >
-                  <div class="flex items-start gap-4">
-                    <div :class="[
-                      'p-3 rounded-lg transition-colors',
-                      connectionMode === 'manual' ? 'bg-foreground text-background' : 'bg-gray-100 dark:bg-zinc-800'
-                    ]">
-                      <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                      </svg>
-                    </div>
-                    <div class="flex-1">
-                      <h5 class="font-semibold text-lg mb-1">{{ t('database.wizard.modeManualTitle') }}</h5>
-                      <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('database.wizard.modeManualDesc') }}</p>
-                    </div>
-                    <div v-if="connectionMode === 'manual'" class="absolute top-4 right-4">
-                      <div class="w-6 h-6 rounded-full bg-foreground flex items-center justify-center">
-                        <svg class="w-4 h-4 text-background" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                        </svg>
-                      </div>
-                    </div>
-                  </div>
-                </button>
-              </div>
-
-              <!-- Quick connect providers -->
-              <div class="mt-6">
-                <div class="flex items-center gap-3 mb-3">
-                  <div class="h-px flex-1 bg-border"></div>
-                  <span class="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wide">{{ t('database.providers.quickConnect') }}</span>
-                  <div class="h-px flex-1 bg-border"></div>
-                </div>
-                <div class="grid grid-cols-2 gap-2">
-                  <button
-                    v-for="provider in providers"
-                    :key="provider.id"
-                    @click="selectProvider(provider)"
-                    class="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-border hover:border-foreground/30 hover:bg-surface transition-all text-left group"
-                  >
-                    <span class="w-3 h-3 rounded-full shrink-0" :style="{ backgroundColor: provider.color }"></span>
-                    <span class="text-sm font-medium text-gray-600 dark:text-gray-300 group-hover:text-foreground transition-colors">{{ provider.name }}</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <!-- Step 2: Connection Details -->
-            <div v-else-if="showWizard && currentStep === 2" key="step2" class="space-y-6">
-              <div class="text-center space-y-2">
-                <h4 class="text-2xl font-bold">{{ selectedProvider ? selectedProvider.name : t('database.wizard.step2Title') }}</h4>
-                <p class="text-gray-500 dark:text-gray-400">{{ selectedProvider ? t(selectedProvider.hint) : t('database.wizard.step2Description') }}</p>
-              </div>
-
-              <Transition
-                enter-active-class="transition duration-300 ease-out"
-                enter-from-class="opacity-0 translate-x-4"
-                enter-to-class="opacity-100 translate-x-0"
-                leave-active-class="transition duration-200 ease-in"
-                leave-from-class="opacity-100 translate-x-0"
-                leave-to-class="opacity-0 -translate-x-4"
-                mode="out-in"
-              >
-                <!-- URL Mode Input -->
-                <div v-if="connectionMode === 'url'" key="url" class="space-y-4">
-                  <div>
-                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Connection URL *
-                    </label>
-                    <div class="relative">
-                      <input
-                        v-model="connectionUrl"
-                        type="text"
-                        class="w-full bg-surface border border-border rounded-xl pl-10 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all font-mono text-sm"
-                        :placeholder="selectedProvider ? selectedProvider.placeholder : t('database.urlPlaceholder')"
-                      />
-                      <div class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
-                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                        </svg>
-                      </div>
-                    </div>
-                    <p class="text-xs text-gray-500 mt-2 ml-1">
-                      Format: <code class="bg-gray-100 dark:bg-zinc-800 px-1 py-0.5 rounded text-xs">postgresql://user:password@host:port/dbname?sslmode=require</code>
-                    </p>
-                  </div>
-
-                  <div>
-                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      {{ t('database.displayName') }}
-                    </label>
-                    <input
-                      v-model="form.displayName"
-                      type="text"
-                      class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
-                      :placeholder="t('database.displayNamePlaceholder')"
-                    />
-                  </div>
-
-                  <!-- Parsed fields preview -->
-                  <div v-if="connectionUrl" class="grid grid-cols-2 gap-4 opacity-75 pointer-events-none bg-gray-50 dark:bg-zinc-800/50 p-4 rounded-xl border border-gray-100 dark:border-zinc-700/50">
-                    <div>
-                      <label class="block text-xs font-medium text-gray-500 mb-1">{{ t('database.host') }}</label>
-                      <div class="text-sm font-mono">{{ form.host }}</div>
-                    </div>
-                    <div>
-                      <label class="block text-xs font-medium text-gray-500 mb-1">{{ t('database.port') }}</label>
-                      <div class="text-sm font-mono">{{ form.port }}</div>
-                    </div>
-                    <div>
-                      <label class="block text-xs font-medium text-gray-500 mb-1">{{ t('database.user') }}</label>
-                      <div class="text-sm font-mono">{{ form.user }}</div>
-                    </div>
-                    <div>
-                      <label class="block text-xs font-medium text-gray-500 mb-1">{{ t('database.name') }}</label>
-                      <div class="text-sm font-mono">{{ form.name }}</div>
-                    </div>
-                  </div>
-
-                  <!-- Encrypt Password Option -->
-                  <div class="p-4 bg-gray-50 dark:bg-zinc-800/50 rounded-xl border border-gray-100 dark:border-zinc-700/50">
-                    <label class="flex items-start gap-3 cursor-pointer">
-                      <input
-                        v-model="form.encryptBackups"
-                        type="checkbox"
-                        class="mt-1 w-5 h-5 rounded border-gray-300 text-foreground focus:ring-foreground/20"
-                      />
-                      <div class="flex-1">
-                        <span class="text-sm font-medium">{{ t('database.wizard.encryptPassword') }}</span>
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">{{ t('database.wizard.encryptPasswordDesc') }}</p>
-                      </div>
-                    </label>
-                  </div>
-                </div>
-
-                <!-- Manual Mode Input -->
-                <div v-else-if="connectionMode === 'manual'" key="manual" class="space-y-4">
-                  <div class="grid grid-cols-2 gap-4">
-                    <div>
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        {{ t('database.name') }} *
-                      </label>
-                      <input
-                        v-model="form.name"
-                        type="text"
-                        class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
-                        :placeholder="t('database.namePlaceholder')"
-                      />
-                    </div>
-                    <div>
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        {{ t('database.displayName') }}
-                      </label>
-                      <input
-                        v-model="form.displayName"
-                        type="text"
-                        class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
-                        :placeholder="t('database.displayNamePlaceholder')"
-                      />
-                    </div>
-                  </div>
-
-                  <div class="grid grid-cols-3 gap-4">
-                    <div class="col-span-2">
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        {{ t('database.host') }} *
-                      </label>
-                      <input
-                        v-model="form.host"
-                        type="text"
-                        class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
-                        placeholder="localhost"
-                      />
-                    </div>
-                    <div>
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        {{ t('database.port') }} *
-                      </label>
-                      <input
-                        v-model.number="form.port"
-                        type="number"
-                        class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
-                        placeholder="5432"
-                      />
-                    </div>
-                  </div>
-
-                  <div class="grid grid-cols-2 gap-4">
-                    <div>
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        {{ t('database.user') }} *
-                      </label>
-                      <input
-                        v-model="form.user"
-                        type="text"
-                        class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
-                        placeholder="postgres"
-                      />
-                    </div>
-                    <div>
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        {{ t('database.password') }}
-                      </label>
-                      <div class="relative">
-                        <input
-                          v-model="form.password"
-                          :type="passwordVisible ? 'text' : 'password'"
-                          class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all pr-10"
-                          :placeholder="isEditing ? '••••••••' : ''"
-                        />
-                        <button
-                          @click="passwordVisible = !passwordVisible"
-                          class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-foreground"
-                        >
-                          <svg v-if="passwordVisible" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-                          </svg>
-                          <svg v-else class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- SSL Option -->
-                  <div>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input
-                        v-model="form.ssl"
-                        type="checkbox"
-                        class="w-5 h-5 rounded border-gray-300 text-foreground focus:ring-foreground/20"
-                      />
-                      <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('database.useSsl') }} (Required for Neon, Supabase, etc.)</span>
-                    </label>
-                  </div>
-
-                  <!-- Encrypt Password Option -->
-                  <div class="p-4 bg-gray-50 dark:bg-zinc-800/50 rounded-xl border border-gray-100 dark:border-zinc-700/50">
-                    <label class="flex items-start gap-3 cursor-pointer">
-                      <input
-                        v-model="form.encryptBackups"
-                        type="checkbox"
-                        class="mt-1 w-5 h-5 rounded border-gray-300 text-foreground focus:ring-foreground/20"
-                      />
-                      <div class="flex-1">
-                        <span class="text-sm font-medium">{{ t('database.wizard.encryptPassword') }}</span>
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">{{ t('database.wizard.encryptPasswordDesc') }}</p>
-                      </div>
-                    </label>
-                  </div>
-                </div>
-              </Transition>
-            </div>
-
-            <!-- Step 3: Backup Configuration -->
-            <div v-else-if="showWizard && currentStep === 3" key="step3" class="space-y-6">
-              <div class="text-center space-y-2">
-                <h4 class="text-2xl font-bold">{{ t('database.wizard.step3Title') }}</h4>
-                <p class="text-gray-500 dark:text-gray-400">{{ t('database.wizard.step3Description') }}</p>
-              </div>
-
-              <div class="space-y-4">
-                <!-- Enable Backup Toggle -->
-                <div class="p-6 bg-gray-50 dark:bg-zinc-800/50 rounded-xl border border-gray-100 dark:border-zinc-700/50">
-                  <label class="flex items-start gap-3 cursor-pointer">
-                    <input
-                      v-model="form.enabled"
-                      type="checkbox"
-                      class="mt-1 w-5 h-5 rounded border-gray-300 text-foreground focus:ring-foreground/20"
-                    />
-                    <div class="flex-1">
-                      <span class="text-sm font-medium">{{ t('database.wizard.enableBackup') }}</span>
-                      <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">{{ t('database.wizard.enableBackupDesc') }}</p>
-                    </div>
-                  </label>
-                </div>
-
-                <!-- Backup Settings (shown when enabled) -->
-                <Transition
-                  enter-active-class="transition duration-300 ease-out"
-                  enter-from-class="opacity-0 max-h-0"
-                  enter-to-class="opacity-100 max-h-96"
-                  leave-active-class="transition duration-200 ease-in"
-                  leave-from-class="opacity-100 max-h-96"
-                  leave-to-class="opacity-0 max-h-0"
-                >
-                  <div v-if="form.enabled" class="space-y-4 overflow-hidden">
-                    <div>
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        {{ t('database.output') }} *
-                      </label>
-                      <div class="flex gap-2">
-                        <input
-                          v-model="form.output"
-                          type="text"
-                          class="flex-1 bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all font-mono text-sm"
-                          readonly
-                        />
-                        <button
-                          @click="selectOutput"
-                          class="px-4 py-2 bg-surface border border-border rounded-xl hover:bg-border transition-colors"
-                        >
-                          {{ t('common.browse') }}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                        {{ t('database.cron') }}
-                      </label>
-                      <CronEditor v-model="form.cron!" />
-                    </div>
-                  </div>
-                </Transition>
-              </div>
-            </div>
-
-            <!-- Edit Mode (bypass wizard) -->
-            <div v-else-if="!showWizard" key="edit" class="space-y-6">
-              <!-- Same content as before but without wizard steps -->
-              <div class="space-y-6">
-                <div class="bg-gray-100 dark:bg-zinc-800 p-1 rounded-xl flex">
-                  <button
-                    @click="connectionMode = 'url'"
-                    :class="[
-                      'flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all duration-200 flex items-center justify-center gap-2',
-                      connectionMode === 'url' 
-                        ? 'bg-white dark:bg-zinc-700 shadow-sm text-foreground' 
-                        : 'text-gray-500 hover:text-foreground'
-                    ]"
-                  >
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                    </svg>
-                    {{ t('database.modeUrl') }}
-                  </button>
-                  <button
-                    @click="connectionMode = 'manual'"
-                    :class="[
-                      'flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-all duration-200 flex items-center justify-center gap-2',
-                      connectionMode === 'manual' 
-                        ? 'bg-white dark:bg-zinc-700 shadow-sm text-foreground' 
-                        : 'text-gray-500 hover:text-foreground'
-                    ]"
-                  >
-                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                    </svg>
-                    {{ t('database.modeManual') }}
-                  </button>
-                </div>
-
-                <!-- URL Input -->
-                <div v-if="connectionMode === 'url'" class="space-y-4">
-                  <div>
-                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Connection URL</label>
-                    <div class="relative">
-                      <input
-                        v-model="connectionUrl"
-                        type="text"
-                        class="w-full bg-surface border border-border rounded-xl pl-10 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all font-mono text-sm"
-                        :placeholder="t('database.urlPlaceholder')"
-                      />
-                      <div class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
-                        <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                        </svg>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div>
-                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t('database.displayName') }}</label>
-                    <input
-                      v-model="form.displayName"
-                      type="text"
-                      class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
-                      :placeholder="t('database.displayNamePlaceholder')"
-                    />
-                  </div>
-                </div>
-
-                <!-- Manual Inputs -->
-                <div v-else class="space-y-4">
-                  <div class="grid grid-cols-2 gap-4">
-                    <div>
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t('database.name') }} *</label>
-                      <input
-                        v-model="form.name"
-                        type="text"
-                        class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
-                        :placeholder="t('database.namePlaceholder')"
-                        :disabled="isEditing"
-                      />
-                    </div>
-                    <div>
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t('database.displayName') }}</label>
-                      <input
-                        v-model="form.displayName"
-                        type="text"
-                        class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
-                        :placeholder="t('database.displayNamePlaceholder')"
-                      />
-                    </div>
-                  </div>
-  
-                  <div class="grid grid-cols-3 gap-4">
-                    <div class="col-span-2">
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t('database.host') }} *</label>
-                      <input
-                        v-model="form.host"
-                        type="text"
-                        class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
-                        placeholder="localhost"
-                      />
-                    </div>
-                    <div>
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t('database.port') }} *</label>
-                      <input
-                        v-model.number="form.port"
-                        type="number"
-                        class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
-                        placeholder="5432"
-                      />
-                    </div>
-                  </div>
-  
-                  <div class="grid grid-cols-2 gap-4">
-                    <div>
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t('database.user') }} *</label>
-                      <input
-                        v-model="form.user"
-                        type="text"
-                        class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all"
-                        placeholder="postgres"
-                      />
-                    </div>
-                    <div>
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t('database.password') }}</label>
-                      <div class="relative">
-                        <input
-                          v-model="form.password"
-                          :type="passwordVisible ? 'text' : 'password'"
-                          class="w-full bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all pr-10"
-                          :placeholder="isEditing ? '••••••••' : ''"
-                        />
-                        <button
-                          @click="passwordVisible = !passwordVisible"
-                          class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-foreground"
-                        >
-                          <svg v-if="passwordVisible" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-                          </svg>
-                          <svg v-else class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                      <input
-                        v-model="form.ssl"
-                        type="checkbox"
-                        class="w-5 h-5 rounded border-gray-300 text-foreground focus:ring-foreground/20"
-                      />
-                      <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('database.useSsl') }} (Required for Neon, Supabase, etc.)</span>
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Backup Settings -->
-              <div class="space-y-4" data-schedule-section>
-                <h4 class="text-sm font-medium text-gray-500 uppercase tracking-wider">{{ t('database.backupSettings') }}</h4>
-                
-                <div>
-                  <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t('database.output') }} *</label>
-                  <div class="flex gap-2">
-                    <input
-                      v-model="form.output"
-                      type="text"
-                      class="flex-1 bg-surface border border-border rounded-xl px-4 py-2 focus:outline-none focus:ring-2 focus:ring-foreground/20 transition-all font-mono text-sm"
-                      readonly
-                    />
-                    <button
-                      @click="selectOutput"
-                      class="px-4 py-2 bg-surface border border-border rounded-xl hover:bg-border transition-colors"
-                    >
-                      {{ t('common.browse') }}
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ t('database.cron') }}</label>
-                  <CronEditor v-model="form.cron!" />
-                </div>
-
-                <div class="flex items-center gap-4">
-                  <label class="flex items-center gap-2 cursor-pointer">
-                    <input
-                      v-model="form.encryptBackups"
-                      type="checkbox"
-                      class="w-5 h-5 rounded border-gray-300 text-foreground focus:ring-foreground/20"
-                    />
-                    <span class="text-sm">{{ t('database.encrypt') }}</span>
-                  </label>
-                  
-                  <label class="flex items-center gap-2 cursor-pointer">
-                    <input
-                      v-model="form.enabled"
-                      type="checkbox"
-                      class="w-5 h-5 rounded border-gray-300 text-foreground focus:ring-foreground/20"
-                    />
-                    <span class="text-sm">{{ t('database.enableAutoBackup') }}</span>
-                  </label>
-                </div>
-              </div>
-            </div>
-          </Transition>
-        </div>
-        
-        <!-- Footer -->
-        <div class="bg-surface px-6 py-4 flex justify-between gap-3 border-t border-border">
+  <AppModal
+    ref="modalRef"
+    :title="title"
+    :icon="isEditing ? ICONS.database : ICONS.globe"
+    :meta="meta"
+    :steps="isEditing ? [] : steps"
+    :step="currentStep"
+    :sections="isEditing ? sections : []"
+    :section="section"
+    :width="isEditing ? 'lg' : 'md'"
+    :busy="isLoading"
+    :close-label="t('common.cancel')"
+    @update:section="section = $event as typeof section"
+    @close="close"
+    @submit="submit"
+  >
+    <!-- Step 1 (add): how to connect -->
+    <template v-if="showMethod">
+      <ModalHeading :eyebrow="t('dbModal.sections.connection')" :title="t('dbModal.method.title')" :subtitle="t('dbModal.method.subtitle')" />
+      <div role="radiogroup" class="space-y-2">
+        <ChoiceCard
+          :title="t('dbModal.method.urlTitle')"
+          :description="t('dbModal.method.urlDesc')"
+          :icon="ICONS.link"
+          :selected="connectionMode === 'url' && !selectedProvider"
+          @select="selectMode('url')"
+        />
+        <ChoiceCard
+          :title="t('dbModal.method.manualTitle')"
+          :description="t('dbModal.method.manualDesc')"
+          :icon="ICONS.edit"
+          :selected="connectionMode === 'manual'"
+          @select="selectMode('manual')"
+        />
+        <ChoiceCard
+          :title="t('ssh.methodTitle')"
+          :description="t('ssh.methodDesc')"
+          :icon="ICONS.terminal"
+          :selected="connectionMode === 'ssh'"
+          @select="selectMode('ssh')"
+        />
+      </div>
+      <div class="mt-5">
+        <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-gray-400 dark:text-zinc-500 mb-2">{{ t('dbModal.method.guides') }}</div>
+        <div class="grid grid-cols-2 gap-2">
           <button
-            v-if="showWizard && currentStep > 1"
-            @click="previousStep"
-            class="px-4 py-2 rounded-xl text-gray-600 hover:bg-white dark:hover:bg-zinc-800 transition-colors font-medium flex items-center gap-2"
+            v-for="provider in guides"
+            :key="provider.id"
+            type="button"
+            class="flex items-center gap-2 px-3 h-9 rounded-lg border border-gray-200 dark:border-zinc-800 hover:border-gray-300 dark:hover:border-zinc-700 bg-white dark:bg-zinc-900 text-[13px] text-gray-700 dark:text-zinc-200 transition-colors"
+            @click="selectProvider(provider)"
           >
-            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+            <span class="w-2.5 h-2.5 rounded-full shrink-0" :style="{ backgroundColor: provider.color }" />
+            {{ provider.name }}
+            <svg class="w-3.5 h-3.5 ml-auto text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
             </svg>
-            {{ t('database.wizard.previous') }}
           </button>
-          <div v-else></div>
-          
-          <div class="flex gap-3">
-            <button
-              @click="close"
-              class="px-4 py-2 rounded-xl text-gray-600 hover:bg-white dark:hover:bg-zinc-800 transition-colors font-medium"
-            >
-              {{ t('common.cancel') }}
-            </button>
-            <button
-              v-if="showWizard && currentStep < 3"
-              @click="nextStep"
-              class="px-6 py-2 rounded-xl bg-foreground text-background hover:bg-zinc-800 transition-colors font-medium flex items-center gap-2"
-            >
-              {{ t('database.wizard.next') }}
-              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+        </div>
+      </div>
+    </template>
+
+    <!-- Connection -->
+    <template v-if="showConnection">
+      <ModalHeading
+        :eyebrow="t('dbModal.sections.connection')"
+        :title="isEditing ? (form.displayName || form.name) : selectedProvider ? selectedProvider.name : connectionMode === 'url' ? t('dbModal.connection.titleUrl') : connectionMode === 'ssh' ? t('ssh.title') : t('dbModal.connection.titleManual')"
+        :subtitle="t('dbModal.connection.subtitle')"
+      />
+
+      <div class="space-y-4">
+        <SegmentedControl v-if="isEditing" v-model="connectionMode" :options="modeOptions" :label="t('dbModal.sections.connection')" />
+
+        <!-- URL -->
+        <template v-if="connectionMode === 'url'">
+          <NeonPicker v-if="selectedProvider?.id === 'neon' && !isEditing" @pick="onNeonPick" @unpick="onNeonUnpick" @connected="neonConnected = $event" />
+          <div v-if="selectedProvider && !isEditing && !(selectedProvider.id === 'neon' && neonConnected)" :class="panelClass" class="px-3.5 py-3">
+            <ol class="space-y-1.5 text-[12.5px] text-gray-600 dark:text-zinc-300">
+              <li v-for="(step, i) in guideSteps(selectedProvider)" :key="i" class="flex gap-2.5">
+                <span class="w-[18px] h-[18px] shrink-0 rounded-full grid place-items-center font-mono text-[10px] text-white" :style="{ backgroundColor: selectedProvider.color }">{{ i + 1 }}</span>
+                <span class="leading-[18px]">{{ step }}</span>
+              </li>
+            </ol>
+            <button type="button" :class="btnSecondary" class="mt-3" @click="openDashboard(selectedProvider)">
+              {{ t('dbModal.guide.openDashboard', { provider: selectedProvider.name }) }}
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
               </svg>
             </button>
-            <button
-              v-else
-              @click="save"
-              :disabled="isLoading"
-              class="px-6 py-2 rounded-xl bg-foreground text-background hover:bg-zinc-800 transition-colors font-medium flex items-center gap-2 disabled:opacity-50"
-            >
-              <svg v-if="isLoading" class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </div>
+          <FormField :label="t('database.connectionUrlLabel')" for="db-url" required :error="shownError(connectionErrors, 'url') || (!urlValid ? t('dbModal.urlInvalid') : undefined)" :hint="isEditing ? t('dbModal.urlPasswordKept') : 'postgresql://user:password@host:5432/db?sslmode=require'">
+            <div class="flex gap-2">
+              <input
+                id="db-url"
+                v-model="connectionUrl"
+                type="text"
+                spellcheck="false"
+                autocomplete="off"
+                :class="monoInputClass"
+                class="min-w-0 flex-1"
+                :placeholder="selectedProvider?.placeholder ?? t('database.urlPlaceholder')"
+              />
+              <button type="button" :class="btnSecondary" class="shrink-0" @click="pasteUrl">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                </svg>
+                {{ t('dbModal.connection.paste') }}
+              </button>
+            </div>
+          </FormField>
+          <p v-if="pasteFailed" class="-mt-2 text-[11.5px] text-gray-500 dark:text-zinc-400">{{ t('dbModal.connection.pasteFailed') }}</p>
+          <div v-if="placeholderPassword" role="alert" class="px-3 py-2.5 rounded-lg border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 text-[12.5px] text-amber-800 dark:text-amber-300">
+            {{ t('dbModal.connection.placeholderPassword') }}
+          </div>
+          <div v-if="pooler" role="alert" class="px-3.5 py-3 rounded-lg border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30">
+            <div class="text-[13px] font-medium text-amber-900 dark:text-amber-200">{{ t(`dbModal.connection.pooler.${pooler.provider}Title`) }}</div>
+            <p class="mt-1 text-[12.5px] text-amber-800 dark:text-amber-300/90">{{ t(`dbModal.connection.pooler.${pooler.provider}Body`) }}</p>
+            <button type="button" :class="btnSecondary" class="mt-2.5" @click="connectionUrl = pooler.fixedUrl">{{ t(`dbModal.connection.pooler.${pooler.provider}Fix`) }}</button>
+          </div>
+          <div v-if="parsedPreview" :class="panelClass" class="px-3 py-2.5">
+            <div class="flex items-center gap-2 text-[11px] text-gray-500 dark:text-zinc-400 mb-1.5">
+              {{ t('dbModal.connection.parsed') }}
+              <span v-if="detectedProvider" class="ml-auto inline-flex items-center gap-1.5 text-gray-700 dark:text-zinc-200">
+                <span class="w-2 h-2 rounded-full" :style="{ backgroundColor: detectedProvider.color }" />
+                {{ t('dbModal.connection.detected', { provider: detectedProvider.name }) }}
+              </span>
+            </div>
+            <div class="flex flex-wrap gap-1.5 font-mono text-[11px]">
+              <span class="px-2 py-0.5 rounded-md bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700">{{ form.host }}</span>
+              <span class="px-2 py-0.5 rounded-md bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700">{{ form.port }}</span>
+              <span class="px-2 py-0.5 rounded-md bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700">{{ form.user }}</span>
+              <span class="px-2 py-0.5 rounded-md bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700">{{ form.name }}</span>
+              <span
+                class="px-2 py-0.5 rounded-md border"
+                :class="form.sslMode !== 'disable'
+                  ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900 text-emerald-700 dark:text-emerald-400'
+                  : 'bg-white dark:bg-zinc-900 border-gray-200 dark:border-zinc-700'"
+              >SSL {{ form.sslMode }}</span>
+            </div>
+          </div>
+          <p v-if="parsedPreview && detectedProvider && !sslFromUrl && !isEditing" class="-mt-2 text-[11.5px] text-gray-500 dark:text-zinc-400">{{ t('dbModal.connection.sslForced', { provider: detectedProvider.name }) }}</p>
+          <FormField :label="t('database.displayName')" for="db-display-url" :optional="t('common.optional')">
+            <input id="db-display-url" v-model="form.displayName" type="text" :class="inputClass" :placeholder="t('database.displayNamePlaceholder')" />
+          </FormField>
+          <SslOptions v-if="isEditing" v-model:ssl-mode="form.sslMode" v-model:ssl-root-cert="form.sslRootCert" />
+        </template>
+
+        <!-- Manual -->
+        <template v-else-if="connectionMode === 'manual'">
+          <div class="grid grid-cols-2 gap-3">
+            <FormField :label="t('database.name')" for="db-name" required :error="shownError(connectionErrors, 'name')" :hint="isEditing ? t('dbModal.nameLocked') : undefined">
+              <input id="db-name" v-model="form.name" type="text" spellcheck="false" :class="monoInputClass" :placeholder="t('database.namePlaceholder')" :disabled="isEditing" />
+            </FormField>
+            <FormField :label="t('database.displayName')" for="db-display" :optional="t('common.optional')">
+              <input id="db-display" v-model="form.displayName" type="text" :class="inputClass" :placeholder="t('database.displayNamePlaceholder')" />
+            </FormField>
+          </div>
+          <div class="grid grid-cols-[minmax(0,1fr)_7rem] gap-3">
+            <FormField :label="t('database.host')" for="db-host" required :error="shownError(connectionErrors, 'host')">
+              <input id="db-host" v-model="form.host" type="text" spellcheck="false" :class="monoInputClass" placeholder="localhost" />
+            </FormField>
+            <FormField :label="t('database.port')" for="db-port" required :error="shownError(connectionErrors, 'port')">
+              <input id="db-port" v-model.number="form.port" type="number" min="1" max="65535" :class="monoInputClass" placeholder="5432" />
+            </FormField>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <FormField :label="t('database.user')" for="db-user" required :error="shownError(connectionErrors, 'user')">
+              <input id="db-user" v-model="form.user" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" placeholder="postgres" />
+            </FormField>
+            <FormField :label="t('database.password')" for="db-password" :optional="isEditing ? undefined : t('common.optional')">
+              <div class="relative">
+                <input
+                  id="db-password"
+                  v-model="form.password"
+                  :type="passwordVisible ? 'text' : 'password'"
+                  autocomplete="new-password"
+                  :class="inputClass"
+                  class="pr-9"
+                  :placeholder="isEditing ? t('dbModal.passwordUnchanged') : ''"
+                />
+                <button
+                  type="button"
+                  class="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-md flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-zinc-200"
+                  :aria-label="passwordVisible ? t('dbModal.hidePassword') : t('dbModal.showPassword')"
+                  @click="passwordVisible = !passwordVisible"
+                >
+                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" :d="passwordVisible ? ICONS.eyeOff : ICONS.eye" />
+                  </svg>
+                </button>
+              </div>
+            </FormField>
+          </div>
+          <SslOptions v-model:ssl-mode="form.sslMode" v-model:ssl-root-cert="form.sslRootCert" />
+        </template>
+
+        <!-- Server via SSH (its own test: SSH, then PostgreSQL through the tunnel) -->
+        <SshConnectionFields
+          v-if="connectionMode === 'ssh'"
+          v-model:form="form"
+          v-model:ssh="sshDraft"
+          :editing="isEditing"
+          :database-id="store.editingDatabase?.id"
+          :attempted="attempted"
+        />
+
+        <!-- Connection test -->
+        <div v-if="connectionMode && connectionMode !== 'ssh'" class="flex items-center gap-3 pt-1 min-h-9">
+          <button type="button" :class="btnSecondary" :disabled="test.status === 'testing'" @click="testConnection">
+            <svg v-if="test.status === 'testing'" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            {{ test.status === 'testing' ? t('dbModal.testing') : test.status === 'idle' ? t('dbModal.test') : t('dbModal.testAgain') }}
+          </button>
+          <span v-if="test.status === 'ok'" class="flex items-center gap-1.5 text-[12px] text-emerald-600 dark:text-emerald-400" role="status">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            {{ t('dbModal.testOk', { version: test.version, tables: test.tables }) }}
+          </span>
+          <span v-else-if="test.status === 'error'" class="flex items-start gap-1.5 text-[12px] text-red-600 dark:text-red-400 min-w-0" role="alert">
+            <span class="w-1.5 h-1.5 mt-1.5 rounded-full bg-red-500 shrink-0" />
+            <span class="break-words">{{ test.error }}</span>
+          </span>
+        </div>
+      </div>
+    </template>
+
+    <!-- Backup -->
+    <template v-if="showBackup">
+      <ModalHeading :eyebrow="t('dbModal.sections.backup')" :title="t('dbModal.backup.title')" :subtitle="t('dbModal.backup.subtitle')" />
+      <div class="space-y-4">
+        <FormField :label="t('database.output')" for="db-output" required :error="shownError(backupErrors, 'output')">
+          <div class="flex gap-2">
+            <input id="db-output" v-model="form.output" type="text" readonly :class="monoInputClass" class="cursor-default" />
+            <button type="button" :class="btnSecondary" class="shrink-0" @click="selectOutput">
+              <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" :d="ICONS.folder" />
               </svg>
-              {{ showWizard ? t('database.wizard.finish') : t('common.save') }}
+              {{ t('common.browse') }}
             </button>
+          </div>
+        </FormField>
+        <div class="grid grid-cols-2 gap-3">
+          <FormField :label="t('database.retentionCount')" for="db-retention" :hint="t('database.retentionHint')">
+            <input id="db-retention" v-model.number="form.retentionCount" type="number" min="1" :class="inputClass" :placeholder="t('database.retentionAll')" />
+          </FormField>
+        </div>
+        <SwitchRow v-model="form.encryptBackups" :title="t('database.wizard.encryptBackups')" :description="t('database.wizard.encryptBackupsDesc')" />
+        <SwitchRow v-model="form.verifyBackups" :title="t('database.verifyBackups')" :description="t('database.verifyBackupsHint')" />
+      </div>
+    </template>
+
+    <!-- Schedule -->
+    <template v-if="showSchedule">
+      <div :class="isEditing ? '' : 'mt-6 pt-5 border-t border-gray-100 dark:border-zinc-800'">
+        <ModalHeading :eyebrow="t('dbModal.sections.schedule')" :title="t('dbModal.schedule.title')" :subtitle="t('dbModal.schedule.subtitle')" />
+        <div class="space-y-4">
+          <SwitchRow v-model="form.enabled" :title="t('dbModal.schedule.toggle')" :description="t('dbModal.schedule.toggleDesc')" />
+          <div v-if="form.enabled">
+            <FormField :label="t('database.cron')">
+              <CronEditor v-model="form.cron!" />
+            </FormField>
           </div>
         </div>
       </div>
-    </div>
+    </template>
+
+    <template #footer>
+      <button v-if="!isEditing && currentStep > 0" type="button" :class="btnGhost" :disabled="isLoading" @click="previousStep">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+        </svg>
+        {{ t('database.wizard.previous') }}
+      </button>
+      <button v-else type="button" :class="btnGhost" :disabled="isLoading" @click="close">{{ t('common.cancel') }}</button>
+      <span class="flex-1" />
+      <span class="hidden sm:inline text-[11px] text-gray-400 dark:text-zinc-500"><kbd class="font-mono">↵</kbd> Enter</span>
+      <button
+        v-if="!isEditing && currentStep < 2"
+        type="button"
+        :class="btnPrimary"
+        :disabled="currentStep === 0 && !connectionMode"
+        @click="nextStep"
+      >
+        {{ t('database.wizard.next') }}
+      </button>
+      <button v-else type="button" :class="btnPrimary" :disabled="isLoading" @click="save">
+        <svg v-if="isLoading" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        {{ isEditing ? t('common.save') : t('database.wizard.finish') }}
+      </button>
+    </template>
+  </AppModal>
 </template>

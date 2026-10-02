@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { logger } from './logger';
 import { pathManager } from './paths';
+import type { AppConfig } from '../types/config';
 
 const ALGORITHM = 'aes-256-gcm';
 const KEY_LENGTH = 32; // 256 bits
@@ -37,9 +38,15 @@ class EncryptionManager {
       }
     } catch (error) {
       logger.error(`Error initializing the encryption key: ${error}`);
-      // Generate a temporary key in memory
-      this.encryptionKey = crypto.randomBytes(KEY_LENGTH);
-      logger.warn('Using a temporary encryption key (non-persistent)');
+      if (fs.existsSync(KEY_FILE)) {
+        // A key exists but could not be read: a temporary key would silently re-encrypt
+        // passwords with a throwaway key. Fail loudly instead (encrypt/decrypt will throw).
+        this.encryptionKey = null;
+        logger.error('Existing encryption key unreadable; encryption disabled until it is fixed');
+      } else {
+        this.encryptionKey = crypto.randomBytes(KEY_LENGTH);
+        logger.warn('Using a temporary encryption key (non-persistent)');
+      }
     }
   }
 
@@ -121,7 +128,7 @@ class EncryptionManager {
   }
 
   // Migrate an unencrypted configuration to encrypted
-  migrateConfig(config: any): any {
+  migrateConfig(config: Partial<AppConfig>): Partial<AppConfig> {
     if (!config.databases || !Array.isArray(config.databases)) {
       return config;
     }
@@ -129,8 +136,21 @@ class EncryptionManager {
     let migrated = false;
     const migratedConfig = {
       ...config,
-      databases: config.databases.map((db: any) => {
-        if (db.password && !this.isEncrypted(db.password)) {
+      databases: config.databases.map((db) => {
+        // Heal configs damaged by v1.0.2: ciphertext stored with encrypted:false
+        if (db.password && db.encrypted === false && this.isEncrypted(db.password)) {
+          try {
+            this.decrypt(db.password);
+            migrated = true;
+            logger.info(`Repairing encryption flag for ${db.name}`);
+            return { ...db, encrypted: true };
+          } catch {
+            // Not decryptable with this key: leave untouched
+          }
+        }
+        // Respect databases explicitly stored unencrypted: encrypting them without flipping
+        // the flag made every consumer send the ciphertext as the password.
+        if (db.password && db.encrypted !== false && !this.isEncrypted(db.password)) {
           migrated = true;
           logger.info(`Migrating encrypted password for ${db.name}`);
           return {

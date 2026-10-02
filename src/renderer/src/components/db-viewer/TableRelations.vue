@@ -1,27 +1,31 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, markRaw, nextTick } from 'vue';
 import { getErrorMessage } from '../../utils';
-import { VueFlow, useVueFlow } from '@vue-flow/core';
+import { VueFlow, useVueFlow, type Node, type Edge } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import { ipcRenderer } from '../../electron';
-import { Database, buildDbConfig } from '../../types';
+import { Database, buildDbConfig, type FullSchema, type SchemaForeignKey, type SchemaTable, type SchemaColumn, type SchemaPrimaryKey, type TableNodeData } from '../../types';
 import { useI18n } from '../../composables/useI18n';
 import TableNode from './TableNode.vue';
 import dagre from 'dagre';
+import { DEFAULT_SCHEMA, tableId, displayTableName } from './schemaNames';
 
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/core/dist/theme-default.css';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   db: Database | null;
+  schema?: string;
   table: string | null;
-}>();
+}>(), {
+  schema: DEFAULT_SCHEMA
+});
 
 const { t } = useI18n();
 const { fitView } = useVueFlow({ id: 'relations-flow' });
-const nodes = ref<any[]>([]);
-const edges = ref<any[]>([]);
+const nodes = ref<Node<TableNodeData>[]>([]);
+const edges = ref<Edge[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const hasRelations = ref(true);
@@ -30,7 +34,7 @@ const nodeTypes = {
   table: markRaw(TableNode),
 };
 
-const layoutNodes = (nodesToLayout: any[], edgesToLayout: any[]) => {
+const layoutNodes = (nodesToLayout: Node<TableNodeData>[], edgesToLayout: Edge[]) => {
   const dagreGraph = new dagre.graphlib.Graph();
   dagreGraph.setDefaultEdgeLabel(() => ({}));
 
@@ -43,7 +47,7 @@ const layoutNodes = (nodesToLayout: any[], edgesToLayout: any[]) => {
   });
 
   nodesToLayout.forEach((node) => {
-    const height = 60 + (node.data.columns.length * 32);
+    const height = 60 + ((node.data?.columns.length ?? 0) * 32);
     dagreGraph.setNode(node.id, { width: 280, height });
   });
 
@@ -73,24 +77,30 @@ const loadRelationsGraph = async () => {
 
   try {
     const dbConfig = buildDbConfig(props.db);
-    const schema = await ipcRenderer.invoke('get-db-full-schema', { db: dbConfig });
+    const schema: FullSchema = await ipcRenderer.invoke('get-db-full-schema', { db: dbConfig, schema: props.schema });
+
+    // Tables are identified by schema + name: the same name may exist in several schemas
+    const currentId = tableId(props.schema, props.table);
+    const sourceId = (fk: SchemaForeignKey) => tableId(fk.source_schema, fk.source_table);
+    const targetId = (fk: SchemaForeignKey) => tableId(fk.target_schema, fk.target_table);
 
     // Collect the selected table + directly connected tables
-    const connectedTables = new Set<string>([props.table]);
+    const connectedTables = new Set<string>([currentId]);
 
     // Outgoing FKs: this table → other tables
-    const outgoingFks = schema.foreignKeys.filter((fk: any) => fk.source_table === props.table);
-    outgoingFks.forEach((fk: any) => connectedTables.add(fk.target_table));
+    const outgoingFks = schema.foreignKeys.filter((fk) => sourceId(fk) === currentId);
+    outgoingFks.forEach((fk) => connectedTables.add(targetId(fk)));
 
     // Incoming FKs: other tables → this table
-    const incomingFks = schema.foreignKeys.filter((fk: any) => fk.target_table === props.table);
-    incomingFks.forEach((fk: any) => connectedTables.add(fk.source_table));
+    const incomingFks = schema.foreignKeys.filter((fk) => targetId(fk) === currentId);
+    incomingFks.forEach((fk) => connectedTables.add(sourceId(fk)));
 
-    // De-duplicate by constraint name
+    // De-duplicate (a self-referencing FK is both outgoing and incoming)
     const seenConstraints = new Set<string>();
     const uniqueFks = [...outgoingFks, ...incomingFks].filter(fk => {
-      if (seenConstraints.has(fk.constraint_name)) return false;
-      seenConstraints.add(fk.constraint_name);
+      const key = `${sourceId(fk)}|${fk.constraint_name}|${fk.source_column}`;
+      if (seenConstraints.has(key)) return false;
+      seenConstraints.add(key);
       return true;
     });
 
@@ -105,20 +115,23 @@ const loadRelationsGraph = async () => {
 
     // Build nodes for connected tables only
     const rawNodes = schema.tables
-      .filter((table: any) => connectedTables.has(table.name))
-      .map((table: any) => {
-        const tableColumns = schema.columns.filter((c: any) => c.table_name === table.name);
+      .filter((table: SchemaTable) => connectedTables.has(tableId(table.schema, table.name)))
+      .map((table: SchemaTable): Node<TableNodeData> => {
+        const id = tableId(table.schema, table.name);
+        const tableColumns = schema.columns.filter((c: SchemaColumn) => c.table_schema === table.schema && c.table_name === table.name);
         const tablePks = schema.primaryKeys
-          .filter((pk: any) => pk.table_name === table.name)
-          .map((pk: any) => pk.column_name);
+          .filter((pk: SchemaPrimaryKey) => pk.table_schema === table.schema && pk.table_name === table.name)
+          .map((pk: SchemaPrimaryKey) => pk.column_name);
 
         return {
-          id: table.name,
+          id,
           type: 'table',
           position: { x: 0, y: 0 },
-          class: table.name === props.table ? 'highlighted-node' : '',
+          class: id === currentId ? 'highlighted-node' : '',
           data: {
-            label: table.name,
+            label: displayTableName(table.schema, table.name, props.schema),
+            schema: table.schema,
+            table: table.name,
             columns: tableColumns,
             primaryKeys: tablePks
           }
@@ -126,10 +139,10 @@ const loadRelationsGraph = async () => {
       });
 
     // Build edges
-    const rawEdges = uniqueFks.map((fk: any, index: number) => ({
-      id: `e-${fk.constraint_name}-${index}`,
-      source: fk.target_table,
-      target: fk.source_table,
+    const rawEdges = uniqueFks.map((fk: SchemaForeignKey, index: number): Edge => ({
+      id: `e-${sourceId(fk)}-${fk.constraint_name}-${index}`,
+      source: targetId(fk),
+      target: sourceId(fk),
       sourceHandle: `source-${fk.target_column}`,
       targetHandle: `target-${fk.source_column}`,
       animated: true,
@@ -141,15 +154,18 @@ const loadRelationsGraph = async () => {
     nodes.value = layoutNodes(rawNodes, rawEdges);
     edges.value = rawEdges;
 
-    await nextTick();
-    fitView({ padding: 0.3, duration: 800 });
-
+    // The view is centered once Vue Flow has measured the nodes (see onNodesInitialized)
   } catch (err) {
     console.error('Error loading relations graph:', err);
-    error.value = getErrorMessage(err) || 'Failed to load relations';
+    error.value = getErrorMessage(err) || t('viewer.relationsLoadError');
   } finally {
     loading.value = false;
   }
+};
+
+// Fit the view each time a (re)loaded graph has been measured
+const onNodesInitialized = () => {
+  fitView({ padding: 0.3 });
 };
 
 const triggerLayout = async () => {
@@ -158,7 +174,7 @@ const triggerLayout = async () => {
   fitView({ padding: 0.3, duration: 800 });
 };
 
-watch(() => props.table, () => {
+watch(() => [props.schema, props.table], () => {
   loadRelationsGraph();
 });
 
@@ -208,6 +224,7 @@ onMounted(() => {
       :max-zoom="4"
       fit-view-on-init
       class="h-full w-full"
+      @nodes-initialized="onNodesInitialized"
     >
       <Background pattern-color="#aaa" :gap="20" />
       <Controls />

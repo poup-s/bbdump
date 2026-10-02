@@ -1,15 +1,23 @@
-import { spawn, exec, ChildProcess } from 'child_process';
-import { getErrorMessage } from './utils';
+import { connectionStringForPgTools } from './pgConnectionString';
+import { spawn, exec, execFile, ChildProcess } from 'child_process';
+import { getErrorMessage, parsePgVersion } from './utils';
 import * as path from 'path';
 import * as fs from 'fs';
+import { userInfo, homedir } from 'os';
+import type { ClientConfig } from 'pg';
 import { promisify } from 'util';
 import { DatabaseConfig, BackupResult } from '../types/config';
 import { logger } from './logger';
 import { pathManager } from './paths';
 import { fileEncryptionManager } from './fileEncryption';
+import { BackupHistory, BackupTrigger } from './backupHistory';
+import { withTunnel } from './sshTunnel';
+import { emptySchemasSql, restoreErrors, schemasInToc } from './restorePlan';
+import { SslSettings, libpqSslEnv, toNodePgSsl, stripSslParams } from './sslConfig';
 import * as Electron from 'electron';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 interface PgDumpVersion {
   path: string;
@@ -22,6 +30,7 @@ export class BackupManager {
   private backupDir: string;
   private pgDumpPath: string;
   private pgRestorePath: string;
+  private pathsReady: Promise<void>;
   private mainWindow: Electron.BrowserWindow | null = null;
   private pgDumpVersionsCache: Map<string, PgDumpVersion[]> = new Map(); // Cache par version majeure
   private allPgDumpVersions: PgDumpVersion[] = []; // All versions found
@@ -39,8 +48,8 @@ export class BackupManager {
     this.pgRestorePath = 'pg_restore';
     this.ensureBackupDir();
 
-    // Initialize paths asynchronously (don't await)
-    this.initializePaths().catch((error) => {
+    // Initialize paths asynchronously; backups/restores await this before running
+    this.pathsReady = this.initializePaths().catch((error) => {
       logger.warn(`Failed to initialize PostgreSQL paths: ${error.message}`);
     });
 
@@ -53,6 +62,31 @@ export class BackupManager {
     this.detectAllPgRestoreVersions().catch((error) => {
       logger.warn(`Failed to detect all pg_restore versions: ${error.message}`);
     });
+  }
+
+  /**
+   * Locates the PostgreSQL tools again, e.g. after the onboarding installed them while the
+   * app was running: the paths found at startup are then still the bare command names.
+   */
+  refreshToolPaths(): Promise<void> {
+    this.versionsDetected = false;
+    this.pgRestoreVersionsDetected = false;
+    this.pathsReady = Promise.all([
+      this.initializePaths(),
+      this.detectAllPgDumpVersions(),
+      this.detectAllPgRestoreVersions(),
+    ]).then(() => undefined, (error) => {
+      logger.warn(`Failed to refresh PostgreSQL paths: ${getErrorMessage(error)}`);
+    });
+    return this.pathsReady;
+  }
+
+  /** Startup found no tool (bare command name): look again, they may have been installed since. */
+  private async ensureToolPaths(): Promise<void> {
+    await this.pathsReady;
+    if (!path.isAbsolute(this.pgDumpPath) || !path.isAbsolute(this.pgRestorePath)) {
+      await this.refreshToolPaths();
+    }
   }
 
   private async initializePaths(): Promise<void> {
@@ -468,8 +502,7 @@ export class BackupManager {
   private async getPgDumpVersion(pgDumpPath: string): Promise<string | null> {
     try {
       const { stdout } = await execAsync(`"${pgDumpPath}" --version 2>&1`);
-      const versionMatch = stdout.match(/(\d+\.\d+)/);
-      return versionMatch ? versionMatch[1] : null;
+      return parsePgVersion(stdout);
     } catch {
       return null;
     }
@@ -481,8 +514,7 @@ export class BackupManager {
   private async getPgRestoreVersion(pgRestorePath: string): Promise<string | null> {
     try {
       const { stdout } = await execAsync(`"${pgRestorePath}" --version 2>&1`);
-      const versionMatch = stdout.match(/(\d+\.\d+)/);
-      return versionMatch ? versionMatch[1] : null;
+      return parsePgVersion(stdout);
     } catch {
       return null;
     }
@@ -531,41 +563,15 @@ export class BackupManager {
   }
 
   /**
-   * Cleans the connection string by removing parameters unsupported by pg_dump
+   * Keeps only the URL parameters the PostgreSQL tools accept (Prisma's schema, pgbouncer…
+   * would make pg_dump fail with "invalid URI query parameter").
    */
   private cleanConnectionString(connectionString: string): string {
-    try {
-      // List of unsupported or problematic parameters with pg_dump
-      const unsupportedParams = [
-        'channel_binding',
-        'target_session_attrs'
-      ];
-
-      // Parser l'URL
-      const url = new URL(connectionString);
-
-      // Clean up the parameters
-      let cleaned = false;
-      unsupportedParams.forEach(param => {
-        if (url.searchParams.has(param)) {
-          const value = url.searchParams.get(param);
-          logger.info(`Removing unsupported parameter from connection string: ${param}=${value}`);
-          url.searchParams.delete(param);
-          cleaned = true;
-        }
-      });
-
-      if (cleaned) {
-        const cleanedUrl = url.toString();
-        logger.info(`Cleaned connection string`);
-        return cleanedUrl;
-      }
-
-      return connectionString;
-    } catch (error) {
-      logger.warn(`Failed to parse connection string, using as-is: ${error}`);
-      return connectionString;
+    const cleaned = connectionStringForPgTools(connectionString);
+    if (cleaned.removed.length) {
+      logger.info(`Connection string: parameters not passed to the PostgreSQL tools: ${cleaned.removed.join(', ')}`);
     }
+    return cleaned.connectionString;
   }
 
   private async findPostgresCommand(command: string): Promise<string> {
@@ -585,14 +591,14 @@ export class BackupManager {
   private async detectServerVersion(db: DatabaseConfig): Promise<{ version: string; majorVersion: string } | null> {
     const { Client } = await import('pg');
     const isLinux = process.platform === 'linux';
-    const isLocalHost = db.host === 'localhost' || db.host === '127.0.0.1';
+    const isLocalHost = !db.viaTunnel && (db.host === 'localhost' || db.host === '127.0.0.1');
 
     // Build a list of connection configs to try
-    const configs: any[] = [];
+    const configs: ClientConfig[] = [];
 
     // On Linux with local host, try Unix socket first (peer auth, no password needed)
     if (isLinux && isLocalHost && !db.connectionString) {
-      const currentUser = require('os').userInfo().username;
+      const currentUser = userInfo().username;
       const users = [db.user, currentUser, 'postgres'].filter(Boolean);
       const socketPaths = ['/var/run/postgresql', '/tmp'];
       for (const user of users) {
@@ -612,12 +618,13 @@ export class BackupManager {
     // TCP connection (with provided password or common defaults)
     if (db.connectionString) {
       configs.push({
-        connectionString: db.connectionString,
-        ssl: db.ssl,
+        connectionString: stripSslParams(db.connectionString),
+        ssl: toNodePgSsl(db),
         connectionTimeoutMillis: 5000
       });
     } else {
-      const passwords = isLinux ? [db.password || '', 'postgres', ''] : [db.password || ''];
+      // Configured password, then none (trust auth) — never guess common passwords
+      const passwords = [...new Set([db.password || '', ''])];
       for (const pwd of passwords) {
         configs.push({
           host: db.host,
@@ -625,7 +632,7 @@ export class BackupManager {
           user: db.user,
           password: pwd,
           database: db.name || 'postgres',
-          ssl: db.ssl,
+          ssl: toNodePgSsl(db),
           connectionTimeoutMillis: 5000
         });
       }
@@ -974,7 +981,8 @@ apt-get install -y postgresql-client-${majorVersion}
         : path.dirname(absolutePath);
 
       // Use df to get disk space (compatible with macOS and Linux)
-      const { stdout } = await execAsync(`df -k "${dirPath}" | tail -1`);
+      const { stdout: dfOutput } = await execFileAsync('df', ['-k', dirPath]);
+      const stdout = dfOutput.trim().split('\n').pop() || '';
 
       // Parser la sortie de df
       // Format: Filesystem 1K-blocks Used Available Capacity Mounted
@@ -999,6 +1007,7 @@ apt-get install -y postgresql-client-${majorVersion}
     try {
       // Use psql to get the database size
       const args = [
+        '--no-password', // never wait on an interactive prompt
         '-t', // Tuples-only mode (no headers)
         '-c', `SELECT pg_database_size('${db.name.replace(/'/g, "''")}');`
       ];
@@ -1009,7 +1018,7 @@ apt-get install -y postgresql-client-${majorVersion}
         args.unshift('-d', cleanedConnectionString);
       } else {
         const isLinux = process.platform === 'linux';
-        const isLocalHost = db.host === 'localhost' || db.host === '127.0.0.1';
+        const isLocalHost = !db.viaTunnel && (db.host === 'localhost' || db.host === '127.0.0.1');
         const hasPassword = db.password && db.password.trim().length > 0;
 
         // On Linux with local host and no password, use Unix socket (peer auth)
@@ -1024,12 +1033,9 @@ apt-get install -y postgresql-client-${majorVersion}
       }
 
       const env: NodeJS.ProcessEnv = {
-        ...process.env
+        ...process.env,
+        ...libpqSslEnv(db)
       };
-
-      if (db.ssl) {
-        env.PGSSLMODE = 'require';
-      }
 
       // Add PGPASSWORD only if not using a connection string and if a password is provided
       // For local databases (isLocalBbdump), the password can be empty (peer/ident authentication)
@@ -1038,8 +1044,10 @@ apt-get install -y postgresql-client-${majorVersion}
       }
 
       const psqlPath = await this.findPostgresCommand('psql');
-      const { stdout } = await execAsync(
-        `"${psqlPath}" ${args.map(arg => `"${arg}"`).join(' ')}`,
+      // execFile: no shell, so values from the connection (name, user, URI) are never interpreted
+      const { stdout } = await execFileAsync(
+        psqlPath,
+        args,
         {
           env,
           timeout: 10000 // 10 secondes de timeout
@@ -1154,9 +1162,9 @@ apt-get install -y postgresql-client-${majorVersion}
       return { valid: false, error: 'Username is required' };
     }
 
-    if (!db.isLocalBbdump && (!db.password || db.password.trim().length === 0)) {
-      return { valid: false, error: 'Password is required' };
-    }
+    // No password check: trust auth, ~/.pgpass, client certificates and connection
+    // strings with an embedded password are all valid. The tools run with
+    // --no-password, so a missing password fails fast with the server's own message.
 
     // Validation du port
     if (!Number.isInteger(db.port) || db.port < 1 || db.port > 65535) {
@@ -1212,7 +1220,7 @@ apt-get install -y postgresql-client-${majorVersion}
       const outputDir = path.dirname(db.output);
       const appDataPath = pathManager.appDataPath;
       const backupsPath = pathManager.backupsPath;
-      const homeDir = require('os').homedir();
+      const homeDir = homedir();
 
       // Check that the absolute path starts with an authorized directory
       if (!outputDir.startsWith(appDataPath) &&
@@ -1286,6 +1294,8 @@ apt-get install -y postgresql-client-${majorVersion}
   }
 
   async executeBackup(db: DatabaseConfig): Promise<BackupResult> {
+    // A scheduled backup can fire right after launch, before pg_dump was located
+    await this.ensureToolPaths();
     const timestamp = new Date().toISOString();
     logger.info(`Starting backup`, db.name);
 
@@ -1393,9 +1403,27 @@ apt-get install -y postgresql-client-${majorVersion}
       logger.warn(`Could not verify pg_dump version: ${getErrorMessage(error)}`, db.name);
     }
 
-    return new Promise((resolve) => {
+    return new Promise((resolvePromise) => {
+      // Any failed run must not leave a truncated file that looks restorable
+      const resolve = (result: BackupResult) => {
+        if (!result.success) {
+          for (const leftover of [timestampedPath, `${timestampedPath}.encrypted`]) {
+            try {
+              if (fs.existsSync(leftover)) {
+                fs.unlinkSync(leftover);
+                logger.info(`Removed incomplete backup file: ${leftover}`, db.name);
+              }
+            } catch (unlinkError) {
+              logger.warn(`Failed to remove incomplete backup ${leftover}: ${unlinkError}`, db.name);
+            }
+          }
+        }
+        resolvePromise(result);
+      };
+
       // Build the pg_dump arguments
       const args = [
+        '--no-password', // fail instead of prompting when the server wants a password
         '-F', 'c',
         '-b',
         '-v',
@@ -1408,7 +1436,7 @@ apt-get install -y postgresql-client-${majorVersion}
         args.push('-d', cleanedConnectionString);
       } else {
         const isLinux = process.platform === 'linux';
-        const isLocalHost = db.host === 'localhost' || db.host === '127.0.0.1';
+        const isLocalHost = !db.viaTunnel && (db.host === 'localhost' || db.host === '127.0.0.1');
         const hasPassword = db.password && db.password.trim().length > 0;
 
         // On Linux with local host and no password, use Unix socket (peer auth)
@@ -1428,9 +1456,10 @@ apt-get install -y postgresql-client-${majorVersion}
         args.push('-Z', compressionLevel.toString());
       }
 
-      // Add parallelization if > 1
+      // pg_dump only supports --jobs with the directory format (-F d); with -F c it
+      // refuses to run, so every backup configured with jobs > 1 used to fail.
       if (jobs > 1) {
-        args.push('--jobs', jobs.toString());
+        logger.warn(`Parallel jobs (${jobs}) ignored: not supported with the custom backup format`, db.name);
       }
 
       logger.info(`Command: ${compatiblePgDump} ${args.join(' ')}`, db.name);
@@ -1438,13 +1467,11 @@ apt-get install -y postgresql-client-${majorVersion}
       const env: NodeJS.ProcessEnv = {
         ...process.env,
         LC_ALL: 'C',
-        LANG: 'C'
+        LANG: 'C',
+        // PGSSLMODE / PGSSLROOTCERT (the former PGSSLCERT='disable' was not a valid value:
+        // PGSSLCERT is a client certificate path)
+        ...libpqSslEnv(db)
       };
-
-      if (db.ssl) {
-        env.PGSSLMODE = 'require';
-        env.PGSSLCERT = 'disable'; // Accept self-signed certificates
-      }
 
       // Add PGPASSWORD only if not using a connection string and if a password is provided
       // For local databases (isLocalBbdump), the password can be empty (peer/ident authentication)
@@ -1467,8 +1494,8 @@ apt-get install -y postgresql-client-${majorVersion}
         this.activeProcesses.delete(pgDump);
         clearTimeout(timeoutHandle);
         clearTimeout(safetyTimeoutHandle);
-        process.removeListener('SIGTERM' as any, signalHandler);
-        process.removeListener('SIGINT' as any, signalHandler);
+        process.removeListener('SIGTERM', signalHandler);
+        process.removeListener('SIGINT', signalHandler);
       };
 
       // Gestionnaire de signaux pour le processus parent
@@ -1576,6 +1603,17 @@ apt-get install -y postgresql-client-${majorVersion}
         }
 
         if (code === 0) {
+          // Read the whole archive back before trusting it (and before encrypting it)
+          if (db.verifyBackups !== false) {
+            const verification = await this.verifyDump(timestampedPath, db);
+            if (!verification.valid) {
+              const errorMsg = `Backup verification failed: ${verification.error}`;
+              logger.error(errorMsg, db.name);
+              resolve({ success: false, database: db.name, timestamp, error: errorMsg });
+              return;
+            }
+          }
+
           // If encryption is enabled, encrypt the file
           if (db.encryptBackups) {
             const encryptedPath = timestampedPath + '.encrypted';
@@ -1664,19 +1702,98 @@ apt-get install -y postgresql-client-${majorVersion}
     });
   }
 
-  async backupDatabase(db: DatabaseConfig): Promise<BackupResult> {
+  /**
+   * Reads the entire archive with pg_restore (output discarded), which catches truncated
+   * or corrupt dumps that `pg_restore --list` (table of contents only) would accept.
+   */
+  private async verifyDump(filePath: string, db: DatabaseConfig): Promise<{ valid: boolean; error?: string }> {
     try {
-      return await this.executeBackup(db);
+      const pgRestore = await this.findCompatiblePgRestore(filePath);
+      await execFileAsync(pgRestore, ['--file=/dev/null', filePath], {
+        timeout: db.backupTimeout ?? 30 * 60 * 1000,
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      logger.info('Backup verified (archive fully readable)', db.name);
+      return { valid: true };
+    } catch (error) {
+      const stderr = (error as { stderr?: string }).stderr;
+      return { valid: false, error: (stderr || getErrorMessage(error)).trim().slice(0, 500) };
+    }
+  }
+
+  /**
+   * Keeps the `retentionCount` most recent backups of this database. Only files named
+   * exactly `<id>_<timestamp>.backup` (as written by executeBackup) are considered.
+   */
+  private applyRetention(db: DatabaseConfig, latestFile: string): void {
+    const keep = db.retentionCount;
+    if (!keep || keep < 1) return;
+
+    const dir = path.dirname(latestFile);
+    const escapedId = db.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`^${escapedId}_\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-\\d{3}Z\\.backup$`);
+
+    try {
+      const backups = fs.readdirSync(dir).filter(name => pattern.test(name)).sort().reverse();
+      for (const name of backups.slice(keep)) {
+        const fullPath = path.join(dir, name);
+        if (fullPath === latestFile) continue;
+        fs.unlinkSync(fullPath);
+        logger.info(`Retention: removed old backup ${name} (keeping ${keep})`, db.name);
+      }
+    } catch (error) {
+      logger.warn(`Retention cleanup failed: ${getErrorMessage(error)}`, db.name);
+    }
+  }
+
+  /** Databases being backed up right now (manual, scheduled or from the MCP server) */
+  private running = new Set<string>();
+  private history: BackupHistory | null = null;
+
+  isRunning(databaseId: string): boolean {
+    return this.running.has(databaseId);
+  }
+
+  backupHistory(): BackupHistory {
+    if (!this.history) this.history = new BackupHistory(path.join(pathManager.appDataPath, 'backup-history.json'));
+    return this.history;
+  }
+
+  async backupDatabase(db: DatabaseConfig, trigger: BackupTrigger = 'manual'): Promise<BackupResult> {
+    const started = Date.now();
+    this.running.add(db.id);
+    let result: BackupResult;
+    try {
+      // A database on a server is reached through its SSH tunnel, kept open for the whole dump
+      result = await withTunnel(db, reached => this.executeBackup(reached));
+      if (result.success && result.filePath) {
+        this.applyRetention(db, result.filePath);
+      }
     } catch (error) {
       const errorMsg = `Unexpected error: ${error}`;
       logger.error(errorMsg, db.name);
-      return {
+      result = {
         success: false,
         database: db.name,
         timestamp: new Date().toISOString(),
         error: errorMsg
       };
+    } finally {
+      this.running.delete(db.id);
     }
+    let size: number | undefined;
+    try {
+      if (result.success && result.filePath) size = fs.statSync(result.filePath).size;
+    } catch { /* removed meanwhile */ }
+    this.backupHistory().record(db.id, {
+      at: new Date().toISOString(),
+      success: result.success,
+      trigger,
+      durationMs: Date.now() - started,
+      size,
+      error: result.success ? undefined : (result.error ?? 'Unknown error').slice(0, 500),
+    });
+    return result;
   }
 
   /**
@@ -1724,19 +1841,19 @@ apt-get install -y postgresql-client-${majorVersion}
    * Run a SQL command on the target database via psql (stdin piped).
    */
   private async runPsqlSql(
-    target: { name: string; host: string; port: number; user: string; password: string; connectionString?: string },
+    target: { name: string; host: string; port: number; user: string; password: string; connectionString?: string; viaTunnel?: boolean },
     sql: string,
     env: NodeJS.ProcessEnv,
   ): Promise<{ code: number; stdout: string; stderr: string }> {
     const psqlPath = await this.findPostgresCommand('psql');
-    const args: string[] = [];
+    const args: string[] = ['--no-password'];
 
     if (target.connectionString) {
       const cleanedConnectionString = this.cleanConnectionString(target.connectionString);
       args.push('-d', cleanedConnectionString);
     } else {
       const isLinux = process.platform === 'linux';
-      const isLocalHost = target.host === 'localhost' || target.host === '127.0.0.1';
+      const isLocalHost = !target.viaTunnel && (target.host === 'localhost' || target.host === '127.0.0.1');
       const hasPassword = target.password && target.password.trim().length > 0;
       if (isLinux && isLocalHost && !hasPassword) {
         args.push('-h', '/var/run/postgresql');
@@ -1761,7 +1878,17 @@ apt-get install -y postgresql-client-${majorVersion}
     });
   }
 
-  async restoreBackup(backupFile: string, target: { name: string; host: string; port: number; user: string; password: string; connectionString?: string }): Promise<BackupResult> {
+  /**
+   * Restores a backup into an existing database, replacing its content: the schemas the
+   * backup contains are emptied first (all or nothing, see restorePlan.ts). `replace:
+   * false` keeps the old behaviour (load over what is there), for a database just created.
+   */
+  async restoreBackup(
+    backupFile: string,
+    target: { name: string; host: string; port: number; user: string; password: string; connectionString?: string; viaTunnel?: boolean } & SslSettings,
+    options: { replace?: boolean } = {},
+  ): Promise<BackupResult> {
+    await this.ensureToolPaths();
     const timestamp = new Date().toISOString();
     logger.info(`Starting restore of ${backupFile} to ${target.name}`, target.name);
 
@@ -1829,6 +1956,7 @@ apt-get install -y postgresql-client-${majorVersion}
     try {
       // Build common pg_restore args (without --section and backup file — added per section)
       const baseArgs = [
+        '--no-password',
         '-v',
         '--no-owner',
         '--no-acl',
@@ -1841,7 +1969,7 @@ apt-get install -y postgresql-client-${majorVersion}
         baseArgs.push('-d', cleanedConnectionString);
       } else {
         const isLinux = process.platform === 'linux';
-        const isLocalHost = target.host === 'localhost' || target.host === '127.0.0.1';
+        const isLocalHost = !target.viaTunnel && (target.host === 'localhost' || target.host === '127.0.0.1');
         const hasPassword = target.password && target.password.trim().length > 0;
         if (isLinux && isLocalHost && !hasPassword) {
           baseArgs.push('-h', '/var/run/postgresql');
@@ -1861,10 +1989,7 @@ apt-get install -y postgresql-client-${majorVersion}
         LANG: 'C',
       };
 
-      if (target.connectionString && target.connectionString.includes('sslmode=require')) {
-        env.PGSSLMODE = 'require';
-        env.PGSSLCERT = 'disable';
-      }
+      Object.assign(env, libpqSslEnv(target));
 
       if (!target.connectionString && target.password && target.password.trim().length > 0) {
         env.PGPASSWORD = target.password;
@@ -1872,6 +1997,24 @@ apt-get install -y postgresql-client-${majorVersion}
 
       let allStdout = '';
       let allStderr = '';
+
+      // STEP 0: empty what the backup will recreate, so its content replaces the target's
+      if (options.replace !== false) {
+        const listing = await execFileAsync(compatiblePgRestorePath, ['-l', actualBackupPath], { env, maxBuffer: 64 * 1024 * 1024 });
+        const schemas = schemasInToc(String(listing.stdout));
+        if (schemas.length) {
+          logger.info(`[restore] Emptying ${schemas.join(', ')} before restoring (one transaction)...`, target.name);
+          const emptied = await this.runPsqlSql(target, emptySchemasSql(schemas), env);
+          if (emptied.code !== 0) {
+            cleanupTempFile();
+            const reason = emptied.stderr.split(/\r?\n/).find(l => /ERROR|FATAL|ERREUR/.test(l))?.trim() || emptied.stderr.trim();
+            const errorMsg = `The database could not be emptied before restoring, so nothing was changed: ${reason}`;
+            logger.error(errorMsg, target.name);
+            return { success: false, database: target.name, timestamp, error: errorMsg };
+          }
+          logger.info(`[restore] ${schemas.length} schema(s) emptied`, target.name);
+        }
+      }
 
       // ──────────────────────────────────────────────────────────────────
       // Multi-section restore: pre-data → drop CHECK → data → recreate CHECK → post-data
@@ -1914,7 +2057,13 @@ apt-get install -y postgresql-client-${majorVersion}
         SELECT conrelid::regclass::text, conname, pg_get_constraintdef(oid)
         FROM pg_constraint
         WHERE contype = 'c'
-          AND connamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public');
+          AND conrelid <> 0
+          -- every user schema, not only public (regclass::text is schema-qualified when needed)
+          AND connamespace IN (
+            SELECT oid FROM pg_namespace
+            WHERE nspname NOT IN ('pg_catalog', 'information_schema')
+              AND nspname NOT LIKE 'pg_toast%' AND nspname NOT LIKE 'pg_temp%'
+          );
         DO $$ DECLARE r RECORD; dropped int := 0; BEGIN
           FOR r IN SELECT table_name, constraint_name FROM _bbdump_saved_checks LOOP
             EXECUTE format('ALTER TABLE %s DROP CONSTRAINT IF EXISTS %I', r.table_name, r.constraint_name);
@@ -2019,17 +2168,17 @@ apt-get install -y postgresql-client-${majorVersion}
           output: combinedOutput,
         };
       } else if ((hasRestoreActivity || errorsIgnored) && !hasCriticalError) {
-        const successMsg = `Restore completed${errorsIgnored ? ' (some errors were ignored)' : ' with warnings'} from ${backupFile} to ${target.name}`;
-        logger.info(successMsg, target.name);
-        if (allStderr && !hasCriticalError) {
-          logger.warn(`Non-critical warnings during restore (ignored): ${allStderr.substring(0, 500)}`, target.name);
-        }
+        // Restored, but say what did not restore instead of calling it a plain success
+        const errors = restoreErrors(allStderr);
+        const successMsg = `Restore completed with ${errors.count || 'some'} error(s) from ${backupFile} to ${target.name}`;
+        logger.warn(`${successMsg}: ${errors.lines.join(' | ')}`, target.name);
         return {
           success: true,
           database: target.name,
           timestamp,
           message: successMsg,
           output: combinedOutput,
+          warnings: errors.lines.length ? errors.lines : ['pg_restore reported errors (see the logs)'],
         };
       } else {
         const errorMsg = `pg_restore failed${hasRestoreActivity ? ' (partial restore)' : ''}\n${allStderr}`;
@@ -2042,13 +2191,13 @@ apt-get install -y postgresql-client-${majorVersion}
           output: combinedOutput,
         };
       }
-    } catch (err: any) {
+    } catch (err) {
       cleanupTempFile();
       return {
         success: false,
         database: target.name,
         timestamp,
-        error: `Restore failed: ${err.message}`,
+        error: `Restore failed: ${getErrorMessage(err)}`,
       };
     }
   }

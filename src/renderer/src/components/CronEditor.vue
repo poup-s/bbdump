@@ -168,7 +168,7 @@ const updateFromVisual = () => {
 };
 
 // Select preset
-const selectPreset = (preset: typeof presets[0]) => {
+const selectPreset = (preset: (typeof presets.value)[number]) => {
   emit('update:modelValue', preset.value);
 };
 
@@ -466,7 +466,7 @@ const dayOfWeekOptions = computed(() => {
         <div class="flex-1">
           <div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">{{ t('cronEditor.schedule') }}</div>
           <div class="text-sm text-foreground">{{ humanReadable }}</div>
-          <div class="text-xs font-mono text-gray-400 mt-2">{{ modelValue || 'No schedule' }}</div>
+          <div class="text-xs font-mono text-gray-400 mt-2">{{ modelValue || t('cronEditor.noSchedule') }}</div>
         </div>
       </div>
     </div>

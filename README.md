@@ -78,7 +78,7 @@ Real-time application logs with level and database filtering. Track every backup
 
 ### MCP Server (Claude Desktop)
 
-bbdump includes a built-in PostgreSQL MCP server that connects Claude to your databases. Install it in one click from Settings — Claude can then explore schemas, read data, run queries, and execute mutations with confirmation prompts. 31 tools exposed including schema inspection, full-text search, query explain, and more.
+bbdump includes a built-in PostgreSQL MCP server that connects Claude to your databases. Install it in one click from Settings — Claude can then explore schemas, read data, run queries, and execute mutations with confirmation prompts. 45 tools and 4 prompts: whole-schema overview in one call, data profiling, query plans with a summary, health check, index advice (with hypothetical indexes), slow queries, backups before risky changes, and more.
 
 ### System Tray
 
@@ -147,7 +147,7 @@ npm run dist:linux     # Linux (AppImage + deb)
 
 ## Configuration
 
-All user data is stored in `~/.bbdump/`:
+All user data is stored in `~/Library/Application Support/bbdump/` (macOS) or `~/.config/bbdump/` (Linux):
 
 | File | Description |
 |------|-------------|

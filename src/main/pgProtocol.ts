@@ -221,7 +221,12 @@ export async function connectAndAuthenticate(target: TargetCredentials): Promise
     const sslResp = await readBytes(socket, 1);
     logger.info(`[pgProto] SSL response: 0x${sslResp[0].toString(16)} (${sslResp[0] === 0x53 ? 'SSL ok' : 'no SSL'})`);
     if (sslResp[0] === 0x53) { // 'S' — server supports SSL
-        socket = tls.connect({ socket: socket as net.Socket, rejectUnauthorized: false });
+        // SNI is required by poolers that route on the host name (Neon, Supabase...)
+        socket = tls.connect({
+            socket: socket as net.Socket,
+            rejectUnauthorized: false,
+            servername: net.isIP(target.host) ? undefined : target.host,
+        });
         await new Promise<void>((res, rej) => {
             (socket as tls.TLSSocket).once('secureConnect', res);
             (socket as tls.TLSSocket).once('error', rej);

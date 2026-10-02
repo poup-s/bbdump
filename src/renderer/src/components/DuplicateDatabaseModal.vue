@@ -1,4 +1,5 @@
 <script setup lang="ts">
+/** Copy a database into a new local one (backup → create → restore), in the shared dialog shell. */
 import { ref, computed, onMounted } from 'vue';
 import { getErrorMessage } from '../utils';
 import { useI18n } from '../composables/useI18n';
@@ -6,6 +7,13 @@ import { useToast } from '../composables/useToast';
 import { ipcRenderer } from '../electron';
 import { Database } from '../types';
 import { store } from '../store';
+import AppModal from './ui/AppModal.vue';
+import ModalHeading from './ui/ModalHeading.vue';
+import FormField from './ui/FormField.vue';
+import { btnGhost, btnPrimary, inputClass, monoInputClass, panelClass } from './ui/classes';
+
+const ICON_COPY = 'M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2';
+const STEPS = ['backup', 'creating', 'restoring', 'complete'] as const;
 
 const props = defineProps<{
   modelValue: boolean;
@@ -20,47 +28,50 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const { addToast } = useToast();
 
-const duplicateForm = ref({
-  name: '',
-  password: '',
-  port: 5432
-});
-
+const duplicateForm = ref({ name: '', password: '', port: 5432 });
 const isDuplicating = ref(false);
 const duplicateProgress = ref<{ step: string; message: string; progress: number } | null>(null);
-
-const steps = ['backup', 'creating', 'restoring', 'complete'];
+const attempted = ref(false);
+/** Names taken in bbdump or on the local server */
+const existingNames = ref(new Set<string>());
 
 const currentStepIndex = computed(() => {
-  if (!duplicateProgress.value) return -1;
-  return steps.indexOf(duplicateProgress.value.step);
+  if (!duplicateProgress.value) return 0;
+  return Math.max(0, STEPS.indexOf(duplicateProgress.value.step as typeof STEPS[number]));
 });
+const stepLabels = computed(() => STEPS.map(step => t(`databases.duplicateSteps.${step}`)));
 
-// Initialize form when modal opens
+const sourceLabel = computed(() => (props.sourceDb ? (props.sourceDb.masked ? '••••••••' : (props.sourceDb.displayName || props.sourceDb.name)) : ''));
+const sourceWhere = computed(() => (props.sourceDb ? `${props.sourceDb.host}:${props.sourceDb.port} · ${props.sourceDb.name}` : ''));
+
 onMounted(async () => {
   if (!props.sourceDb) return;
-
-  const baseName = `${props.sourceDb.name}_copy`;
-  let potentialName = baseName;
-  let counter = 2;
-
-  const existingNames = new Set(store.databases.map(d => d.name));
-
+  const names = new Set(store.databases.map(d => d.name));
   try {
     const result = await ipcRenderer.invoke('get-postgres-config');
-    if (result && result.databases) {
-      result.databases.forEach((d: any) => existingNames.add(d.name));
-    }
+    (result?.databases || []).forEach((d: { name: string }) => names.add(d.name));
   } catch (e) {
     console.error('Failed to fetch physical databases for name check', e);
   }
+  existingNames.value = names;
 
-  while (existingNames.has(potentialName)) {
-    potentialName = `${baseName}_${counter}`;
-    counter++;
-  }
+  // First free "<name>_copy", "<name>_copy_2"…
+  const baseName = `${props.sourceDb.name}_copy`;
+  let candidate = baseName;
+  for (let counter = 2; names.has(candidate); counter++) candidate = `${baseName}_${counter}`;
+  duplicateForm.value.name = candidate;
+});
 
-  duplicateForm.value.name = potentialName;
+const nameError = computed(() => {
+  const name = duplicateForm.value.name.trim();
+  if (!name) return attempted.value ? t('databases.duplicateNameRequired') : undefined;
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) return t('databases.duplicateNameInvalid');
+  if (existingNames.value.has(name)) return t('createDatabase.errors.nameExists');
+  return undefined;
+});
+const portError = computed(() => {
+  const port = duplicateForm.value.port;
+  return !port || port < 1024 || port > 65535 ? t('createDatabase.errors.portInvalid') : undefined;
 });
 
 const closeModal = () => {
@@ -69,25 +80,22 @@ const closeModal = () => {
 };
 
 const duplicateToLocal = async () => {
-  if (!props.sourceDb) return;
+  if (!props.sourceDb || isDuplicating.value) return;
+  attempted.value = true;
+  if (nameError.value || portError.value) return;
 
-  const formName = duplicateForm.value.name;
-
-  if (!formName || formName.trim() === '') {
-    addToast(t('databases.duplicateNameRequired'), 'error');
-    return;
-  }
-
-  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(formName)) {
-    addToast(t('databases.duplicateNameInvalid'), 'error');
-    return;
-  }
-
+  const formName = duplicateForm.value.name.trim();
   isDuplicating.value = true;
   duplicateProgress.value = { step: 'backup', message: t('databases.duplicateStepBackup'), progress: 0 };
 
+  const progressHandler = (_event: unknown, progress: { step: string; message: string; progress: number }) => {
+    duplicateProgress.value = progress;
+  };
+  ipcRenderer.on('duplicate-progress', progressHandler);
+
   try {
     const sourceDb = props.sourceDb;
+    // The main process reads the source (and its password) from the saved config by id
     const sourceDbConfig: Partial<Database> = {
       id: sourceDb.id,
       name: sourceDb.name,
@@ -95,7 +103,7 @@ const duplicateToLocal = async () => {
       host: sourceDb.host,
       port: sourceDb.port,
       user: sourceDb.user,
-      password: sourceDb.password || '',
+      password: '',
       encrypted: sourceDb.encrypted || false,
       encryptBackups: sourceDb.encryptBackups || false,
       cron: sourceDb.cron || '0 0 * * *',
@@ -106,20 +114,12 @@ const duplicateToLocal = async () => {
       isLocalBbdump: sourceDb.isLocalBbdump || false
     };
 
-    const progressHandler = (_event: any, progress: { step: string; message: string; progress: number }) => {
-      duplicateProgress.value = progress;
-    };
-
-    ipcRenderer.on('duplicate-progress', progressHandler);
-
     const result = await ipcRenderer.invoke('duplicate-external-to-local', {
       sourceDb: sourceDbConfig,
-      targetName: formName.trim(),
+      targetName: formName,
       targetPassword: duplicateForm.value.password || undefined,
       targetPort: duplicateForm.value.port
     });
-
-    ipcRenderer.removeListener('duplicate-progress', progressHandler);
 
     if (result.success) {
       isDuplicating.value = false;
@@ -127,282 +127,87 @@ const duplicateToLocal = async () => {
       emit('success', formName);
       closeModal();
     } else {
-      addToast(result.error || t('databases.duplicateError'), 'error');
+      addToast(t('databases.duplicateError'), 'error', { detail: result.error });
     }
   } catch (error) {
-    addToast(`Error duplicating database: ${getErrorMessage(error)}`, 'error');
+    addToast(t('toasts.duplicateDbError'), 'error', { detail: getErrorMessage(error) });
   } finally {
-      isDuplicating.value = false;
-      duplicateProgress.value = null;
+    ipcRenderer.removeListener('duplicate-progress', progressHandler);
+    isDuplicating.value = false;
+    duplicateProgress.value = null;
   }
 };
 </script>
 
 <template>
-  <Transition
-    enter-active-class="transition duration-200 ease-out"
-    enter-from-class="opacity-0"
-    enter-to-class="opacity-100"
-    leave-active-class="transition duration-150 ease-in"
-    leave-from-class="opacity-100"
-    leave-to-class="opacity-0"
+  <AppModal
+    v-if="modelValue"
+    :title="t('databases.duplicateToLocalTitle')"
+    :icon="ICON_COPY"
+    :steps="isDuplicating ? stepLabels : []"
+    :step="currentStepIndex"
+    :busy="isDuplicating"
+    :close-label="t('common.cancel')"
+    @close="closeModal"
+    @submit="duplicateToLocal"
   >
-    <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" @click="closeModal">
-      <Transition
-        enter-active-class="transition duration-200 ease-out"
-        enter-from-class="opacity-0 scale-95 translate-y-2"
-        enter-to-class="opacity-100 scale-100 translate-y-0"
-        leave-active-class="transition duration-150 ease-in"
-        leave-from-class="opacity-100 scale-100"
-        leave-to-class="opacity-0 scale-95"
-      >
-        <div
-          class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-md w-full border border-border overflow-hidden flex flex-col"
-          @click.stop
-        >
-          <!-- Header -->
-          <div class="relative px-6 pt-6 pb-4">
-            <!-- Gradient accent -->
-            <div class="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500"></div>
+    <!-- Running: the steps are in the header bars -->
+    <div v-if="isDuplicating" class="py-4" role="status" aria-live="polite">
+      <ModalHeading :eyebrow="t('databases.duplicateEyebrow')" :title="duplicateForm.name" :subtitle="sourceWhere" />
+      <div class="h-[3px] rounded-full overflow-hidden bg-gray-100 dark:bg-zinc-800">
+        <div class="h-full rounded-full bg-emerald-500 transition-[width] duration-500" :style="{ width: `${Math.max(4, duplicateProgress?.progress ?? 0)}%` }" />
+      </div>
+      <div class="mt-2 flex items-center justify-between gap-3 text-[12px]">
+        <span class="text-gray-600 dark:text-zinc-400 min-w-0 break-words">{{ duplicateProgress?.message || t('databases.duplicateStepBackup') }}</span>
+        <span class="font-mono text-gray-400 dark:text-zinc-500 tabular-nums">{{ duplicateProgress?.progress ?? 0 }}%</span>
+      </div>
+    </div>
 
-            <div class="flex items-start justify-between">
-              <div class="flex items-start gap-3">
-                <div class="mt-0.5 w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/25 shrink-0">
-                  <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
-                  </svg>
-                </div>
-                <div>
-                  <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">{{ t('databases.duplicateToLocalTitle') }}</h3>
-                  <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{{ t('databases.duplicateToLocalDesc', { name: sourceDb?.displayName || sourceDb?.name }) }}</p>
-                </div>
-              </div>
-              <button
-                @click="closeModal"
-                :disabled="isDuplicating"
-                class="p-1.5 -mr-1.5 -mt-1 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
+    <template v-else>
+      <ModalHeading :eyebrow="t('databases.duplicateEyebrow')" :title="t('databases.duplicateTitle', { name: sourceLabel })" :subtitle="t('databases.duplicateInfo')" />
+      <div class="space-y-4">
+        <!-- Source → copy -->
+        <div v-if="sourceDb" :class="panelClass" class="px-3.5 py-2.5 flex items-center gap-3">
+          <div class="min-w-0 flex-1">
+            <div class="text-[11px] text-gray-500 dark:text-zinc-400">{{ t('databases.duplicateFrom') }}</div>
+            <div class="text-[13px] font-medium text-gray-900 dark:text-zinc-100 overflow-hidden text-ellipsis whitespace-nowrap">{{ sourceLabel }}</div>
+            <div class="font-mono text-[11px] text-gray-500 dark:text-zinc-500 overflow-hidden text-ellipsis whitespace-nowrap">{{ sourceWhere }}</div>
           </div>
-
-          <!-- Content -->
-          <div class="px-6 pb-6 flex-1">
-            <!-- ===== DUPLICATING STATE ===== -->
-            <div v-if="isDuplicating" class="space-y-6">
-              <!-- Source → Target visual -->
-              <div class="flex items-center justify-center gap-3 py-4">
-                <div class="flex flex-col items-center gap-1.5">
-                  <div class="w-12 h-12 rounded-xl bg-gray-100 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 flex items-center justify-center">
-                    <svg class="w-6 h-6 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
-                    </svg>
-                  </div>
-                  <span class="text-[10px] font-medium text-gray-500 dark:text-gray-400 max-w-[80px] truncate text-center">{{ sourceDb?.displayName || sourceDb?.name }}</span>
-                </div>
-
-                <div class="flex items-center gap-1 text-blue-500">
-                  <div class="w-8 h-px bg-blue-300 dark:bg-blue-700"></div>
-                  <svg class="w-4 h-4 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
-                  </svg>
-                  <div class="w-8 h-px bg-blue-300 dark:bg-blue-700"></div>
-                </div>
-
-                <div class="flex flex-col items-center gap-1.5">
-                  <div class="w-12 h-12 rounded-xl bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 flex items-center justify-center">
-                    <svg class="w-6 h-6 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
-                    </svg>
-                  </div>
-                  <span class="text-[10px] font-medium text-blue-600 dark:text-blue-400 max-w-[80px] truncate text-center">{{ duplicateForm.name }}</span>
-                </div>
-              </div>
-
-              <!-- Step indicators -->
-              <div class="flex items-center justify-between gap-1 px-2">
-                <template v-for="(step, index) in steps" :key="step">
-                  <div class="flex flex-col items-center gap-1.5 flex-1">
-                    <div
-                      class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 shrink-0"
-                      :class="{
-                        'bg-blue-500 text-white shadow-md shadow-blue-500/30 scale-110': currentStepIndex === index,
-                        'bg-emerald-500 text-white': currentStepIndex > index,
-                        'bg-gray-100 dark:bg-zinc-800 text-gray-400 dark:text-gray-500': currentStepIndex < index,
-                      }"
-                    >
-                      <!-- Checkmark for completed steps -->
-                      <svg v-if="currentStepIndex > index" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                      <!-- Spinner for active step -->
-                      <svg v-else-if="currentStepIndex === index" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      <!-- Number for future steps -->
-                      <span v-else>{{ index + 1 }}</span>
-                    </div>
-                    <span
-                      class="text-[10px] font-medium text-center leading-tight"
-                      :class="{
-                        'text-blue-600 dark:text-blue-400': currentStepIndex === index,
-                        'text-emerald-600 dark:text-emerald-400': currentStepIndex > index,
-                        'text-gray-400 dark:text-gray-500': currentStepIndex < index,
-                      }"
-                    >
-                      {{ step === 'backup' ? 'Backup' : step === 'creating' ? 'Create' : step === 'restoring' ? 'Restore' : 'Done' }}
-                    </span>
-                  </div>
-                  <!-- Connector line between steps -->
-                  <div
-                    v-if="index < steps.length - 1"
-                    class="h-px flex-1 mt-[-18px] transition-all duration-300"
-                    :class="currentStepIndex > index ? 'bg-emerald-400' : 'bg-gray-200 dark:bg-zinc-700'"
-                  ></div>
-                </template>
-              </div>
-
-              <!-- Progress bar -->
-              <div class="space-y-2">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ duplicateProgress?.message || t('databases.duplicating') }}</span>
-                  <span class="text-xs font-bold text-blue-600 dark:text-blue-400 tabular-nums">{{ duplicateProgress?.progress || 0 }}%</span>
-                </div>
-                <div class="w-full bg-gray-100 dark:bg-zinc-800 rounded-full h-2 overflow-hidden">
-                  <div
-                    class="bg-gradient-to-r from-blue-500 to-indigo-500 h-2 rounded-full transition-all duration-500 ease-out"
-                    :style="{ width: `${duplicateProgress?.progress || 0}%` }"
-                  ></div>
-                </div>
-              </div>
-            </div>
-
-            <!-- ===== FORM STATE ===== -->
-            <div v-else class="space-y-5">
-              <!-- Source DB info card -->
-              <div v-if="sourceDb" class="p-3.5 rounded-xl bg-gray-50 dark:bg-zinc-800/60 border border-gray-100 dark:border-zinc-700/50">
-                <div class="flex items-center gap-3">
-                  <div class="w-9 h-9 rounded-lg bg-white dark:bg-zinc-700 border border-gray-200 dark:border-zinc-600 flex items-center justify-center shrink-0">
-                    <svg class="w-4.5 h-4.5 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
-                    </svg>
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <p class="text-sm font-semibold text-gray-800 dark:text-gray-200 truncate">{{ sourceDb.displayName || sourceDb.name }}</p>
-                    <p class="text-xs text-gray-500 dark:text-gray-400 truncate">
-                      <span v-if="sourceDb.connectionString">{{ sourceDb.connectionString.substring(0, 40) }}...</span>
-                      <span v-else>{{ sourceDb.host }}:{{ sourceDb.port }} &middot; {{ sourceDb.user }}</span>
-                    </p>
-                  </div>
-                  <span
-                    class="text-[10px] font-medium px-2 py-0.5 rounded-full shrink-0"
-                    :class="sourceDb.isLocalBbdump
-                      ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400'
-                      : 'bg-gray-200 dark:bg-zinc-600 text-gray-600 dark:text-gray-300'"
-                  >
-                    {{ sourceDb.isLocalBbdump ? 'local' : 'external' }}
-                  </span>
-                </div>
-              </div>
-
-              <!-- Form fields -->
-              <div class="space-y-4">
-                <!-- Name -->
-                <div>
-                  <label class="flex items-center gap-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    <svg class="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
-                    </svg>
-                    {{ t('database.name') }}
-                    <span class="text-red-400">*</span>
-                  </label>
-                  <input
-                    v-model="duplicateForm.name"
-                    type="text"
-                    class="w-full bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 dark:focus:border-blue-500 transition-all placeholder:text-gray-400"
-                    :placeholder="t('database.namePlaceholder')"
-                  />
-                  <p class="text-[11px] text-gray-400 dark:text-gray-500 mt-1.5">{{ t('createDatabase.nameHint') }}</p>
-                </div>
-
-                <!-- Password & Port side by side -->
-                <div class="grid grid-cols-2 gap-3">
-                  <div>
-                    <label class="flex items-center gap-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      <svg class="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                      </svg>
-                      {{ t('database.password') }}
-                    </label>
-                    <input
-                      v-model="duplicateForm.password"
-                      type="password"
-                      class="w-full bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 dark:focus:border-blue-500 transition-all placeholder:text-gray-400"
-                      :placeholder="t('common.optional')"
-                    />
-                  </div>
-                  <div>
-                    <label class="flex items-center gap-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      <svg class="w-3.5 h-3.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                      {{ t('database.port') }}
-                    </label>
-                    <input
-                      v-model.number="duplicateForm.port"
-                      type="number"
-                      class="w-full bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 dark:focus:border-blue-500 transition-all placeholder:text-gray-400"
-                      placeholder="5432"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <!-- Info callout -->
-              <div class="p-3 rounded-xl bg-blue-50/80 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/50">
-                <div class="flex items-start gap-2.5">
-                  <div class="w-5 h-5 rounded-full bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center shrink-0 mt-0.5">
-                    <svg class="w-3 h-3 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                  <p class="text-xs leading-relaxed text-blue-700 dark:text-blue-300/80">{{ t('databases.duplicateInfo') }}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Footer -->
-          <div class="px-6 py-4 flex justify-end gap-3 border-t border-gray-100 dark:border-zinc-800 bg-gray-50/50 dark:bg-zinc-900/50">
-            <button
-              @click="closeModal"
-              :disabled="isDuplicating"
-              class="px-4 py-2 rounded-xl text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {{ t('common.cancel') }}
-            </button>
-            <button
-              @click="duplicateToLocal"
-              :disabled="isDuplicating"
-              class="group relative overflow-hidden px-5 py-2 rounded-xl text-sm font-medium text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-md shadow-blue-500/25 hover:shadow-lg hover:shadow-blue-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none flex items-center gap-2"
-            >
-              <div class="absolute inset-0 bg-gradient-to-r from-transparent via-white/15 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700"></div>
-              <svg v-if="isDuplicating" class="w-4 h-4 animate-spin relative z-10" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              <svg v-else class="w-4 h-4 relative z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
-              </svg>
-              <span class="relative z-10">{{ t('databases.duplicateButton') }}</span>
-            </button>
+          <svg class="w-4 h-4 shrink-0 text-gray-300 dark:text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+          </svg>
+          <div class="min-w-0 flex-1 text-right">
+            <div class="text-[11px] text-gray-500 dark:text-zinc-400">{{ t('databases.duplicateTo') }}</div>
+            <div class="font-mono text-[13px] text-emerald-700 dark:text-emerald-400 overflow-hidden text-ellipsis whitespace-nowrap">{{ duplicateForm.name || '—' }}</div>
+            <div class="font-mono text-[11px] text-gray-500 dark:text-zinc-500">localhost:{{ duplicateForm.port }}</div>
           </div>
         </div>
-      </Transition>
-    </div>
-  </Transition>
+
+        <FormField :label="t('database.name')" for="dup-name" required :error="nameError" :hint="t('createDatabase.nameHint')">
+          <input id="dup-name" v-model="duplicateForm.name" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" :placeholder="t('database.namePlaceholder')" />
+        </FormField>
+        <div class="grid grid-cols-[minmax(0,1fr)_8rem] gap-3">
+          <FormField :label="t('database.password')" for="dup-password" :optional="t('common.optional')" :hint="t('createDatabase.passwordHint')">
+            <input id="dup-password" v-model="duplicateForm.password" type="password" autocomplete="new-password" :class="inputClass" />
+          </FormField>
+          <FormField :label="t('database.port')" for="dup-port" :error="portError">
+            <input id="dup-port" v-model.number="duplicateForm.port" type="number" min="1024" max="65535" :class="monoInputClass" />
+          </FormField>
+        </div>
+      </div>
+    </template>
+
+    <template #footer>
+      <button type="button" :class="btnGhost" :disabled="isDuplicating" @click="closeModal">{{ t('common.cancel') }}</button>
+      <span class="flex-1" />
+      <span v-if="!isDuplicating" class="hidden sm:inline text-[11px] text-gray-400 dark:text-zinc-500"><kbd class="font-mono">↵</kbd> Enter</span>
+      <button type="button" :class="btnPrimary" :disabled="isDuplicating" @click="duplicateToLocal">
+        <svg v-if="isDuplicating" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        {{ t('databases.duplicateButton') }}
+      </button>
+    </template>
+  </AppModal>
 </template>

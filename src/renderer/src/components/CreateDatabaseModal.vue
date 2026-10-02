@@ -1,10 +1,17 @@
 <script setup lang="ts">
+/** Create a database on the local PostgreSQL server (same shell and fields as the other dialogs). */
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
 import { ipcRenderer } from '../electron';
+import AppModal from './ui/AppModal.vue';
+import ModalHeading from './ui/ModalHeading.vue';
+import FormField from './ui/FormField.vue';
+import { btnGhost, btnPrimary, inputClass, monoInputClass, selectClass } from './ui/classes';
+
+const ICON_DB_PLUS = 'M4 7v10c0 2.21 3.582 4 8 4M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 0v5m-2 6h6m-3-3v6';
 
 const { t } = useI18n();
 const { addToast } = useToast();
@@ -13,7 +20,9 @@ const isLoading = ref(false);
 const progress = ref<{ step: string; message: string; progress: number } | null>(null);
 const isPortEditable = ref(false);
 const showAdvanced = ref(false);
+const passwordVisible = ref(false);
 const selectedProjectId = ref<string | null>(null);
+const attempted = ref(false);
 const form = ref({
   name: '',
   displayName: '',
@@ -21,16 +30,16 @@ const form = ref({
   password: ''
 });
 
-const errors = ref({
-  name: '',
-  port: ''
-});
-
 const availableProjects = computed(() => store.projects || []);
+const selectedProject = computed(() => availableProjects.value.find(p => p.id === selectedProjectId.value) ?? null);
+/** Project colors are a Tailwind class or "custom:#hex" */
+const projectDot = (color: string | undefined) => color?.startsWith('custom:')
+  ? { class: '', style: { backgroundColor: color.replace('custom:', '') } }
+  : { class: color || 'bg-gray-400', style: {} };
 
 onMounted(() => {
   selectedProjectId.value = store.createDatabaseForProjectId || null;
-  ipcRenderer.on('create-database-progress', (_, prog: { step: string; message: string; progress: number }) => {
+  ipcRenderer.on('create-database-progress', (_: unknown, prog: { step: string; message: string; progress: number }) => {
     progress.value = prog;
   });
 });
@@ -39,33 +48,29 @@ onUnmounted(() => {
   ipcRenderer.removeAllListeners('create-database-progress');
 });
 
-const validateForm = () => {
-  errors.value = { name: '', port: '' };
-  let isValid = true;
-
-  if (!form.value.name || form.value.name.trim() === '') {
-    errors.value.name = t('createDatabase.errors.nameRequired');
-    isValid = false;
-  } else if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(form.value.name)) {
-    errors.value.name = t('createDatabase.errors.nameInvalid');
-    isValid = false;
-  }
-
-  if (!form.value.port || form.value.port < 1024 || form.value.port > 65535) {
-    errors.value.port = t('createDatabase.errors.portInvalid');
-    isValid = false;
-  }
-
-  return isValid;
-};
+const errors = computed(() => {
+  const result: { name?: string; port?: string } = {};
+  const name = form.value.name.trim();
+  if (!name) result.name = t('createDatabase.errors.nameRequired');
+  else if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) result.name = t('createDatabase.errors.nameInvalid');
+  else if (store.databases.some(db => db.isLocalBbdump && db.name === name)) result.name = t('createDatabase.errors.nameExists');
+  if (!form.value.port || form.value.port < 1024 || form.value.port > 65535) result.port = t('createDatabase.errors.portInvalid');
+  return result;
+});
+/** Typing shows the format problem right away; "required" waits for a first try */
+const nameError = computed(() => (attempted.value || form.value.name ? errors.value.name : undefined));
+const portError = computed(() => (attempted.value || isPortEditable.value ? errors.value.port : undefined));
 
 const createDatabase = async () => {
-  if (!validateForm()) {
+  if (isLoading.value) return;
+  attempted.value = true;
+  if (errors.value.name || errors.value.port) {
+    if (errors.value.port) showAdvanced.value = true;
     return;
   }
 
   isLoading.value = true;
-  progress.value = { step: 'starting', message: 'Starting...', progress: 0 };
+  progress.value = { step: 'starting', message: t('createDatabase.starting'), progress: 0 };
 
   try {
     const result = await ipcRenderer.invoke('create-local-database', {
@@ -78,12 +83,9 @@ const createDatabase = async () => {
     if (result.success) {
       addToast(t('createDatabase.success', { name: form.value.name }), 'success');
 
-      // Refresh databases
       const config = await ipcRenderer.invoke('get-config');
       store.databases = config.databases;
-
-      // Find the newly created database
-      const newDb = store.databases.find(d => d.name === form.value.name && d.isLocalBbdump);
+      const newDb = store.databases.find(d => d.name === form.value.name.trim() && d.isLocalBbdump);
 
       // Assign to project if selected
       if (selectedProjectId.value && newDb) {
@@ -94,274 +96,161 @@ const createDatabase = async () => {
 
       // Highlight the newly created database
       store.newlyAddedDbId = newDb?.id || null;
-      setTimeout(() => {
-        store.newlyAddedDbId = null;
-      }, 2000);
+      setTimeout(() => { store.newlyAddedDbId = null; }, 2000);
 
       progress.value = null;
+      isLoading.value = false;
       close();
     } else {
-      addToast(result.error || t('createDatabase.errors.createFailed'), 'error');
+      addToast(t('createDatabase.errors.createFailed'), 'error', { detail: result.error });
       progress.value = null;
     }
   } catch (error) {
-    addToast(getErrorMessage(error) || t('createDatabase.errors.createFailed'), 'error');
+    addToast(t('createDatabase.errors.createFailed'), 'error', { detail: getErrorMessage(error) });
     progress.value = null;
   } finally {
     isLoading.value = false;
   }
 };
 
+const resetPort = () => {
+  isPortEditable.value = false;
+  form.value.port = 5432;
+};
+
 const close = () => {
+  if (isLoading.value) return;
   store.showCreateDatabaseModal = false;
   store.createDatabaseForProjectId = null;
 };
 </script>
 
 <template>
-  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-    <div
-      class="bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl max-w-lg w-full border border-border overflow-hidden flex flex-col"
-      @click.stop
-    >
-          <!-- Header with gradient -->
-          <div class="relative px-6 py-5 border-b border-border bg-gradient-to-r from-blue-500/10 via-indigo-500/10 to-purple-500/10">
-            <div class="flex items-start justify-between">
-              <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
-                  <svg class="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
-                  </svg>
-                </div>
-                <div>
-                  <h3 class="text-lg font-bold">{{ t('modal.createDatabaseTitle') }}</h3>
-                  <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('modal.createDatabaseDesc') }}</p>
-                </div>
-              </div>
-              <button @click="close" class="text-gray-400 hover:text-foreground transition-colors p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/5">
-                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <!-- Content -->
-          <div class="p-6 space-y-5 overflow-y-auto max-h-[60vh]">
-            <template v-if="!progress">
-              <!-- Database Name -->
-              <div>
-                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
-                  {{ t('database.name') }} <span class="text-red-400">*</span>
-                </label>
-                <input
-                  v-model="form.name"
-                  type="text"
-                  class="w-full bg-surface border border-border rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 transition-all"
-                  :class="{ 'border-red-500 focus:ring-red-500/30': errors.name }"
-                  :placeholder="t('database.namePlaceholder')"
-                />
-                <p v-if="errors.name" class="text-xs text-red-500 mt-1">{{ errors.name }}</p>
-                <p v-else class="text-xs text-gray-400 dark:text-gray-500 mt-1">{{ t('createDatabase.nameHint') }}</p>
-              </div>
-
-              <!-- Display Name -->
-              <div>
-                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
-                  {{ t('database.displayName') }}
-                </label>
-                <input
-                  v-model="form.displayName"
-                  type="text"
-                  class="w-full bg-surface border border-border rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 transition-all"
-                  :placeholder="t('database.displayNamePlaceholder')"
-                />
-              </div>
-
-              <!-- Project Selector -->
-              <div v-if="availableProjects.length > 0">
-                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
-                  {{ t('createDatabase.projectLabel') }}
-                </label>
-                <div class="relative">
-                  <select
-                    v-model="selectedProjectId"
-                    class="w-full bg-surface border border-border rounded-xl px-4 py-2.5 pr-10 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 transition-all appearance-none cursor-pointer"
-                  >
-                    <option :value="null">{{ t('createDatabase.projectNone') }}</option>
-                    <option
-                      v-for="project in availableProjects"
-                      :key="project.id"
-                      :value="project.id"
-                    >
-                      {{ project.name }}
-                    </option>
-                  </select>
-                  <!-- Custom chevron -->
-                  <div class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
-                    <svg class="w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </div>
-                  <!-- Color dot for selected project -->
-                  <div v-if="selectedProjectId" class="absolute inset-y-0 left-3 flex items-center pointer-events-none">
-                    <span
-                      class="w-2.5 h-2.5 rounded-full mr-1"
-                      :class="availableProjects.find(p => p.id === selectedProjectId)?.color || 'bg-blue-500'"
-                    ></span>
-                  </div>
-                </div>
-                <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">{{ t('createDatabase.projectHint') }}</p>
-              </div>
-
-              <!-- Advanced Settings Toggle -->
-              <div class="border-t border-border pt-4">
-                <button
-                  @click="showAdvanced = !showAdvanced"
-                  type="button"
-                  class="flex items-center gap-2 text-sm font-medium text-gray-500 dark:text-gray-400 hover:text-foreground transition-colors w-full"
-                >
-                  <svg
-                    class="w-4 h-4 transition-transform duration-200"
-                    :class="{ 'rotate-90': showAdvanced }"
-                    fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"
-                  >
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-                  </svg>
-                  {{ t('createDatabase.advancedSettings') }}
-                </button>
-
-                <!-- Advanced Settings Content -->
-                <Transition
-                  enter-active-class="transition duration-200 ease-out"
-                  enter-from-class="opacity-0 -translate-y-2"
-                  enter-to-class="opacity-100 translate-y-0"
-                  leave-active-class="transition duration-150 ease-in"
-                  leave-from-class="opacity-100 translate-y-0"
-                  leave-to-class="opacity-0 -translate-y-2"
-                >
-                  <div v-if="showAdvanced" class="mt-4 space-y-4">
-                    <!-- Password -->
-                    <div>
-                      <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
-                        {{ t('database.password') }}
-                        <span class="text-xs font-normal text-gray-400 ml-1">({{ t('common.optional') }})</span>
-                      </label>
-                      <input
-                        v-model="form.password"
-                        type="password"
-                        class="w-full bg-surface border border-border rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 transition-all"
-                        :placeholder="t('database.password')"
-                      />
-                      <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">{{ t('createDatabase.passwordHint') }}</p>
-                    </div>
-
-                    <!-- Port -->
-                    <div>
-                      <div class="flex items-center justify-between mb-1.5">
-                        <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                          {{ t('database.port') }}
-                        </label>
-                        <button
-                          v-if="!isPortEditable"
-                          @click="isPortEditable = true"
-                          type="button"
-                          class="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors flex items-center gap-1"
-                        >
-                          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                          </svg>
-                          {{ t('common.edit') }}
-                        </button>
-                        <button
-                          v-else
-                          @click="isPortEditable = false; form.port = 5432"
-                          type="button"
-                          class="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
-                        >
-                          {{ t('common.cancel') }}
-                        </button>
-                      </div>
-                      <input
-                        v-model.number="form.port"
-                        type="number"
-                        :disabled="!isPortEditable"
-                        class="w-full bg-gray-50 dark:bg-zinc-800/50 border border-gray-200 dark:border-zinc-700 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-500/50 transition-all disabled:cursor-not-allowed disabled:opacity-60"
-                        :class="{
-                          'border-red-500': errors.port,
-                          'bg-surface border-border': isPortEditable
-                        }"
-                        placeholder="5432"
-                        min="1024"
-                        max="65535"
-                      />
-                      <p v-if="errors.port" class="text-xs text-red-500 mt-1">{{ errors.port }}</p>
-                      <p v-else-if="isPortEditable" class="text-xs text-gray-400 dark:text-gray-500 mt-1">{{ t('createDatabase.portHint') }}</p>
-                    </div>
-                  </div>
-                </Transition>
-              </div>
-
-              <!-- Info Box -->
-              <div class="p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-100 dark:border-blue-800/50">
-                <div class="flex items-start gap-2.5">
-                  <svg class="w-4 h-4 text-blue-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <p class="text-sm text-blue-700 dark:text-blue-300 leading-relaxed">
-                    {{ t('createDatabase.infoDesc') }}
-                  </p>
-                </div>
-              </div>
-            </template>
-
-            <!-- Progress Logger -->
-            <div v-if="progress" class="space-y-4">
-              <div class="p-5 bg-gray-50 dark:bg-zinc-800/50 rounded-xl border border-gray-200 dark:border-zinc-700 space-y-3">
-                <div class="flex items-center justify-between">
-                  <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('createDatabase.progress') }}</span>
-                  <span class="text-xs font-mono text-gray-500 bg-gray-100 dark:bg-zinc-700 px-2 py-0.5 rounded-full">{{ progress.progress }}%</span>
-                </div>
-                <div class="w-full bg-gray-200 dark:bg-zinc-700 rounded-full h-2 overflow-hidden">
-                  <div
-                    class="bg-gradient-to-r from-blue-500 to-indigo-500 h-2 rounded-full transition-all duration-500 ease-out"
-                    :style="{ width: `${progress.progress}%` }"
-                  ></div>
-                </div>
-                <div class="flex items-start gap-2 mt-1">
-                  <svg class="w-4 h-4 text-gray-400 mt-0.5 shrink-0 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <p class="text-xs text-gray-600 dark:text-gray-400 flex-1">{{ progress.message }}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Footer -->
-          <div class="px-6 py-4 flex justify-end gap-3 border-t border-border bg-gray-50/50 dark:bg-zinc-800/30">
-            <button
-              @click="close"
-              :disabled="isLoading"
-              class="px-4 py-2 rounded-xl text-gray-600 dark:text-gray-400 hover:bg-white dark:hover:bg-zinc-800 transition-colors font-medium disabled:opacity-50"
-            >
-              {{ t('common.cancel') }}
-            </button>
-            <button
-              @click="createDatabase"
-              :disabled="isLoading"
-              class="px-6 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 transition-all font-medium flex items-center gap-2 disabled:opacity-50 shadow-lg shadow-blue-500/20 hover:shadow-xl hover:shadow-blue-500/30"
-            >
-              <svg v-if="isLoading" class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              <svg v-else class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-              </svg>
-              {{ t('modal.createDatabase') }}
-            </button>
-          </div>
+  <AppModal
+    :title="t('modal.createDatabaseTitle')"
+    :icon="ICON_DB_PLUS"
+    meta="localhost"
+    :busy="isLoading"
+    :close-label="t('common.cancel')"
+    @close="close"
+    @submit="createDatabase"
+  >
+    <!-- Creating: what the main process is doing -->
+    <div v-if="progress" class="py-6" role="status" aria-live="polite">
+      <ModalHeading :eyebrow="t('createDatabase.eyebrow')" :title="form.name" :subtitle="t('createDatabase.infoDesc')" />
+      <div class="h-[3px] rounded-full overflow-hidden bg-gray-100 dark:bg-zinc-800">
+        <div class="h-full rounded-full bg-emerald-500 transition-[width] duration-500" :style="{ width: `${Math.max(4, progress.progress)}%` }" />
+      </div>
+      <div class="mt-2 flex items-center justify-between gap-3 text-[12px]">
+        <span class="text-gray-600 dark:text-zinc-400 min-w-0 break-words">{{ progress.message }}</span>
+        <span class="font-mono text-gray-400 dark:text-zinc-500 tabular-nums">{{ progress.progress }}%</span>
+      </div>
     </div>
-  </div>
+
+    <template v-else>
+      <ModalHeading :eyebrow="t('createDatabase.eyebrow')" :title="t('createDatabase.title')" :subtitle="t('createDatabase.subtitle')" />
+      <div class="space-y-4">
+        <FormField :label="t('database.name')" for="new-db-name" required :error="nameError" :hint="t('createDatabase.nameHint')">
+          <input
+            id="new-db-name"
+            v-model="form.name"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            :class="monoInputClass"
+            :placeholder="t('database.namePlaceholder')"
+          />
+        </FormField>
+
+        <FormField :label="t('database.displayName')" for="new-db-display" :optional="t('common.optional')">
+          <input id="new-db-display" v-model="form.displayName" type="text" :class="inputClass" :placeholder="t('database.displayNamePlaceholder')" />
+        </FormField>
+
+        <FormField v-if="availableProjects.length > 0" :label="t('createDatabase.projectLabel')" for="new-db-project" :optional="t('common.optional')">
+          <div class="relative">
+            <span
+              v-if="selectedProject"
+              class="absolute left-3 top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full pointer-events-none"
+              :class="projectDot(selectedProject.color).class"
+              :style="projectDot(selectedProject.color).style"
+            />
+            <select id="new-db-project" v-model="selectedProjectId" :class="[selectClass, selectedProject ? 'pl-8' : '']">
+              <option :value="null">{{ t('createDatabase.projectNone') }}</option>
+              <option v-for="project in availableProjects" :key="project.id" :value="project.id">{{ project.name }}</option>
+            </select>
+          </div>
+        </FormField>
+
+        <!-- Advanced -->
+        <div class="pt-1">
+          <button
+            type="button"
+            class="flex items-center gap-1.5 text-[12px] font-medium text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-100 transition-colors"
+            :aria-expanded="showAdvanced"
+            @click="showAdvanced = !showAdvanced"
+          >
+            <svg class="w-3.5 h-3.5 transition-transform duration-200" :class="showAdvanced ? 'rotate-90' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+            {{ t('createDatabase.advancedSettings') }}
+          </button>
+          <div v-if="showAdvanced" class="mt-3 grid grid-cols-[minmax(0,1fr)_9rem] gap-3">
+            <FormField :label="t('database.password')" for="new-db-password" :optional="t('common.optional')" :hint="t('createDatabase.passwordHint')">
+              <div class="relative">
+                <input
+                  id="new-db-password"
+                  v-model="form.password"
+                  :type="passwordVisible ? 'text' : 'password'"
+                  autocomplete="new-password"
+                  :class="inputClass"
+                  class="pr-9"
+                />
+                <button
+                  type="button"
+                  class="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 rounded-md flex items-center justify-center text-gray-400 hover:text-gray-700 dark:hover:text-zinc-200"
+                  :aria-label="passwordVisible ? t('dbModal.hidePassword') : t('dbModal.showPassword')"
+                  @click="passwordVisible = !passwordVisible"
+                >
+                  <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <path v-if="passwordVisible" stroke-linecap="round" stroke-linejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                    <path v-else stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                </button>
+              </div>
+            </FormField>
+            <FormField :label="t('database.port')" for="new-db-port" :error="portError" :hint="isPortEditable ? t('createDatabase.portHint') : undefined">
+              <template #action>
+                <button
+                  type="button"
+                  class="text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline"
+                  @click="isPortEditable ? resetPort() : (isPortEditable = true)"
+                >{{ isPortEditable ? t('createDatabase.portReset') : t('common.edit') }}</button>
+              </template>
+              <input id="new-db-port" v-model.number="form.port" type="number" min="1024" max="65535" :disabled="!isPortEditable" :class="monoInputClass" />
+            </FormField>
+          </div>
+        </div>
+
+        <p class="flex items-start gap-2 text-[12px] text-gray-500 dark:text-zinc-400">
+          <svg class="w-3.5 h-3.5 mt-px shrink-0 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          {{ t('createDatabase.infoDesc') }}
+        </p>
+      </div>
+    </template>
+
+    <template #footer>
+      <button type="button" :class="btnGhost" :disabled="isLoading" @click="close">{{ t('common.cancel') }}</button>
+      <span class="flex-1" />
+      <span class="hidden sm:inline text-[11px] text-gray-400 dark:text-zinc-500"><kbd class="font-mono">↵</kbd> Enter</span>
+      <button type="button" :class="btnPrimary" :disabled="isLoading" @click="createDatabase">
+        <svg v-if="isLoading" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        {{ t('createDatabase.create') }}
+      </button>
+    </template>
+  </AppModal>
 </template>

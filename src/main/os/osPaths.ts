@@ -20,7 +20,7 @@ export function getToolPaths(os: OSType, arch?: Architecture): ToolPaths {
     const homebrewPrefix = isAppleSilicon ? '/opt/homebrew' : '/usr/local';
     
     // Common PostgreSQL versions to check
-    const postgresVersions = ['17', '16', '15', '14'];
+    const postgresVersions = ['18', '17', '16', '15', '14'];
     
     // Generic paths (in PATH after installation)
     const genericPaths = [
@@ -38,6 +38,12 @@ export function getToolPaths(os: OSType, arch?: Architecture): ToolPaths {
       );
     }
     
+    // Homebrew libpq (client tools only, keg-only: not linked into bin/)
+    versionSpecificPaths.push(
+      `${homebrewPrefix}/opt/libpq/bin`,
+      '/usr/local/opt/libpq/bin'
+    );
+
     // Paths for EnterpriseDB and Postgres.app
     const otherPaths = [
       '/Library/PostgreSQL/*/bin',
@@ -180,6 +186,7 @@ export function getPostgresServiceNames(os: OSType, version?: string): string[] 
   if (os === 'macos') {
     return [
       `postgresql@${majorVersion}`,
+      'postgresql@18',
       'postgresql@17',
       'postgresql@16',
       'postgresql@15',

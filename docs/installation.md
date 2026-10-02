@@ -122,7 +122,7 @@ The interactive uninstaller lets you select which components to remove: app, des
 
 1. Quit bbdump
 2. Move `bbdump.app` from Applications to Trash
-3. Optionally remove user data: `rm -rf ~/.bbdump`
+3. Optionally remove user data: `rm -rf ~/Library/Application\ Support/bbdump   # macOS (Linux: ~/.config/bbdump)`
 
 **Linux:**
 
@@ -134,5 +134,5 @@ rm ~/.local/bin/bbdump
 sudo dpkg -r bbdump
 
 # Remove user data (optional)
-rm -rf ~/.bbdump
+rm -rf ~/Library/Application\ Support/bbdump   # macOS (Linux: ~/.config/bbdump)
 ```

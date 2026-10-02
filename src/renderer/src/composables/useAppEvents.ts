@@ -4,6 +4,8 @@ import { useI18n } from './useI18n';
 import { useToast } from './useToast';
 import { ipcRenderer } from '../electron';
 import { getErrorMessage } from '../utils';
+import type { BackupCompleteEvent, BackupProgress } from '../types';
+import { shouldShowWhatsNew } from '../whatsNew';
 
 export function useAppEvents() {
     const { t, setLanguage } = useI18n();
@@ -21,9 +23,12 @@ export function useAppEvents() {
                 setLanguage(config.language);
             }
             store.allowSqlMutations = config.allowSqlMutations || false;
+            store.usageMode = config.usageMode === 'remote' ? 'remote' : 'local';
+            // Updated from a version before this tour: show it once
+            if (store.onboardingCompleted && shouldShowWhatsNew(config.whatsNewSeen)) store.showWhatsNew = true;
         } catch (error) {
             console.error('Error loading config:', getErrorMessage(error));
-            addToast('Error loading configuration', 'error');
+            addToast(t('toasts.configLoadError'), 'error');
         }
     };
 
@@ -41,6 +46,8 @@ export function useAppEvents() {
             store.checkingUpdate = true;
             const result = await ipcRenderer.invoke('check-for-updates');
             store.checkingUpdate = false;
+            store.lastUpdateCheck = Date.now();
+            store.updateCheckFailed = !!result.error;
             if (result.updateAvailable) {
                 store.updateAvailable = true;
                 store.updateDetails = {
@@ -48,7 +55,9 @@ export function useAppEvents() {
                     url: result.url,
                     releaseNotes: result.releaseNotes
                 };
-                addToast(t('settings.updateAvailable', { version: result.version }), 'info', '__navigate:about');
+                addToast(t('settings.updateAvailable', { version: result.version }), 'info', {
+                    action: { label: t('toasts.actions.see'), run: () => { store.activeTab = 'about'; } },
+                });
             } else {
                 store.updateAvailable = false;
                 store.updateDetails = null;
@@ -60,30 +69,31 @@ export function useAppEvents() {
     };
 
     const setupListeners = () => {
-        ipcRenderer.on('backup-complete', (_: any, result: any) => {
+        ipcRenderer.on('backup-complete', (_: unknown, result: BackupCompleteEvent) => {
             store.isBackingUp = false;
             if (result.success) {
                 const db = store.databases.find(d => d.id === result.databaseId);
-                addToast(t('backup.success', { db: db?.name || result.database }), 'success');
+                addToast(t('backup.success', { db: db?.displayName || db?.name || result.database }), 'success');
                 if (db) db.lastBackup = result.timestamp;
             } else {
-                addToast(t('backup.error', { db: result.database, error: result.error }), 'error');
+                const db = store.databases.find(d => d.id === result.databaseId);
+                addToast(t('backup.error', { db: db?.displayName || db?.name || result.database }), 'error', { detail: result.error });
             }
             store.backupProgress = null;
         });
 
-        ipcRenderer.on('backup-progress', (_: any, data: any) => {
+        ipcRenderer.on('backup-progress', (_: unknown, data: BackupProgress) => {
             store.backupProgress = data;
         });
 
-        ipcRenderer.on('backup-started', (_: any, dbId: string) => {
+        ipcRenderer.on('backup-started', (_: unknown, dbId: string) => {
             store.isBackingUp = true;
             const db = store.databases.find(d => d.id === dbId);
             store.backupProgress = { status: 'starting', dbId, logs: [], error: null };
-            addToast(t('backup.started', { db: db?.name || dbId }), 'info');
+            addToast(t('backup.started', { db: db?.displayName || db?.name || dbId }), 'info');
         });
 
-        ipcRenderer.on('open-dbviewer', (_: any, dbId: string) => {
+        ipcRenderer.on('open-dbviewer', (_: unknown, dbId: string) => {
             const db = store.databases.find(d => d.id === dbId);
             if (db) {
                 store.viewerDb = db;
@@ -91,7 +101,7 @@ export function useAppEvents() {
             }
         });
 
-        ipcRenderer.on('edit-db', (_: any, dbId: string) => {
+        ipcRenderer.on('edit-db', (_: unknown, dbId: string) => {
             const db = store.databases.find(d => d.id === dbId);
             if (db) {
                 store.editingDatabase = JSON.parse(JSON.stringify(db));
@@ -99,7 +109,7 @@ export function useAppEvents() {
             }
         });
 
-        ipcRenderer.on('update-download-progress', (_: any, progress: any) => {
+        ipcRenderer.on('update-download-progress', (_: unknown, progress: { percent: number }) => {
             store.downloadingUpdate = true;
             store.downloadProgress = progress.percent;
         });

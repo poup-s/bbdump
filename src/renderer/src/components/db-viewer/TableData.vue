@@ -1,46 +1,72 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, computed, onBeforeUnmount } from 'vue';
+import { ref, watch, onMounted, computed, onBeforeUnmount, onActivated, onDeactivated } from 'vue';
 import { getErrorMessage } from '../../utils';
 import { useI18n } from '../../composables/useI18n';
 import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
 import { ipcRenderer } from '../../electron';
-import { Database, buildDbConfig } from '../../types';
+import { Database, buildDbConfig, type TableColumnDetail } from '../../types';
 import { Combobox, ComboboxInput, ComboboxOptions, ComboboxOption, ComboboxButton } from '@headlessui/vue';
 import { useDebounceFn } from '@vueuse/core';
+import { DEFAULT_SCHEMA, displayTableName } from './schemaNames';
+import { draftColumns, insertPayload, isAutoValue, isDbFilled, isDraftRequired, isRowTimestamp, keyShape, newKey } from './rowDraft';
+import type { ViewerTabState } from './viewerTabs';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   db: Database | null;
+  schema?: string;
   table: string | null;
-}>();
+  /** Search, sort and page to start from (table tabs keep them across switches and restarts) */
+  initialState?: ViewerTabState | null;
+}>(), {
+  schema: DEFAULT_SCHEMA,
+  initialState: null
+});
 
-defineEmits(['navigateToTable']);
+const emit = defineEmits<{
+  (e: 'navigateToTable', target: { schema: string; table: string }): void;
+  (e: 'row-count', payload: { schema: string; table: string; count: number }): void;
+  (e: 'state-change', state: ViewerTabState, origin: { schema: string; table: string }): void;
+  (e: 'dirty', dirty: boolean, origin: { schema: string; table: string }): void;
+}>();
 
 const { t } = useI18n();
 const { addToast } = useToast();
 const { showConfirm, state: confirmState } = useConfirm();
 
-const rows = ref<any[]>([]);
-const columns = ref<any[]>([]);
+// Rows come from pg over IPC: values are strings, numbers, booleans, Dates, JSON objects or null
+type CellValue = string | number | boolean | object | null;
+type TableRow = Record<string, CellValue>;
+
+// pg values that the Date constructor accepts (timestamps arrive as Date or ISO strings)
+const toDate = (value: unknown) => new Date(value as string | number | Date);
+
+const rows = ref<TableRow[]>([]);
+const columns = ref<TableColumnDetail[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
-const page = ref(1);
-const pageSize = ref(50);
+const page = ref(props.initialState?.page ?? 1);
+const pageSize = ref(props.initialState?.pageSize ?? 50);
 const totalRows = ref(0);
+// Large tables report the planner estimate; searches cap their count (see getTableData)
+const totalIsEstimate = ref(false);
+const hasMore = ref(false);
 const primaryKey = ref<string | null>(null);
-const searchQuery = ref('');
-const sortBy = ref<string | null>(null);
-const sortOrder = ref<'asc' | 'desc'>('asc');
+const searchQuery = ref(props.initialState?.search ?? '');
+const sortBy = ref<string | null>(props.initialState?.sortBy ?? null);
+const sortOrder = ref<'asc' | 'desc'>(props.initialState?.sortOrder ?? 'asc');
 
 // Slide-over edit state
-const slideoverEdits = ref<Record<string, any>>({});
+const slideoverEdits = ref<Record<string, unknown>>({});
 const slideoverSaving = ref(false);
 
 // Add row state
 const isAddMode = ref(false);
-const addFormData = ref<Record<string, any>>({});
+/** The add form was opened from an existing row (duplicate) */
+const duplicateFrom = ref<TableRow | null>(null);
+const addFormData = ref<Record<string, CellValue>>({});
 const addSaving = ref(false);
-const fkOptions = ref<Record<string, { value: any; label: string; details: { key: string; value: string }[] }[]>>({});
+const fkOptions = ref<Record<string, { value: CellValue; label: string; details: { key: string; value: string }[] }[]>>({});
 const fkLoading = ref<Record<string, boolean>>({});
 
 // Column resize state
@@ -48,7 +74,6 @@ const columnWidths = ref<Map<string, number>>(new Map());
 const resizing = ref<{ col: string; startX: number; startWidth: number } | null>(null);
 
 // Copy feedback
-const copiedCell = ref<string | null>(null);
 
 // Page jump
 const pageJumpInput = ref('');
@@ -61,9 +86,9 @@ const copiedField = ref<string | null>(null);
 const fkPreview = ref<{
   tableName: string;
   columnName: string;
-  value: any;
-  row: Record<string, any> | null;
-  columns: any[];
+  value: unknown;
+  row: TableRow | null;
+  columns: TableColumnDetail[];
   loading: boolean;
   error: string | null;
 } | null>(null);
@@ -137,7 +162,7 @@ const nextRow = () => {
   }
 };
 
-const copyFieldValue = async (value: any, colName: string) => {
+const copyFieldValue = async (value: unknown, colName: string) => {
   const text = value === null ? '' : String(value);
   try {
     await navigator.clipboard.writeText(text);
@@ -154,7 +179,10 @@ const handleKeydown = (e: KeyboardEvent) => {
     return;
   }
   if (selectedRowIndex.value === null) return;
-  if (e.key === 'Escape') {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd') {
+    e.preventDefault();
+    duplicateRow();
+  } else if (e.key === 'Escape') {
     closeDetail();
   } else if (e.key === 'ArrowDown') {
     e.preventDefault();
@@ -189,15 +217,17 @@ const loadData = async () => {
     // First get columns to identify PK
     const schema = await ipcRenderer.invoke('get-table-schema', {
       db: dbConfig,
+      schema: props.schema,
       table: props.table
     });
     columns.value = schema.columns;
-    const pkCol = schema.columns.find((c: any) => c.is_primary);
+    const pkCol = columns.value.find((c) => c.is_primary);
     primaryKey.value = pkCol ? pkCol.column_name : null;
 
     // Get data
     const result = await ipcRenderer.invoke('get-table-data', {
       db: dbConfig,
+      schema: props.schema,
       table: props.table,
       page: page.value,
       pageSize: pageSize.value,
@@ -208,6 +238,12 @@ const loadData = async () => {
 
     rows.value = result.rows;
     totalRows.value = result.total;
+    totalIsEstimate.value = !!result.totalIsEstimate;
+    hasMore.value = !!result.hasMore;
+    // Only report exact counts upward (they replace the sidebar estimate)
+    if (!searchQuery.value && !result.totalIsEstimate) {
+      emit('row-count', { schema: props.schema, table: props.table, count: result.total });
+    }
   } catch (err) {
     console.error('Error loading data:', err);
     error.value = getErrorMessage(err);
@@ -234,13 +270,13 @@ const handleSort = (columnName: string) => {
 // Delete current row from slide-over
 const deleteCurrentRow = () => {
   if (!primaryKey.value || selectedRowData.value === null) {
-    addToast(t('viewer.noPrimaryKey'), 'error');
+    addToast(t('viewer.noPrimaryKey'), 'warning');
     return;
   }
 
   const pkValue = selectedRowData.value[primaryKey.value];
   if (pkValue === null || pkValue === undefined) {
-    addToast(t('viewer.pkValueMissing'), 'error');
+    addToast(t('viewer.pkValueMissing'), 'warning');
     return;
   }
 
@@ -255,6 +291,7 @@ const deleteCurrentRow = () => {
       try {
         await ipcRenderer.invoke('delete-table-row', {
           db: buildDbConfig(props.db),
+          schema: props.schema,
           table: props.table,
           primaryKeyColumn: primaryKey.value,
           rowId: pkValue
@@ -265,7 +302,7 @@ const deleteCurrentRow = () => {
         fkPreview.value = null;
         loadData();
       } catch (err) {
-        addToast(t('viewer.deleteErrorDetail', { error: getErrorMessage(err) }), 'error');
+        addToast(t('viewer.deleteErrorDetail'), 'error', { detail: getErrorMessage(err) });
       }
     }
   });
@@ -279,7 +316,7 @@ const prevPage = () => {
 };
 
 const nextPage = () => {
-  if (page.value * pageSize.value < totalRows.value) {
+  if (hasMore.value) {
     page.value++;
     loadData();
   }
@@ -303,7 +340,7 @@ const changePageSize = (newSize: number) => {
 };
 
 // Slide-over edit functions
-const getFieldEditValue = (col: any) => {
+const getFieldEditValue = (col: TableColumnDetail) => {
   const colName = col.column_name;
   if (colName in slideoverEdits.value) {
     return slideoverEdits.value[colName];
@@ -311,7 +348,7 @@ const getFieldEditValue = (col: any) => {
   return selectedRowData.value ? selectedRowData.value[colName] : null;
 };
 
-const handleFieldChange = (col: any, newValue: any) => {
+const handleFieldChange = (col: TableColumnDetail, newValue: unknown) => {
   const colName = col.column_name;
   const original = selectedRowData.value ? selectedRowData.value[colName] : null;
 
@@ -335,7 +372,7 @@ const handleFieldChange = (col: any, newValue: any) => {
   }
 };
 
-const getFieldInputType = (col: any): string => {
+const getFieldInputType = (col: TableColumnDetail): string => {
   const dtype = col.data_type?.toLowerCase() || '';
   const udtName = col.udt_name?.toLowerCase() || '';
   if (dtype === 'boolean' || udtName === 'bool') return 'checkbox';
@@ -347,13 +384,13 @@ const getFieldInputType = (col: any): string => {
   return 'text';
 };
 
-const formatForInput = (value: any, col: any): string => {
+const formatForInput = (value: unknown, col: TableColumnDetail): string => {
   if (value === null || value === undefined) return '';
   const dtype = col.data_type?.toLowerCase() || '';
   const pad = (n: number) => String(n).padStart(2, '0');
   if (dtype.includes('timestamp')) {
     try {
-      const d = new Date(value);
+      const d = toDate(value);
       if (!isNaN(d.getTime())) {
         return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
       }
@@ -361,7 +398,7 @@ const formatForInput = (value: any, col: any): string => {
   }
   if (dtype === 'date') {
     try {
-      const d = new Date(value);
+      const d = toDate(value);
       if (!isNaN(d.getTime())) {
         return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       }
@@ -390,6 +427,7 @@ const saveSlideoverChanges = async () => {
 
     await ipcRenderer.invoke('update-table-data', {
       db: buildDbConfig(props.db),
+      schema: props.schema,
       table: props.table,
       changes
     });
@@ -399,7 +437,7 @@ const saveSlideoverChanges = async () => {
     loadData();
   } catch (err) {
     console.error('Error saving changes:', err);
-    addToast(t('viewer.saveErrorDetail', { error: getErrorMessage(err) }), 'error');
+    addToast(t('viewer.saveErrorDetail'), 'error', { detail: getErrorMessage(err) });
   } finally {
     slideoverSaving.value = false;
   }
@@ -410,16 +448,65 @@ const discardSlideoverChanges = () => {
 };
 
 // Add row mode
-const editableColumnsForAdd = computed(() => columns.value.filter(col => !col.is_primary));
-const isFieldRequired = (col: any) => col.is_nullable === 'NO' && !col.column_default;
+// Keys are shown only when the database does not generate them (e.g. Prisma cuid ids)
+const editableColumnsForAdd = computed(() => draftColumns(columns.value));
+const isFieldRequired = (col: TableColumnDetail) => isDraftRequired(col);
 
-const startAddRow = () => {
+/** A key column that can get a fresh value shaped like the existing ones */
+const keyShapeFor = (col: TableColumnDetail) =>
+  col.is_primary ? keyShape(col, duplicateFrom.value?.[col.column_name] ?? rows.value[0]?.[col.column_name]) : null;
+const generateKey = (col: TableColumnDetail) => {
+  const shape = keyShapeFor(col);
+  if (shape) addFormData.value[col.column_name] = newKey(shape);
+};
+/** Duplicate: a key or unique column still holding the source value would be rejected */
+const mustChangeOnDuplicate = (col: TableColumnDetail) => {
+  const source = duplicateFrom.value;
+  if (!source || !(col.is_unique || col.is_primary)) return false;
+  const value = addFormData.value[col.column_name];
+  if (value === null || value === undefined || value === '') return false;
+  return String(value) === formatForInput(source[col.column_name], col);
+};
+const duplicateConflicts = computed(() => editableColumnsForAdd.value.filter(mustChangeOnDuplicate));
+
+const isDraftEmpty = (col: TableColumnDetail) => {
+  const value = addFormData.value[col.column_name];
+  return value === null || value === undefined || value === '';
+};
+
+/** Text values can be made unique in one click: name+copy@domain for emails, value-copy otherwise */
+const canMakeUnique = (col: TableColumnDetail) =>
+  typeof addFormData.value[col.column_name] === 'string' && /char|text|citext/.test(col.data_type || col.udt_name || '');
+const makeUnique = (col: TableColumnDetail) => {
+  const value = String(addFormData.value[col.column_name] ?? '');
+  const email = value.match(/^([^@\s]+)@([^@\s]+)$/);
+  addFormData.value[col.column_name] = email ? `${email[1]}+copy@${email[2]}` : `${value}-copy`;
+};
+
+const addFieldsRef = ref<HTMLElement | null>(null);
+const focusField = (name: string) => {
+  const card = [...(addFieldsRef.value?.querySelectorAll<HTMLElement>('[data-field]') ?? [])]
+    .find(element => element.dataset.field === name);
+  card?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  card?.querySelector<HTMLElement>('textarea, input')?.focus({ preventScroll: true });
+};
+
+/** "Copy of row …": the source key, shortened */
+const duplicateSourceLabel = computed(() => {
+  if (!duplicateFrom.value || !primaryKey.value) return '';
+  const key = String(duplicateFrom.value[primaryKey.value] ?? '');
+  return key.length > 14 ? `${key.slice(0, 12)}…` : key;
+});
+
+/** Opens the add form, empty or pre-filled from a row (duplicate). */
+const startAddRow = (source: TableRow | null = null) => {
   // Close row detail if open
   selectedRowIndex.value = null;
   fkPreview.value = null;
   slideoverEdits.value = {};
 
   isAddMode.value = true;
+  duplicateFrom.value = source;
   addFormData.value = {};
   fkOptions.value = {};
   fkLoading.value = {};
@@ -428,14 +515,21 @@ const startAddRow = () => {
   const pad = (n: number) => String(n).padStart(2, '0');
   const nowStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
-  columns.value.forEach(col => {
-    if (col.is_primary) return;
-
-    // Auto-fill timestamps
-    if (['created_at', 'updated_at', 'timestamp'].includes(col.column_name) &&
-        (col.data_type.includes('timestamp') || col.data_type.includes('date'))) {
-      addFormData.value[col.column_name] = nowStr;
-    } else if (col.column_default) {
+  editableColumnsForAdd.value.forEach(col => {
+    if (col.is_primary) {
+      // Not generated by the database: a fresh key in the same shape, else typed by the user
+      const shape = keyShapeFor(col);
+      addFormData.value[col.column_name] = shape ? newKey(shape) : '';
+    } else if (isRowTimestamp(col)) {
+      // Creation / update times: now, also when duplicating
+      addFormData.value[col.column_name] = isDbFilled(col) ? null : nowStr;
+    } else if (source && !isAutoValue(col)) {
+      // Duplicate: copy the value (sequences, generated ids and "now" are left to the database)
+      const value = source[col.column_name];
+      addFormData.value[col.column_name] = value === null || value === undefined
+        ? null
+        : getFieldInputType(col) === 'checkbox' ? value === true || value === 't' : formatForInput(value, col);
+    } else if (isDbFilled(col)) {
       addFormData.value[col.column_name] = null; // Let DB handle defaults
     } else if (col.is_nullable === 'NO') {
       // Required field — initialize with appropriate empty value
@@ -447,13 +541,20 @@ const startAddRow = () => {
 
     // Load FK options
     if (col.is_foreign && col.foreign_key) {
-      loadFkOptions(col.column_name, col.foreign_key.table, col.foreign_key.column);
+      loadFkOptions(col.column_name, col.foreign_key.schema, col.foreign_key.table, col.foreign_key.column);
     }
   });
 };
 
+const duplicateRow = () => {
+  if (!selectedRowData.value) return;
+  const source = { ...selectedRowData.value };
+  guardedAction(() => startAddRow(source));
+};
+
 const cancelAddRow = () => {
   isAddMode.value = false;
+  duplicateFrom.value = null;
   addFormData.value = {};
   fkOptions.value = {};
   fkLoading.value = {};
@@ -461,6 +562,12 @@ const cancelAddRow = () => {
 
 const saveNewRow = async () => {
   if (!props.db || !props.table) return;
+
+  // A duplicated key or unique value would only come back as a database error
+  if (duplicateConflicts.value.length > 0) {
+    focusField(duplicateConflicts.value[0].column_name);
+    return;
+  }
 
   // Validate required fields
   const missingFields = editableColumnsForAdd.value
@@ -471,7 +578,7 @@ const saveNewRow = async () => {
     });
 
   if (missingFields.length > 0) {
-    addToast(t('viewer.addRowRequiredMissing', { fields: missingFields.map(f => f.column_name).join(', ') }), 'error');
+    addToast(t('viewer.addRowRequiredMissing', { fields: missingFields.map(f => f.column_name).join(', ') }), 'warning');
     return;
   }
 
@@ -479,8 +586,10 @@ const saveNewRow = async () => {
   try {
     await ipcRenderer.invoke('insert-table-row', {
       db: buildDbConfig(props.db),
+      schema: props.schema,
       table: props.table,
-      rowData: addFormData.value
+      // Empty columns the database fills are left out (NULL would override their default)
+      rowData: insertPayload(columns.value, addFormData.value)
     });
 
     addToast(t('viewer.addRowSuccess'), 'success');
@@ -488,19 +597,20 @@ const saveNewRow = async () => {
     loadData();
   } catch (err) {
     console.error('Error adding row:', err);
-    addToast(getErrorMessage(err) || 'Error adding row', 'error');
+    addToast(t('viewer.addRowError'), 'error', { detail: getErrorMessage(err) });
   } finally {
     addSaving.value = false;
   }
 };
 
-const loadFkOptions = async (columnName: string, foreignTable: string, foreignColumn: string, search = '') => {
+const loadFkOptions = async (columnName: string, foreignSchema: string | undefined, foreignTable: string, foreignColumn: string, search = '') => {
   if (!props.db) return;
 
   fkLoading.value = { ...fkLoading.value, [columnName]: true };
   try {
     const result = await ipcRenderer.invoke('get-table-data', {
       db: buildDbConfig(props.db),
+      schema: foreignSchema || props.schema,
       table: foreignTable,
       page: 1,
       pageSize: 50,
@@ -511,7 +621,7 @@ const loadFkOptions = async (columnName: string, foreignTable: string, foreignCo
 
     fkOptions.value = {
       ...fkOptions.value,
-      [columnName]: result.rows.map((row: any) => ({
+      [columnName]: result.rows.map((row: TableRow) => ({
         value: row[foreignColumn],
         label: formatFkLabel(row, foreignColumn),
         details: buildFkDetails(row, foreignColumn)
@@ -524,14 +634,14 @@ const loadFkOptions = async (columnName: string, foreignTable: string, foreignCo
   }
 };
 
-const formatFkLabel = (row: any, idColumn: string): string => {
+const formatFkLabel = (row: TableRow, idColumn: string): string => {
   const descriptiveKeys = ['name', 'title', 'email', 'username', 'label', 'description', 'slug'];
   const foundKey = descriptiveKeys.find(key => Object.prototype.hasOwnProperty.call(row, key));
   return foundKey ? `${row[foundKey]} (${row[idColumn]})` : String(row[idColumn]);
 };
 
 // Build secondary details for FK option (up to 4 non-ID columns)
-const buildFkDetails = (row: any, idColumn: string): { key: string; value: string }[] => {
+const buildFkDetails = (row: TableRow, idColumn: string): { key: string; value: string }[] => {
   const skipKeys = new Set([idColumn, 'id', 'created_at', 'updated_at', 'deleted_at']);
   const descriptiveKeys = ['name', 'title', 'email', 'username', 'label', 'description', 'slug'];
   const details: { key: string; value: string }[] = [];
@@ -563,30 +673,18 @@ const buildFkDetails = (row: any, idColumn: string): { key: string; value: strin
 const handleFkSearch = (columnName: string, query: string) => {
   const col = columns.value.find(c => c.column_name === columnName);
   if (col && col.foreign_key) {
-    loadFkOptions(columnName, col.foreign_key.table, col.foreign_key.column, query);
-  }
-};
-
-// Copy cell value to clipboard
-const _copyCell = async (value: any, rowIndex: number, colName: string) => {
-  const text = value === null ? '' : String(value);
-  try {
-    await navigator.clipboard.writeText(text);
-    copiedCell.value = `${rowIndex}:${colName}`;
-    setTimeout(() => { copiedCell.value = null; }, 1200);
-  } catch {
-    // Fallback for non-secure contexts
+    loadFkOptions(columnName, col.foreign_key.schema, col.foreign_key.table, col.foreign_key.column, query);
   }
 };
 
 // Export CSV
 const exportCSV = () => {
   if (rows.value.length === 0 || columns.value.length === 0) {
-    addToast(t('viewer.exportError'), 'error');
+    addToast(t('viewer.exportError'), 'warning');
     return;
   }
 
-  const colNames = columns.value.map((c: any) => c.column_name);
+  const colNames = columns.value.map((c) => c.column_name);
   const header = colNames.map(escapeCsvField).join(',');
   const csvRows = rows.value.map(row =>
     colNames.map(col => escapeCsvField(row[col])).join(',')
@@ -597,14 +695,14 @@ const exportCSV = () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${props.table || 'export'}_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `${props.table ? displayTableName(props.schema, props.table) : 'export'}_${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 
   addToast(t('viewer.exportSuccess', { count: rows.value.length, filename: a.download }), 'success');
 };
 
-const escapeCsvField = (value: any): string => {
+const escapeCsvField = (value: unknown): string => {
   if (value === null || value === undefined) return '';
   const str = String(value);
   if (str.includes(',') || str.includes('"') || str.includes('\n')) {
@@ -614,14 +712,15 @@ const escapeCsvField = (value: any): string => {
 };
 
 // Open FK relation preview in slide-over
-const navigateToFk = async (col: any, value: any) => {
+const navigateToFk = async (col: TableColumnDetail, value: unknown) => {
   if (!col.foreign_key || value === null || !props.db) return;
 
+  const targetSchema = col.foreign_key.schema || props.schema;
   const targetTable = col.foreign_key.table;
   const targetColumn = col.foreign_key.column;
 
   fkPreview.value = {
-    tableName: targetTable,
+    tableName: displayTableName(targetSchema, targetTable, props.schema),
     columnName: targetColumn,
     value,
     row: null,
@@ -634,9 +733,10 @@ const navigateToFk = async (col: any, value: any) => {
     const dbConfig = buildDbConfig(props.db);
 
     const [schema, data] = await Promise.all([
-      ipcRenderer.invoke('get-table-schema', { db: dbConfig, table: targetTable }),
+      ipcRenderer.invoke('get-table-schema', { db: dbConfig, schema: targetSchema, table: targetTable }),
       ipcRenderer.invoke('get-fk-row', {
         db: dbConfig,
+        schema: targetSchema,
         table: targetTable,
         column: targetColumn,
         value
@@ -657,7 +757,7 @@ const navigateToFk = async (col: any, value: any) => {
 };
 
 // Cell display formatting
-const formatCellValue = (value: any, col: any): string => {
+const formatCellValue = (value: unknown, col: TableColumnDetail): string => {
   if (value === null) return '';
   const dtype = col.data_type?.toLowerCase() || '';
   const udtName = col.udt_name?.toLowerCase() || '';
@@ -676,7 +776,7 @@ const formatCellValue = (value: any, col: any): string => {
   // Timestamp/date
   if (dtype.includes('timestamp') || dtype === 'date') {
     try {
-      const d = new Date(value);
+      const d = toDate(value);
       if (!isNaN(d.getTime())) {
         if (dtype === 'date') return d.toLocaleDateString();
         return d.toLocaleString();
@@ -686,7 +786,7 @@ const formatCellValue = (value: any, col: any): string => {
   return String(value);
 };
 
-const getCellClass = (value: any, col: any): string => {
+const getCellClass = (value: unknown, col: TableColumnDetail): string => {
   if (value === null) return '';
   const dtype = col.data_type?.toLowerCase() || '';
   const udtName = col.udt_name?.toLowerCase() || '';
@@ -731,7 +831,7 @@ const getColStyle = (colName: string) => {
   return w ? { width: `${w}px`, minWidth: `${w}px`, maxWidth: `${w}px` } : {};
 };
 
-watch(() => props.table, () => {
+watch(() => [props.schema, props.table], () => {
   page.value = 1;
   searchQuery.value = '';
   sortBy.value = null;
@@ -747,9 +847,32 @@ watch(() => props.table, () => {
   loadData();
 });
 
+// Table tabs keep this state; unsaved edits are reported so closing a tab can warn
+const origin = () => ({ schema: props.schema, table: props.table ?? '' });
+watch([searchQuery, page, pageSize, sortBy, sortOrder], () => {
+  emit('state-change', {
+    search: searchQuery.value,
+    page: page.value,
+    pageSize: pageSize.value,
+    sortBy: sortBy.value,
+    sortOrder: sortOrder.value,
+  }, origin());
+});
+// An open add / duplicate form is work in progress too: the tab must not be replaced
+watch(() => hasUnsavedChanges.value || isAddMode.value, (dirty) => emit('dirty', dirty, origin()));
+
 onMounted(() => {
   loadData();
   document.addEventListener('keydown', handleKeydown);
+});
+
+// Kept alive in a tab: only the visible table listens to the keyboard
+onActivated(() => {
+  document.removeEventListener('keydown', handleKeydown);
+  document.addEventListener('keydown', handleKeydown);
+});
+onDeactivated(() => {
+  document.removeEventListener('keydown', handleKeydown);
 });
 
 defineExpose({
@@ -828,7 +951,7 @@ defineExpose({
         </select>
 
         <span class="text-[10px] text-gray-500 dark:text-gray-400 tabular-nums mx-1">
-          {{ (page - 1) * pageSize + 1 }}-{{ Math.min(page * pageSize, totalRows) }} / {{ totalRows }}
+          {{ (page - 1) * pageSize + 1 }}-{{ Math.min(page * pageSize, totalRows) }} / {{ totalIsEstimate ? '~' : '' }}{{ totalRows.toLocaleString() }}
         </span>
         <button
           @click="prevPage"
@@ -852,7 +975,7 @@ defineExpose({
 
         <button
           @click="nextPage"
-          :disabled="page * pageSize >= totalRows || loading"
+          :disabled="!hasMore || loading"
           class="p-1 border border-gray-200 dark:border-white/10 rounded-md hover:bg-gray-50 dark:hover:bg-white/5 disabled:opacity-50 disabled:cursor-not-allowed text-gray-600 dark:text-gray-400 transition-colors"
         >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1098,7 +1221,12 @@ defineExpose({
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
                   </svg>
                 </div>
-                <span class="text-xs font-bold text-gray-900 dark:text-white truncate">{{ t('viewer.newRow') }}</span>
+                <div class="min-w-0">
+                  <div class="text-xs font-bold text-gray-900 dark:text-white truncate">{{ duplicateFrom ? t('viewer.duplicateRowTitle') : t('viewer.newRow') }}</div>
+                  <div v-if="duplicateSourceLabel" class="text-[10px] text-gray-500 dark:text-gray-400 font-mono truncate">
+                    {{ t('viewer.duplicateOf', { key: duplicateSourceLabel }) }}
+                  </div>
+                </div>
               </div>
               <div class="flex items-center gap-1.5">
                 <button @click="cancelAddRow" class="text-[10px] font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 px-2 py-1 rounded transition-colors">
@@ -1106,7 +1234,8 @@ defineExpose({
                 </button>
                 <button
                   @click="saveNewRow"
-                  :disabled="addSaving"
+                  :disabled="addSaving || duplicateConflicts.length > 0"
+                  :title="duplicateConflicts.length ? t('viewer.fixConflictsFirst', { count: duplicateConflicts.length }) : undefined"
                   class="text-[10px] font-medium text-white bg-emerald-600 hover:bg-emerald-700 px-3 py-1 rounded transition-colors disabled:opacity-50 flex items-center gap-1"
                 >
                   <svg v-if="addSaving" class="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
@@ -1118,22 +1247,82 @@ defineExpose({
               </div>
             </div>
 
+            <!-- Duplicate: values that must change before the row can be added -->
+            <button
+              v-if="duplicateConflicts.length"
+              type="button"
+              class="mx-3 mt-3 flex items-start gap-2 rounded-lg border border-amber-300 dark:border-amber-500/40 bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-left text-[11px] text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-500/15 transition-colors shrink-0"
+              @click="focusField(duplicateConflicts[0].column_name)"
+            >
+              <svg class="w-3.5 h-3.5 mt-px shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span>
+                <span class="font-semibold">{{ t('viewer.fixConflictsFirst', { count: duplicateConflicts.length }) }}</span>
+                · {{ duplicateConflicts.map(c => c.column_name).join(', ') }}
+              </span>
+            </button>
+
             <!-- Fields -->
-            <div class="flex-1 overflow-y-auto p-3 space-y-2">
+            <div ref="addFieldsRef" class="flex-1 overflow-y-auto p-3 space-y-2">
               <div
                 v-for="col in editableColumnsForAdd"
                 :key="col.column_name"
-                class="rounded-lg border p-2.5 border-gray-100 dark:border-white/5 bg-gray-50/50 dark:bg-surface/20"
+                :data-field="col.column_name"
+                class="rounded-lg border p-2.5 transition-colors"
+                :class="mustChangeOnDuplicate(col)
+                  ? 'border-amber-400 dark:border-amber-500/60 bg-amber-50/70 dark:bg-amber-500/10 ring-1 ring-amber-400/40'
+                  : 'border-gray-100 dark:border-white/5 bg-gray-50/50 dark:bg-surface/20'"
               >
                 <!-- Field header -->
                 <div class="flex items-center justify-between mb-1.5">
                   <div class="flex items-center gap-1.5 min-w-0">
                     <span class="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide truncate">{{ col.column_name }}</span>
                     <span v-if="col.is_foreign" class="text-[9px]" title="FK">🔗</span>
-                    <span v-if="isFieldRequired(col)" class="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" title="Required"></span>
+                    <span v-if="col.is_primary" class="text-[9px]" :title="t('viewer.primaryKey')">🔑</span>
+                    <!-- Red only when something is missing -->
+                    <span v-if="isFieldRequired(col) && isDraftEmpty(col)" class="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" :title="t('common.required')"></span>
                   </div>
-                  <span class="text-[9px] text-gray-400 dark:text-gray-500 font-mono">{{ col.data_type }}</span>
+                  <div class="flex items-center gap-2 shrink-0">
+                    <button
+                      v-if="keyShapeFor(col)"
+                      type="button"
+                      class="text-[9px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline"
+                      :title="t('viewer.generateKeyHint')"
+                      @click="generateKey(col)"
+                    >
+                      {{ t('viewer.generateKey') }}
+                    </button>
+                    <span class="text-[9px] text-gray-400 dark:text-gray-500 font-mono">{{ col.data_type }}</span>
+                  </div>
                 </div>
+                <div v-if="mustChangeOnDuplicate(col)" class="mb-1.5 flex items-center justify-between gap-2">
+                  <p class="text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                    {{ col.is_primary ? t('viewer.keyAlreadyUsed') : t('viewer.uniqueAlreadyUsed') }}
+                  </p>
+                  <button
+                    v-if="canMakeUnique(col) && !col.is_primary"
+                    type="button"
+                    class="shrink-0 text-[10px] font-semibold text-amber-800 dark:text-amber-300 bg-amber-200/60 dark:bg-amber-500/20 hover:bg-amber-200 dark:hover:bg-amber-500/30 px-2 py-0.5 rounded transition-colors"
+                    @click="makeUnique(col)"
+                  >
+                    {{ t('viewer.makeUnique') }}
+                  </button>
+                  <button
+                    v-else-if="col.is_primary && keyShapeFor(col)"
+                    type="button"
+                    class="shrink-0 text-[10px] font-semibold text-amber-800 dark:text-amber-300 bg-amber-200/60 dark:bg-amber-500/20 hover:bg-amber-200 dark:hover:bg-amber-500/30 px-2 py-0.5 rounded transition-colors"
+                    @click="generateKey(col)"
+                  >
+                    {{ t('viewer.generateKey') }}
+                  </button>
+                </div>
+                <p
+                  v-else-if="col.is_primary && keyShapeFor(col) && !isDraftEmpty(col)"
+                  class="mb-1.5 text-[10px] text-emerald-600 dark:text-emerald-400"
+                >
+                  {{ t('viewer.keyGenerated') }}
+                </p>
 
                 <!-- Field input -->
                 <div class="text-xs font-mono">
@@ -1144,12 +1333,12 @@ defineExpose({
                         <div class="relative w-full">
                           <ComboboxInput
                             class="w-full text-[11px] font-mono bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-md px-2 py-1.5 pr-8 text-gray-900 dark:text-gray-200 focus:ring-1 focus:ring-emerald-500 focus:border-transparent outline-none"
-                            :displayValue="(val: any) => {
+                            :displayValue="(val: unknown) => {
                               const option = fkOptions[col.column_name]?.find(o => o.value === val);
                               return option ? option.label : (val != null ? String(val) : '');
                             }"
                             @change="handleFkSearch(col.column_name, ($event.target as HTMLInputElement).value)"
-                            :placeholder="`Select ${col.foreign_key.table}...`"
+                            :placeholder="t('viewer.selectForeignRow', { table: displayTableName(col.foreign_key.schema, col.foreign_key.table, props.schema) })"
                           />
                           <ComboboxButton class="absolute inset-y-0 right-0 flex items-center pr-1.5">
                             <svg class="h-3.5 w-3.5 text-gray-400" viewBox="0 0 20 20" fill="none" stroke="currentColor">
@@ -1158,11 +1347,11 @@ defineExpose({
                           </ComboboxButton>
                         </div>
                         <ComboboxOptions class="absolute mt-1 max-h-60 w-full overflow-auto rounded-md bg-white dark:bg-zinc-800 py-1 text-xs shadow-lg ring-1 ring-black/5 dark:ring-white/10 focus:outline-none z-50">
-                          <div v-if="fkLoading[col.column_name]" class="py-2 px-3 text-gray-500 text-[10px]">Loading...</div>
+                          <div v-if="fkLoading[col.column_name]" class="py-2 px-3 text-gray-500 text-[10px]">{{ t('common.loading') }}…</div>
                           <div v-else-if="!fkOptions[col.column_name]?.length" class="py-2 px-3 text-gray-500 text-[10px]">{{ t('viewer.noData') }}</div>
                           <ComboboxOption
                             v-for="option in fkOptions[col.column_name]"
-                            :key="option.value"
+                            :key="String(option.value)"
                             :value="option.value"
                             v-slot="{ selected, active }"
                           >
@@ -1226,11 +1415,11 @@ defineExpose({
                   <template v-else-if="getFieldInputType(col) === 'textarea'">
                     <div class="relative">
                       <textarea
-                        :value="addFormData[col.column_name] ?? ''"
+                        :value="String(addFormData[col.column_name] ?? '')"
                         @input="addFormData[col.column_name] = ($event.target as HTMLTextAreaElement).value"
                         class="w-full text-[11px] font-mono bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-md px-2 py-1.5 text-gray-900 dark:text-gray-200 focus:ring-1 focus:ring-emerald-500 focus:border-transparent outline-none resize-y min-h-[60px] max-h-[200px]"
                         rows="3"
-                        :placeholder="`Enter ${col.column_name}`"
+                        :placeholder="t('viewer.enterValue', { column: col.column_name })"
                       ></textarea>
                       <button v-if="col.is_nullable === 'YES'" @click="addFormData[col.column_name] = null" class="absolute top-1 right-1 text-[9px] text-gray-400 hover:text-red-500 px-1 py-0.5 rounded bg-gray-50 dark:bg-white/5 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors font-semibold" title="Set NULL">NULL</button>
                     </div>
@@ -1241,7 +1430,7 @@ defineExpose({
                     <div class="flex items-center gap-1.5">
                       <input
                         :type="getFieldInputType(col)"
-                        :value="addFormData[col.column_name] ?? ''"
+                        :value="String(addFormData[col.column_name] ?? '')"
                         @input="addFormData[col.column_name] = ($event.target as HTMLInputElement).value"
                         class="flex-1 text-[11px] font-mono bg-white dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-md px-2 py-1.5 text-gray-900 dark:text-gray-200 focus:ring-1 focus:ring-emerald-500 focus:border-transparent outline-none"
                         :placeholder="col.column_default ? '' : `Enter ${col.column_name}`"
@@ -1294,6 +1483,16 @@ defineExpose({
                   >
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
+                  <!-- Duplicate button -->
+                  <button
+                    @click.stop="duplicateRow"
+                    class="p-1 text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 rounded transition-colors"
+                    :title="t('viewer.duplicateRow') + ' (⌘D)'"
+                  >
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                     </svg>
                   </button>
                   <!-- Delete button -->

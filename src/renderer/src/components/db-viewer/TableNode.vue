@@ -1,12 +1,9 @@
 <script setup lang="ts">
 import { Handle, Position } from '@vue-flow/core';
+import type { TableNodeData } from '../../types';
 
 defineProps<{
-  data: {
-    label: string;
-    columns: any[];
-    primaryKeys: string[];
-  };
+  data: TableNodeData;
 }>();
 </script>
 

@@ -254,6 +254,41 @@ download() {
   else
     error "Download failed. Version ${VERSION} may not exist for ${PLATFORM}/${ARCH}."
   fi
+
+  verify_checksum
+}
+
+# --- Verify checksum ---
+# electron-builder publishes the base64 sha512 of every artifact in latest-*.yml
+verify_checksum() {
+  local manifest
+  case "$PLATFORM" in
+    macos) manifest="latest-mac.yml" ;;
+    linux) [ "$ARCH" = "arm64" ] && manifest="latest-linux-arm64.yml" || manifest="latest-linux.yml" ;;
+  esac
+
+  local manifest_content expected actual
+  manifest_content=$(curl -fsSL -H "User-Agent: bbdump-installer" "${GITHUB_DL}/v${VERSION}/${manifest}" 2>/dev/null) || true
+  expected=$(printf '%s\n' "$manifest_content" | awk -v file="$FILENAME" '
+    $0 ~ "url: " file "$" { found = 1; next }
+    found && /sha512:/ { print $2; exit }
+    /- url:/ { found = 0 }')
+
+  if [ -z "$expected" ]; then
+    warn "No published checksum for ${FILENAME}; skipping verification"
+    return
+  fi
+  if ! command -v openssl >/dev/null 2>&1; then
+    warn "openssl not found; skipping checksum verification"
+    return
+  fi
+
+  actual=$(openssl dgst -sha512 -binary "$DOWNLOAD_PATH" | base64 | tr -d '\n')
+  if [ "$actual" != "$expected" ]; then
+    rm -f "$DOWNLOAD_PATH"
+    error "Checksum mismatch for ${FILENAME}: the download is corrupted or was tampered with"
+  fi
+  success "Checksum verified (sha512)"
 }
 
 # --- Install macOS ---
@@ -380,7 +415,7 @@ create_desktop_entry() {
 
   # Method 2: Download from GitHub release assets
   if [ "$icon_extracted" -eq 0 ]; then
-    if curl -fsSL "https://github.com/${REPO}/releases/download/${VERSION}/logo.png" -o "$icon_path" 2>/dev/null; then
+    if curl -fsSL "https://github.com/${REPO}/releases/download/v${VERSION}/logo.png" -o "$icon_path" 2>/dev/null; then
       cp "$icon_path" "${pixmaps_dir}/${APP_NAME}.png"
       icon_extracted=1
     fi
@@ -1030,7 +1065,13 @@ uninstall_homebrew() {
 # --- Uninstall: bbdump config & data ---
 uninstall_config_data() {
   step "Removing bbdump data"
-  local data_dir="$HOME/.bbdump"
+  # Electron userData: where the app actually stores config.json, keys and logs
+  local data_dir
+  if [ "$(uname -s)" = "Darwin" ]; then
+    data_dir="$HOME/Library/Application Support/bbdump"
+  else
+    data_dir="${XDG_CONFIG_HOME:-$HOME/.config}/bbdump"
+  fi
   if [ -d "$data_dir" ]; then
     warn "${E}This will delete all config, encryption keys, and logs${R}"
     echo -ne "    ${Y}Are you sure? [y/N]:${R} "
@@ -1042,7 +1083,7 @@ uninstall_config_data() {
       info "Skipped"
     fi
   else
-    info "No data directory found (~/.bbdump)"
+    info "No data directory found (${data_dir})"
   fi
 }
 

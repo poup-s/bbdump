@@ -3,21 +3,33 @@ import { ref, watch, onMounted } from 'vue';
 import { getErrorMessage } from '../../utils';
 import { useI18n } from '../../composables/useI18n';
 import { ipcRenderer } from '../../electron';
-import { Database, buildDbConfig } from '../../types';
+import { Database, buildDbConfig, type FullSchema, type SchemaForeignKey, type TableColumnDetail } from '../../types';
+import { DEFAULT_SCHEMA, displayTableName } from './schemaNames';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   db: Database | null;
+  schema?: string;
   table: string | null;
-}>();
+}>(), {
+  schema: DEFAULT_SCHEMA
+});
 
 const { t } = useI18n();
 
-const schema = ref<any[]>([]);
-const incomingRefs = ref<any[]>([]);
+interface IncomingRef {
+  key: string;
+  sourceTable: string;
+  sourceColumn: string;
+  targetColumn: string;
+  constraintName: string;
+}
+
+const tableColumns = ref<TableColumnDetail[]>([]);
+const incomingRefs = ref<IncomingRef[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
 
-const formatType = (col: any) => {
+const formatType = (col: TableColumnDetail) => {
   let type = col.data_type;
   if (col.character_maximum_length) {
     type += `(${col.character_maximum_length})`;
@@ -36,18 +48,19 @@ const loadSchema = async () => {
   try {
     const dbConfig = buildDbConfig(props.db);
 
-    const [schemaResult, fullSchema] = await Promise.all([
-      ipcRenderer.invoke('get-table-schema', { db: dbConfig, table: props.table }),
-      ipcRenderer.invoke('get-db-full-schema', { db: dbConfig })
+    const [schemaResult, fullSchema]: [{ columns: TableColumnDetail[] }, FullSchema] = await Promise.all([
+      ipcRenderer.invoke('get-table-schema', { db: dbConfig, schema: props.schema, table: props.table }),
+      ipcRenderer.invoke('get-db-full-schema', { db: dbConfig, schema: props.schema })
     ]);
 
-    schema.value = schemaResult.columns;
+    tableColumns.value = schemaResult.columns;
 
     // Find incoming FKs (other tables referencing this table)
     incomingRefs.value = fullSchema.foreignKeys
-      .filter((fk: any) => fk.target_table === props.table)
-      .map((fk: any) => ({
-        sourceTable: fk.source_table,
+      .filter((fk: SchemaForeignKey) => fk.target_schema === props.schema && fk.target_table === props.table)
+      .map((fk: SchemaForeignKey) => ({
+        key: `${fk.source_schema}.${fk.source_table}.${fk.constraint_name}.${fk.source_column}`,
+        sourceTable: displayTableName(fk.source_schema, fk.source_table, props.schema),
         sourceColumn: fk.source_column,
         targetColumn: fk.target_column,
         constraintName: fk.constraint_name
@@ -61,7 +74,7 @@ const loadSchema = async () => {
   }
 };
 
-watch(() => props.table, () => {
+watch(() => [props.schema, props.table], () => {
   loadSchema();
 });
 
@@ -105,19 +118,19 @@ onMounted(() => {
           </thead>
           <tbody class="divide-y divide-gray-100 dark:divide-white/5">
             <tr
-              v-for="col in schema"
+              v-for="col in tableColumns"
               :key="col.column_name"
               class="hover:bg-gray-50/50 dark:hover:bg-white/[0.02] transition-colors"
             >
               <!-- Column Name with PK/FK icon -->
               <td class="px-3 py-1.5">
                 <div class="flex items-center gap-1.5">
-                  <span v-if="col.is_primary" class="text-amber-500 shrink-0" title="Primary Key">
+                  <span v-if="col.is_primary" class="text-amber-500 shrink-0" :title="t('viewer.primaryKey')">
                     <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
                       <path fill-rule="evenodd" d="M18 8a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8zm-6-4a1 1 0 100 2 2 2 0 012 2 1 1 0 102 0 4 4 0 00-4-4z" clip-rule="evenodd" />
                     </svg>
                   </span>
-                  <span v-else-if="col.is_foreign" class="text-blue-500 shrink-0" title="Foreign Key">
+                  <span v-else-if="col.is_foreign" class="text-blue-500 shrink-0" :title="t('viewer.foreignKey')">
                     <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                     </svg>
@@ -156,7 +169,7 @@ onMounted(() => {
                   <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
                   </svg>
-                  {{ col.foreign_key.table }}.{{ col.foreign_key.column }}
+                  {{ displayTableName(col.foreign_key.schema, col.foreign_key.table, props.schema) }}.{{ col.foreign_key.column }}
                 </span>
                 <span v-else class="text-xs text-gray-300 dark:text-gray-600">—</span>
               </td>
@@ -178,7 +191,7 @@ onMounted(() => {
         <div class="divide-y divide-gray-100 dark:divide-white/5">
           <div
             v-for="incoming in incomingRefs"
-            :key="incoming.constraintName"
+            :key="incoming.key"
             class="px-3 py-2 flex items-center gap-2 hover:bg-gray-50/50 dark:hover:bg-white/[0.02] transition-colors"
           >
             <span class="inline-flex items-center gap-1 text-xs font-mono font-medium text-purple-600 dark:text-purple-400">

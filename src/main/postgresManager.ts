@@ -1,8 +1,9 @@
 import { exec, spawn } from 'child_process';
-import { getErrorMessage } from './utils';
+import { getErrorMessage, parsePgVersion } from './utils';
 import { promisify } from 'util';
 import * as os from 'os';
 import { logger } from './logger';
+import { getOSType } from './os/osDetector';
 
 const execAsync = promisify(exec);
 
@@ -25,10 +26,7 @@ export interface InstallationProgress {
  * Uses the centralized osDetector module
  */
 function getOS(): 'macos' | 'linux' | 'windows' {
-  // Dynamic import to avoid circular dependencies
-  const { getOSType } = require('./os/osDetector');
-  const osType = getOSType();
-  return osType;
+  return getOSType();
 }
 
 /**
@@ -140,7 +138,7 @@ export async function getPgClient(port: number, user: string): Promise<import('p
 /**
  * Finds the Homebrew path in a robust way
  */
-async function findBrewPath(): Promise<string | null> {
+export async function findBrewPath(): Promise<string | null> {
   try {
     // Try first with robust detection
     const { detectHomebrew } = await import('./tools/toolDetector');
@@ -183,8 +181,7 @@ async function findBrewPath(): Promise<string | null> {
 export async function checkPostgresInstalled(): Promise<{ installed: boolean; version?: string; path?: string; method?: 'brew' | 'system' | 'unknown'; hasServer?: boolean }> {
   try {
     const { stdout } = await execAsync('psql --version');
-    const versionMatch = stdout.match(/(\d+\.\d+)/);
-    const version = versionMatch ? versionMatch[1] : undefined;
+    const version = parsePgVersion(stdout) ?? undefined;
 
     // Trouver le chemin de psql
     let path: string | undefined;
@@ -259,7 +256,7 @@ export async function checkPostgresInstalled(): Promise<{ installed: boolean; ve
           if (brewList.trim()) {
             method = 'brew';
             hasServer = true;
-            logger.info(`PostgreSQL server found via Homebrew: ${brewList.trim()}`);
+            logger.info(`PostgreSQL server found via Homebrew: ${brewList.trim().split('\n').join(', ')}`);
           } else {
             // Check if only libpq is installed
             const { stdout: libpqCheck } = await execAsync(`"${brewPath}" list 2>/dev/null | grep "^libpq" || echo ""`);
@@ -296,7 +293,7 @@ export async function checkPostgresInstalled(): Promise<{ installed: boolean; ve
       if (brewPath) {
         const { stdout: brewList } = await execAsync(`"${brewPath}" list 2>/dev/null | grep "^postgresql@" || echo ""`);
         if (brewList.trim()) {
-          logger.info(`PostgreSQL server found via Homebrew (not in PATH): ${brewList.trim()}`);
+          logger.info(`PostgreSQL server found via Homebrew (not in PATH): ${brewList.trim().split('\n').join(', ')}`);
           return { installed: true, method: 'brew', hasServer: true };
         }
       }
@@ -440,7 +437,8 @@ async function installPostgresMacOS(
     return new Promise((resolve) => {
       // Use the full brew path if found, otherwise use 'brew' (will be resolved via PATH)
       const brewCommand = brewPath || 'brew';
-      const brewProcess = spawn(brewCommand, ['install', 'postgresql@16'], {
+      // Same major version as toolInstaller.ts and install.sh
+      const brewProcess = spawn(brewCommand, ['install', 'postgresql@17'], {
         stdio: ['ignore', 'pipe', 'pipe']
       });
 
@@ -464,15 +462,15 @@ async function installPostgresMacOS(
           try {
             // Try different possible paths for initdb
             const possiblePaths = [
-              '/usr/local/opt/postgresql@16/bin/initdb',
-              '/opt/homebrew/opt/postgresql@16/bin/initdb',
+              '/usr/local/opt/postgresql@17/bin/initdb',
+              '/opt/homebrew/opt/postgresql@17/bin/initdb',
               '/usr/local/bin/initdb',
               'initdb'
             ];
 
             const dataDirs = [
-              '/usr/local/var/postgresql@16',
-              '/opt/homebrew/var/postgresql@16',
+              '/usr/local/var/postgresql@17',
+              '/opt/homebrew/var/postgresql@17',
               '/usr/local/var/postgres'
             ];
 
@@ -685,6 +683,7 @@ async function findPostgresDataDir(): Promise<string | null> {
       const sysconfdir = pgConfigData.trim();
       const possibleDirs = [
         sysconfdir.replace('/etc', '/var/postgres'),
+        sysconfdir.replace('/etc', '/var/postgresql@18'),
         sysconfdir.replace('/etc', '/var/postgresql@17'),
         sysconfdir.replace('/etc', '/var/postgresql@16'),
         sysconfdir.replace('/etc', '/var/postgresql@15'),
@@ -707,6 +706,8 @@ async function findPostgresDataDir(): Promise<string | null> {
 
   // macOS Homebrew paths
   const possibleDataDirs = [
+    '/usr/local/var/postgresql@18',
+    '/opt/homebrew/var/postgresql@18',
     '/usr/local/var/postgresql@17',
     '/opt/homebrew/var/postgresql@17',
     '/usr/local/var/postgresql@16',
@@ -1057,17 +1058,18 @@ async function findBrewPostgresService(): Promise<string | null> {
     }
 
     const { stdout } = await execAsync(`"${brewPath}" services list`);
-    const lines = stdout.split('\n');
+    const services = stdout.split('\n')
+      .map(line => line.trim().split(/\s+/))
+      .filter(parts => parts[0]?.startsWith('postgresql'))
+      .map(parts => ({ name: parts[0], started: parts[1] === 'started' }));
 
-    for (const line of lines) {
-      if (line.includes('postgresql')) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 1) {
-          const service = parts[0];
-          logger.info(`Found PostgreSQL service: ${service}`);
-          return service;
-        }
-      }
+    // Several versions can be installed side by side (e.g. @17 running, @18 installed):
+    // prefer the running one, then the highest version.
+    const versionOf = (name: string) => parseInt(name.split('@')[1] || '0', 10);
+    services.sort((a, b) => Number(b.started) - Number(a.started) || versionOf(b.name) - versionOf(a.name));
+    if (services.length > 0) {
+      logger.info(`Found PostgreSQL service: ${services[0].name}`);
+      return services[0].name;
     }
   } catch (error) {
     logger.warn(`Failed to list brew services: ${getErrorMessage(error)}`);

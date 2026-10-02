@@ -1,4 +1,8 @@
 import { reactive } from 'vue';
+import { useI18n } from './useI18n';
+
+// Default button labels follow the UI language (the language ref is global)
+const { t } = useI18n();
 
 interface ConfirmOptions {
     title: string;
@@ -24,6 +28,9 @@ const pendingQueue: ConfirmOptions[] = [];
 
 export function useConfirm() {
     const showConfirm = (options: ConfirmOptions) => {
+        // Double click on the button that asks: the same question once, not twice in a row
+        const same = (other: { title: string; message: string }) => other.title === options.title && other.message === options.message;
+        if ((state.show && same(state)) || pendingQueue.some(same)) return;
         if (state.show) {
             // If a confirm is already displayed, add to queue
             pendingQueue.push(options);
@@ -35,8 +42,8 @@ export function useConfirm() {
     const applyOptions = (options: ConfirmOptions) => {
         state.title = options.title;
         state.message = options.message;
-        state.confirmText = options.confirmText || 'Confirm';
-        state.cancelText = options.cancelText || 'Cancel';
+        state.confirmText = options.confirmText || t('common.confirm');
+        state.cancelText = options.cancelText || t('common.cancel');
         state.type = options.type || 'warning';
         state.onConfirm = options.onConfirm;
         state.show = true;
