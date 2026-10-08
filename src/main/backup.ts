@@ -13,6 +13,7 @@ import { fileEncryptionManager } from './fileEncryption';
 import { BackupHistory, BackupTrigger } from './backupHistory';
 import { withTunnel } from './sshTunnel';
 import { emptySchemasSql, restoreErrors, schemasInToc } from './restorePlan';
+import { newestPgTool, pickPgDumpForServer, pgDumpInstallHint } from './pgToolChoice';
 import { SslSettings, libpqSslEnv, toNodePgSsl, stripSslParams } from './sslConfig';
 import * as Electron from 'electron';
 
@@ -794,62 +795,38 @@ apt-get install -y postgresql-client-${majorVersion}
         logger.warn(`Could not detect server version`, db.name);
       }
 
-      // If we detected a version, use the cache to find the compatible pg_dump
-      if (serverMajorVersion && this.pgDumpVersionsCache.has(serverMajorVersion)) {
-        const compatibleVersions = this.pgDumpVersionsCache.get(serverMajorVersion)!;
-
-        // Prefer exact or closest versions
-        // Sort by preference: postgresql > libpq > system
-        const sortedVersions = compatibleVersions.sort((a, b) => {
-          const sourcePriority = { 'postgresql': 1, 'libpq': 2, 'system': 3 };
-          return (sourcePriority[a.source] || 99) - (sourcePriority[b.source] || 99);
-        });
-
-        // Take the first compatible version (best match)
-        const bestMatch = sortedVersions[0];
-        logger.info(`Found compatible pg_dump ${bestMatch.version} for PostgreSQL ${serverVersion}: ${bestMatch.path} (${bestMatch.source})`, db.name);
-        return bestMatch.path;
-      }
-
-      // If not found in cache, try a dynamic search (fallback)
       if (serverMajorVersion) {
-        logger.warn(`No cached pg_dump found for PostgreSQL ${serverVersion}, performing dynamic search...`, db.name);
-        // Re-detect versions in case new versions have been installed
-        this.versionsDetected = false;
-        await this.detectAllPgDumpVersions();
-
-        if (this.pgDumpVersionsCache.has(serverMajorVersion)) {
-          const compatibleVersions = this.pgDumpVersionsCache.get(serverMajorVersion)!;
-          const bestMatch = compatibleVersions[0];
-          logger.info(`Found compatible pg_dump ${bestMatch.version} for PostgreSQL ${serverVersion}: ${bestMatch.path}`, db.name);
-          return bestMatch.path;
+        // Same major, else the closest newer one: pg_dump reads older servers, never newer ones
+        let choice = pickPgDumpForServer(this.allPgDumpVersions, serverMajorVersion);
+        if (!choice) {
+          logger.warn(`No pg_dump ${serverMajorVersion} or newer in the cache, searching again...`, db.name);
+          // Re-detect versions in case new versions have been installed
+          this.versionsDetected = false;
+          await this.detectAllPgDumpVersions();
+          choice = pickPgDumpForServer(this.allPgDumpVersions, serverMajorVersion);
         }
 
         // On Linux, try to auto-install the matching client package
-        if (process.platform === 'linux') {
+        if (!choice && process.platform === 'linux') {
           const installed = await this.tryInstallPgDumpLinux(serverMajorVersion, db.name);
           if (installed) {
             await this.detectAllPgDumpVersions();
             await this.detectAllPgRestoreVersions();
-            if (this.pgDumpVersionsCache.has(serverMajorVersion)) {
-              const compatibleVersions = this.pgDumpVersionsCache.get(serverMajorVersion)!;
-              const bestMatch = compatibleVersions[0];
-              logger.info(`Found compatible pg_dump ${bestMatch.version} after auto-install: ${bestMatch.path}`, db.name);
-              return bestMatch.path;
-            }
+            choice = pickPgDumpForServer(this.allPgDumpVersions, serverMajorVersion);
           }
         }
 
-        logger.warn(`Could not find pg_dump for PostgreSQL ${serverVersion} (major: ${serverMajorVersion})`, db.name);
-        logger.warn(`Available versions: ${Array.from(this.pgDumpVersionsCache.keys()).join(', ') || 'none'}`, db.name);
+        if (choice) {
+          const how = choice.exact ? 'same major version' : 'newer than the server, which pg_dump supports';
+          logger.info(`Using pg_dump ${choice.tool.version} for PostgreSQL ${serverVersion} (${how}): ${choice.tool.path} (${choice.tool.source})`, db.name);
+          return choice.tool.path;
+        }
 
-        // Throw a clear error with installation instructions
-        const installHint = process.platform === 'linux'
-          ? `Please install the matching client:\n  sudo apt install postgresql-client-${serverMajorVersion}\n  or: sudo dnf install postgresql${serverMajorVersion}`
-          : `Please install pg_dump version ${serverMajorVersion}.x`;
-        throw new Error(`pg_dump version mismatch: server is PostgreSQL ${serverVersion} but only pg_dump ${this.allPgDumpVersions.map(v => v.version).join(', ') || 'unknown'} is available.\n\n${installHint}`);
+        const available = this.allPgDumpVersions.map(v => v.version).join(', ') || 'none';
+        logger.warn(`No pg_dump able to read PostgreSQL ${serverVersion} (installed: ${available})`, db.name);
+        throw new Error(`pg_dump version mismatch: the server runs PostgreSQL ${serverVersion}, and the installed pg_dump (${available}) are older. pg_dump must be version ${serverMajorVersion} or newer.\n\n${pgDumpInstallHint(process.platform, serverMajorVersion)}`);
       } else {
-        logger.warn(`Server version not detected, using default pg_dump: ${this.pgDumpPath}`, db.name);
+        logger.warn('Server version not detected', db.name);
         if (this.allPgDumpVersions.length > 0) {
           logger.info(`Available pg_dump versions: ${this.allPgDumpVersions.map(v => v.version).join(', ')}`, db.name);
         }
@@ -862,7 +839,13 @@ apt-get install -y postgresql-client-${majorVersion}
       logger.error(`Error finding compatible pg_dump: ${getErrorMessage(error)}`, db.name);
     }
 
-    // Fallback: use the default pg_dump
+    // Server version unknown: the newest pg_dump reads any older server (an older one would stop
+    // with "server version mismatch")
+    const newest = newestPgTool(this.allPgDumpVersions);
+    if (newest) {
+      logger.info(`Using the newest pg_dump, ${newest.version}: ${newest.path}`, db.name);
+      return newest.path;
+    }
     logger.info(`Using default pg_dump: ${this.pgDumpPath}`, db.name);
     return this.pgDumpPath;
   }

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.1 — 2026-10-08
+
+### Fixed
+
+- **Backing up or duplicating a database failed with "pg_dump version mismatch"** when its
+  server was older than every installed pg_dump (e.g. a PostgreSQL 16 server with pg_dump 17
+  and 18 installed). pg_dump reads servers of its own version and older ones: the same major
+  version is still preferred, otherwise the closest newer one is used. When the server's
+  version cannot be detected, the newest pg_dump is used instead of the system default. The
+  error now only appears when every pg_dump is older than the server, with the command to
+  install the right one.
+
 ## 1.1.0 — 2026-10-02
 
 ### Upgrading from 1.0.2
