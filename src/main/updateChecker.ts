@@ -2,6 +2,7 @@ import { autoUpdater, UpdateInfo as ElectronUpdateInfo } from 'electron-updater'
 import { getErrorMessage } from './utils';
 import { app, BrowserWindow, shell } from 'electron';
 import { logger } from './logger';
+import { downloadMacUpdate, installMacUpdateAndQuit, macUpdatableBundle } from './macSelfUpdate';
 
 export interface UpdateInfo {
   updateAvailable: boolean;
@@ -14,16 +15,24 @@ export interface UpdateInfo {
 let mainWindow: BrowserWindow | null = null;
 let latestVersion = '';
 let listenersRegistered = false;
+/** The new macOS bundle, downloaded and checked, waiting for the app to quit */
+let pendingMacApp: string | null = null;
 
 const RELEASES_URL = 'https://github.com/poup-s/bbdump/releases';
 
+const isAppImage = () => process.platform === 'linux' && !!process.env.APPIMAGE;
+
 /**
- * In-place updates only work for the Linux AppImage. macOS builds are unsigned, so
- * Squirrel.Mac rejects them, and .deb installs cannot self-update: those platforms
- * are sent to the release page instead.
+ * In-place updates: electron-updater for the Linux AppImage, bbdump's own updater on macOS
+ * (Squirrel.Mac rejects unsigned apps) when the app sits in a folder it can write to.
+ * .deb installs, and Macs where the bundle cannot be replaced, get the release page.
  */
 export function supportsAutoInstall(): boolean {
-  return process.platform === 'linux' && !!process.env.APPIMAGE;
+  return isAppImage() || macUpdatableBundle() !== null;
+}
+
+function sendToWindow(channel: string, payload?: unknown): void {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 }
 
 function isNewerVersion(candidate: string, current: string): boolean {
@@ -47,7 +56,8 @@ export function initAutoUpdater(win: BrowserWindow): void {
   listenersRegistered = true;
 
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = supportsAutoInstall();
+  // Never on macOS: Squirrel.Mac would try (and fail) to install on quit
+  autoUpdater.autoInstallOnAppQuit = isAppImage();
 
   autoUpdater.on('update-available', (info: ElectronUpdateInfo) => {
     logger.info(`Update available: ${info.version}`);
@@ -125,7 +135,18 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
 }
 
 export async function downloadUpdate(): Promise<{ manual: boolean }> {
-  if (!supportsAutoInstall()) {
+  const macBundle = process.platform === 'darwin' ? macUpdatableBundle() : null;
+  if (macBundle && latestVersion) {
+    try {
+      pendingMacApp = await downloadMacUpdate(latestVersion, percent => sendToWindow('update-download-progress', { percent }));
+      sendToWindow('update-downloaded');
+    } catch (error) {
+      logger.error(`macOS update download failed: ${getErrorMessage(error)}`);
+      sendToWindow('update-error', getErrorMessage(error));
+    }
+    return { manual: false };
+  }
+  if (!isAppImage()) {
     await shell.openExternal(releaseUrl(latestVersion));
     return { manual: true };
   }
@@ -134,7 +155,12 @@ export async function downloadUpdate(): Promise<{ manual: boolean }> {
 }
 
 export function quitAndInstall(): void {
-  if (!supportsAutoInstall()) {
+  const macBundle = process.platform === 'darwin' ? macUpdatableBundle() : null;
+  if (macBundle && pendingMacApp) {
+    installMacUpdateAndQuit(pendingMacApp, macBundle);
+    return;
+  }
+  if (!isAppImage()) {
     // Tearing down the windows before a doomed install left the app with no window
     shell.openExternal(releaseUrl(latestVersion));
     return;

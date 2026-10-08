@@ -118,7 +118,7 @@ const downloadUpdate = async () => {
   store.downloadProgress = 0;
   try {
     const result = await ipcRenderer.invoke('download-update');
-    // macOS (unsigned) and .deb: the release page was opened in the browser
+    // .deb, or a Mac where bbdump cannot replace itself: the release page was opened
     if (result?.manual) store.downloadingUpdate = false;
   } catch (error) {
     store.downloadingUpdate = false;

@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.1.2 — 2026-10-08
+
+### Upgrading from 1.1.0 or 1.1.1
+
+- **macOS:** these versions open the release page to update. Install 1.1.2 once with the
+  install script (it now quits and reopens bbdump for you) or the DMG; from then on, bbdump
+  updates itself.
+
+### Changed
+
+- **bbdump updates itself on macOS.** "Download update" now downloads the new version in
+  the app (with its progress), checks it against the checksum published with the release,
+  then "Install and restart" replaces the app and reopens it — no more release page to go
+  through. Builds are still unsigned: this works without the macOS updater, which only
+  accepts signed apps. It needs the app to sit in a folder it can write to, such as
+  Applications; otherwise the release page opens as before. The previous version is kept
+  until the copy succeeds and put back if it fails.
+- **The install script quits bbdump if it is running**, replaces it, then reopens it. MCP
+  servers started by AI clients are left running.
+- Update errors now show their cause.
+
 ## 1.1.1 — 2026-10-08
 
 ### Fixed

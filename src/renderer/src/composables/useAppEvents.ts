@@ -120,10 +120,10 @@ export function useAppEvents() {
             addToast(t('settings.updateReady'), 'success');
         });
 
-        ipcRenderer.on('update-error', () => {
+        ipcRenderer.on('update-error', (_: unknown, message?: string) => {
             store.downloadingUpdate = false;
             store.downloadProgress = 0;
-            addToast(t('settings.updateError'), 'error');
+            addToast(t('settings.updateError'), 'error', { detail: message });
         });
     };
 

@@ -1274,6 +1274,57 @@ show_uninstall_components() {
   echo ""
 }
 
+# --- Running app: quit before replacing it, reopen afterwards ---
+WAS_RUNNING=0
+
+# The app itself, not the MCP servers that AI clients run with the same binary
+app_pids() {
+  local pattern list="-fl"
+  case "$PLATFORM" in
+    macos) pattern="^/Applications/${APP_NAME}\.app/Contents/MacOS/${APP_NAME}( |$)" ;;
+    linux) pattern="(\.mount_${APP_NAME}[^/]*/${APP_NAME}|$HOME/\.local/bin/${APP_NAME})( |$)"; list="-fa" ;;
+  esac
+  { pgrep "$list" "$pattern" 2>/dev/null || true; } | grep -v -e "mcp-postgres" -e "--type=" | awk '{print $1}'
+}
+
+quit_running_app() {
+  [ -z "$(app_pids)" ] && return 0
+  WAS_RUNNING=1
+  spinner "Quitting the running ${APP_NAME}…"
+  if [ "$PLATFORM" = "macos" ]; then
+    osascript -e "quit app \"${APP_NAME}\"" >/dev/null 2>&1 || true
+  else
+    # Electron quits cleanly on SIGTERM
+    kill $(app_pids) 2>/dev/null || true
+  fi
+  local i=0
+  while [ -n "$(app_pids)" ] && [ "$i" -lt 30 ]; do
+    sleep 0.5
+    i=$((i + 1))
+  done
+  stop_spinner
+  if [ -n "$(app_pids)" ]; then
+    # A backup still running, or the app not answering
+    kill $(app_pids) 2>/dev/null || true
+    sleep 2
+  fi
+  [ -n "$(app_pids)" ] && error "${APP_NAME} is still running: quit it, then run the installer again"
+  success "Quit the running ${APP_NAME}"
+}
+
+relaunch_app() {
+  [ "$WAS_RUNNING" -eq 1 ] || return 0
+  case "$PLATFORM" in
+    macos) open "/Applications/${APP_NAME}.app" 2>/dev/null || true ;;
+    linux)
+      if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        (setsid "$HOME/.local/bin/${APP_NAME}" >/dev/null 2>&1 &) || true
+      fi
+      ;;
+  esac
+  success "Reopened ${APP_NAME}"
+}
+
 # --- Main ---
 main() {
   show_intro
@@ -1290,6 +1341,7 @@ main() {
   get_latest_version
   build_download_url
   download
+  quit_running_app
 
   case "$PLATFORM" in
     macos) install_macos ;;
@@ -1297,6 +1349,7 @@ main() {
   esac
 
   install_dependencies
+  relaunch_app
   done_banner
 }
 
