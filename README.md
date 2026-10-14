@@ -5,8 +5,8 @@
 <h1 align="center">bbdump</h1>
 
 <p align="center">
-  A desktop application for managing PostgreSQL databases —<br>
-  backups, restores, scheduling, encryption, data browsing, and more.
+  A desktop app for your PostgreSQL databases, local or remote —<br>
+  verified backups, real restores, anonymized copies, a data explorer, and AI assistants that stay in your control.
 </p>
 
 <p align="center">
@@ -15,115 +15,130 @@
   <a href="https://github.com/poup-s/bbdump/issues">Report a bug</a>
 </p>
 
-![Dashboard](captures/dashboard.png)
+![Dashboard](captures/dashboard.webp)
 
 ## Features
 
-### Project & Database Management
+### Projects and databases, wherever they are
 
-Organize your databases into color-coded projects. Add local or external connections, duplicate databases across servers, and manage everything from a single view.
+Group your databases into projects: a local database, its dev copy and production side by side. bbdump can install and run PostgreSQL on your machine, and reaches remote databases in several ways:
 
-![Databases](captures/databases.png)
+- **Connection URL** or manual entry, with SSL modes and certificates;
+- **Server via SSH**: pick the host from your `~/.ssh/config`, bbdump opens the tunnel itself and can find the credentials in the server's `.env`;
+- **Cloud guides** for Supabase, Neon, Railway and Render — with a Neon API key, pick the project, branch and database from a list.
 
-### Anonymization
+Any database can be duplicated into a new local one in one click.
 
-Duplicate a database with its personal data anonymized: columns that look personal (email, phone, name, address, IP…) are chosen for you and partly starred by default, keeping their shape (`bob1234@email.fr` → `****234@email.fr`). Each column can become a fake value, a masked one or NULL, and a table can be copied without its rows. The rows are streamed with the chosen columns already replaced, so the real values never reach your machine.
+![Databases](captures/databases.webp)
 
-![Anonymize while duplicating](src/renderer/public/whats-new/en/anon-picker.webp)
+![Add a remote database](captures/add-connection.webp)
 
-### Backup & Restore
+### Anonymized copies
 
-Manual and scheduled backups using `pg_dump`/`pg_restore`. Supports custom format, plain SQL, compression, and AES-256-GCM encryption.
+Duplicate a database with its personal data anonymized. Columns that look personal (email, phone, name, address, IP…) are chosen for you and partly starred by default, keeping their shape (`bob1234@email.fr` → `****234@email.fr`). Each column can become a fake value, a masked one or NULL, and a table can be copied without its rows (sessions and tokens are empty by default). A column linked by a foreign key follows the one it points to, and unique columns stay unique.
 
-![Backups](captures/backups.png)
+The rows are streamed with the chosen columns already replaced: the real values never reach your machine, and no backup of the source is kept.
 
-### Database Viewer
+![Anonymize while duplicating](captures/anonymize.webp)
 
-Browse tables, inspect data, search across columns, and inspect row details.
+### Update a local copy from production
 
-![Viewer](captures/viewer-data.png)
+**Update from…** compares a local database with another one of its project, production included, and copies only what it lacks: schema additions, then the missing rows, optionally anonymized. The source is only read; you see the SQL before anything runs, and the local database is backed up first.
 
-![Search](captures/viewer-search.png)
+![Update from another database](captures/sync.webp)
 
-Click any row to open the detail panel. Edit fields inline — modified values are highlighted, save or discard with one click.
+### Backups you can count on
 
-![Row Detail](captures/viewer-row.png)
-![Edit Row](captures/viewer-edit-row.png)
+`pg_dump` backups, compressed and optionally encrypted (AES-256-GCM). Each backup is read back to check it, only the last N are kept, and the right `pg_dump` is picked for the server's version.
 
-### Schema Visualizer
+Schedule them per database with a visual cron editor. bbdump starts hidden at login, and the backups missed while it was closed run at launch.
 
-Interactive graph of your database schema — tables, columns, and foreign key relationships rendered with Vue Flow.
+![Backups](captures/backups.webp)
 
-![Schema](captures/viewer-schema.png)
+![Scheduled tasks](captures/tasks.webp)
 
-### SQL Builder
+### Restores that really replace the content
 
-Visual query builder with SELECT, FROM, WHERE, JOIN, and LIMIT clauses. Build queries visually or switch to raw SQL mode.
+Restoring replaces the database's content: the schemas in the backup are emptied first, in one transaction, so nothing is half done. The target is backed up before, so you can always go back.
 
-![SQL](captures/viewer-sql.png)
-![SQL with results](captures/viewer-sql-2.png)
-![SQL raw mode](captures/viewer-sql-3.png)
+![Restore](captures/restore.webp)
 
-### Proxy Server
+### Database explorer
 
-Built-in TCP proxy per project to route local connections to any configured database. Switch targets instantly without changing your app config.
+Browse tables in tabs, search, open a row to edit it, follow the relations, and see every schema in an interactive graph. Build queries visually or in SQL, check performance, and enable extensions from a catalog (pgvector, PostGIS, TimescaleDB…) — bbdump installs their packages on the local server when needed.
 
-![Proxy](captures/proxy.png)
+![Data](captures/viewer-data.webp)
 
-### Scheduled Tasks
+![Row detail](captures/viewer-row.webp)
 
-Visual cron editor with presets and per-database controls. Automate backups, vacuum, reindex, and health checks.
+![Schema](captures/viewer-schema.webp)
 
-![Tasks](captures/tasks.png)
+![SQL builder](captures/viewer-sql.webp)
+
+![Extensions](captures/extensions.webp)
+
+### AI assistants (MCP)
+
+bbdump comes with a PostgreSQL MCP server and connects it in one click to Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Devin, VS Code or OpenCode (any other MCP client can use the configuration to copy). 45 tools and 4 prompts: the whole schema in one call, data profiling, query plans, health checks, index advice with hypothetical indexes, slow queries, comparisons between databases, and more.
+
+- **Every change asks you first**, in the menu bar. It is recorded in a journal, with the rows before and after, and can be undone in one click.
+- **Anonymize for AI**, per database: chosen columns reach the assistant anonymized. A result whose origin is unknown (a computed column, a view, free SQL) is shown to you first, with a few values: send it, anonymize more, or block it. The database itself is never changed.
+
+![AI assistants](captures/ai-clients.webp)
+
+![Anonymize for AI](captures/ai-anonymize.webp)
+
+### Proxy per project
+
+A TCP proxy per project gives your app one fixed address and routes it to the database of your choice: switch from the local copy to another one without touching your app's configuration.
 
 ### Logs
 
-Real-time application logs with level and database filtering. Track every backup, restore, and operation.
+Live application logs, filtered by level and database: every backup, restore and AI change is there.
 
-![Logs](captures/logs.png)
+![Logs](captures/logs.webp)
 
-### MCP Server (Claude Desktop)
+### Menu bar
 
-bbdump includes a built-in PostgreSQL MCP server that connects Claude to your databases. Install it in one click from Settings — Claude can then explore schemas, read data, run queries, and execute mutations with confirmation prompts. 45 tools and 4 prompts: whole-schema overview in one call, data profiling, query plans with a summary, health check, index advice (with hypothetical indexes), slow queries, backups before risky changes, and more.
-
-Per database, **Anonymize for AI** hides personal data in what AI clients read: chosen columns arrive anonymized, and a result whose origin is unknown (computed column, view, free SQL) is shown to you first in the tray, to send, anonymize or block. The database itself is never changed.
-
-### System Tray
-
-Quick access to your projects and databases from the menu bar. Trigger backups and monitor status without opening the full app.
+Your projects and databases from the menu bar: switch the proxy target, open a database in the explorer, see your backups at a glance. AI changes and anonymization choices are confirmed there too.
 
 <p>
-  <img src="captures/mini-app.png" alt="Tray" width="280">
-  <img src="captures/mini-app-proxy.png" alt="Tray with proxy" width="280">
+  <img src="captures/tray.webp" alt="Menu bar" width="300">
 </p>
+
+### Updates
+
+bbdump updates itself on macOS (from 1.1.2) and as an AppImage on Linux. After an update, a short tour shows what is new; the About page keeps every tour.
 
 ## Installation
 
-### Quick Install
+### Quick install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/poup-s/bbdump/main/install.sh | bash
 ```
 
-Detects your platform, downloads the latest release, installs PostgreSQL if needed, and sets everything up. See [full installation docs](docs/installation.md) for options.
+Detects your platform, downloads the latest release, installs PostgreSQL if needed, and sets everything up. If bbdump is running, it is closed and reopened on the new version. See [the installation docs](docs/installation.md) for options.
 
-### From Release
+### From a release
 
 Download the latest release from [GitHub Releases](https://github.com/poup-s/bbdump/releases):
 
 | Platform | File |
 |----------|------|
-| macOS (Apple Silicon) | `bbdump-*-arm64.dmg` |
-| macOS (Intel) | `bbdump-*.dmg` |
-| Linux | `bbdump-*.AppImage` or `bbdump-*.deb` |
+| macOS 13+ (Apple Silicon) | `bbdump-*-arm64.dmg` |
+| macOS 13+ (Intel) | `bbdump-*.dmg` |
+| Linux (beta) | `bbdump-*.AppImage` or `bbdump-*.deb` |
 
-**macOS note:** The app is not code-signed. On first launch, right-click the app and select "Open", then confirm. Alternatively:
+**macOS:** the app is not code-signed yet. On first launch, right-click it and choose **Open**, then confirm, or run:
 
 ```bash
 xattr -cr /Applications/bbdump.app
 ```
 
-### From Source
+Later versions install themselves from the app. The `.deb` package does not update itself: install the new one.
+
+### From source
 
 ```bash
 git clone https://github.com/poup-s/bbdump.git
@@ -132,11 +147,11 @@ npm install
 npm run dev
 ```
 
-**Prerequisites:** Node.js 18+, PostgreSQL client tools (`pg_dump` in PATH).
+**Prerequisites:** Node.js 22.12+, PostgreSQL client tools (`pg_dump`, `psql`).
 
-## Demo Database
+## Demo database
 
-Want to try bbdump right away? A demo script creates a PostgreSQL database with 36 000+ French towns and registers it in bbdump automatically:
+Want to try bbdump right away? A script creates a PostgreSQL database with the 36,000+ French towns and registers it in bbdump:
 
 ```bash
 ./bbdump-demo/bbdump-demo.sh
@@ -147,23 +162,27 @@ See [bbdump-demo/README.md](bbdump-demo/README.md) for details.
 ## Building
 
 ```bash
-npm run build          # Compile TypeScript + Vite
-npm run dist           # Build + package for current platform
-npm run dist:mac       # macOS (DMG)
-npm run dist:linux     # Linux (AppImage + deb)
+npm run build          # TypeScript + Vite
+npm test               # tests (no database or network needed)
+npm run dist:mac       # macOS: DMG + ZIP, Apple Silicon and Intel
+npm run dist:linux     # Linux: AppImage + deb
 ```
 
 ## Configuration
 
-All user data is stored in `~/Library/Application Support/bbdump/` (macOS) or `~/.config/bbdump/` (Linux):
+User data lives in `~/Library/Application Support/bbdump/` (macOS) or `~/.config/bbdump/` (Linux):
 
-| File | Description |
-|------|-------------|
-| `config.json` | Database connections and app settings |
+| File | Contents |
+|------|----------|
+| `config.json` | Databases, projects and settings (passwords encrypted) |
+| `.encryption.key` | AES-256 key, generated on first launch (mode 600) |
+| `backup-history.json` | Backup runs, successes and failures |
+| `ai-masking.json` | Columns anonymized for AI assistants, per database |
+| `ai-journal/` | Changes made by AI assistants, with their undo data (encrypted) |
+| `cloud-credentials.json` | Neon API key (encrypted) |
 | `logs/app.log` | Application logs |
-| `.encryption.key` | AES-256 key (auto-generated, mode 600) |
 
-Databases can be configured through the UI or by pasting a PostgreSQL connection URL:
+Databases can be added from the UI or by pasting a connection URL:
 
 ```
 postgresql://user:password@host:port/database
@@ -171,14 +190,15 @@ postgresql://user:password@host:port/database
 
 ## Security
 
-- AES-256-GCM encryption for passwords and backup files
-- Encryption key auto-generated on first launch with restricted permissions
-- Electron context isolation enabled
-- Export/import encryption keys for multi-machine setups
+- Passwords, backups (optional), the Neon API key and the AI journal are encrypted with AES-256-GCM; the key is generated on first launch with restricted permissions and can be exported for another machine.
+- No telemetry: bbdump sends nothing about you or your databases.
+- The MCP server talks to the app through a local server (127.0.0.1) protected by a per-launch token; every change asks for your confirmation.
+- Anonymized copies never bring the real values to your machine, and anonymization for AI filters what assistants read without touching the data.
+- Electron context isolation and a strict list of IPC channels.
 
 ## Contributing
 
-Contributions are welcome. Please open an issue first to discuss what you'd like to change.
+Contributions are welcome. Please open an issue first to discuss what you would like to change.
 
 ## License
 

@@ -1,79 +1,76 @@
 # Quick Start
 
-This guide walks you through setting up bbdump for the first time — from creating a project to running your first backup.
+From the first launch to your first backup and restore. If bbdump is not installed yet, see [Installation](installation.md).
 
-## 1. Create a Project
+![Dashboard](../captures/dashboard.webp)
 
-Projects group related databases together (e.g. production, staging, local).
+## 1. Go through the setup
 
-1. Open bbdump and go to the **DB** tab
-2. Click **+ New Project**
-3. Enter a project name and pick a color
-4. Click **Save**
+On first launch, bbdump asks a few questions:
 
-> You can also assign databases to a project later.
+1. **How will you use bbdump?**
+   - *PostgreSQL on this computer*: bbdump installs or uses a local server, so you can create, duplicate and restore databases here. Remote databases work too.
+   - *Remote databases only*: only the client tools (`pg_dump`, `psql`), no server. The local server features are hidden.
+2. **Check this machine**: the client tools are required; in local mode the server too. Install what is missing from there, or continue and re-check later.
+3. **Your data**: in local mode, pick the databases found on the server; in remote mode, paste a connection URL (optional). Then choose the default backup folder: a synced folder (iCloud, Dropbox, Nextcloud) keeps a copy off this computer.
+4. **AI assistants** (optional): connect Claude Desktop, Claude Code, Cursor and others to bbdump's MCP server.
 
-## 2. Add a Database
+Everything can be changed later in **Settings**, and the setup can be replayed from **Settings → General → Introduction**.
 
-### External Connection
+## 2. Add a database
 
-1. Click **+ Add External Connection**
-2. Choose your connection method:
-   - **URL** — Paste a PostgreSQL connection string: `postgresql://user:password@host:port/database`
-   - **Manual** — Fill in host, port, database name, user, and password individually
-   - **Presets** — Quick configuration for Supabase or Neon
-3. Optionally assign the database to a project
-4. Click **Save**
+Open the **DB** tab.
 
-### Local Database
+![Databases](../captures/databases.webp)
 
-1. Click **+ Create Local DB**
-2. Enter a database name (lowercase, no spaces)
-3. Optionally assign it to a project
-4. Click **Create**
+### A remote database
 
-bbdump will create the database on your local PostgreSQL server.
+Click **Add External Connection** and pick a method:
 
-## 3. Run a Backup
+- **Connection URL**: paste `postgresql://user:password@host:5432/database`. The fields are read from it, and Supabase, Neon, Railway and Render URLs are recognized (SSL is turned on when the host requires it). **Where do I find the URL?** opens a guide per host; with a Neon API key you can pick the project, branch and database from a list.
+- **Manual entry**: host, port, user, password and SSL mode.
+- **SSH** (database on a server you reach over SSH): pick a host from your `~/.ssh/config`. bbdump opens the tunnel itself and can read the credentials from a `.env` file on the server.
 
-1. In the database list, click **Backup** next to the database you want to back up
-2. The backup starts immediately using `pg_dump`
-3. Progress and logs appear in real time in the **Logs** tab
-4. Once complete, the backup file appears in the **Backups** tab
+Test the connection, then choose where and how this database is backed up: folder, number of backups to keep, encryption, verification, and an optional schedule.
 
-### Backup Options
+![Add a remote database](../captures/add-connection.webp)
 
-By default, backups use the PostgreSQL custom format with compression. You can configure per-database:
+### A local database (local mode)
 
-- **Format** — Custom (`.backup`) or plain SQL (`.sql`)
-- **Compression** — Level 0-9
-- **Parallel jobs** — Speed up large backups
-- **File encryption** — Encrypt the backup file with AES-256-GCM
-- **Timeout** — Maximum duration before the backup is cancelled
+Click **Create Local DB**, give it a name and create it on your local server. Any database can also be copied into a new local one with **Duplicate** in its card menu, with its personal data anonymized if you want.
 
-These options are configured when editing a database connection.
+### Group them in projects
 
-## 4. Restore a Backup
+**New Project** groups databases (e.g. local copy, staging, production) and gives the project its own [proxy](proxy-server.md). Drag databases between projects, or assign them later.
 
-1. Go to the **Backups** tab
-2. Click **Restore** next to the backup file
-3. Choose your restore target:
-   - **Existing database** — Restore into a database already configured in bbdump
-   - **New database** — Create a new local database and restore into it
-4. Confirm the operation (a 5-second countdown ensures you don't restore by accident)
+## 3. Back up
 
-## 5. Schedule Automatic Backups
+Click **Backup** on the database card. bbdump runs `pg_dump` with the version that matches the server, reads the dump back to check it (on by default), encrypts it if asked, and keeps only the last N backups if you set a limit. Progress shows in the app, details in the **Logs** tab, and the file in the **Backups** tab.
 
-1. Go to the **Tasks** tab
-2. Click **+** to create a new scheduled task
-3. Select the database and choose a schedule:
-   - **Presets** — Every hour, daily at 2 AM, weekly, monthly, etc.
-   - **Custom** — Enter a cron expression manually
-4. The task runs automatically in the background
+![Backups](../captures/backups.webp)
 
-## Next Steps
+## 4. Restore
 
-- [Projects & Databases](projects-and-databases.md) — Learn about project organization, duplication, and proxy
-- [Database Viewer](database-viewer.md) — Browse your data, edit rows, and run SQL queries
-- [Scheduled Tasks](scheduled-tasks.md) — Advanced scheduling and retention options
-- [MCP Server](mcp-server.md) — Connect Claude to your databases
+In the **Backups** tab, click **Restore** on a backup and choose the target:
+
+- **Existing Database**: its content is replaced. The schemas in the backup are emptied first, in one transaction, and the target is backed up before (on by default), so you can go back. You continue after a 5-second countdown, then type the database name to confirm.
+- **New Database** (local mode): a new local database is created and the backup restored into it.
+
+![Restore](../captures/restore.webp)
+
+## 5. Schedule backups
+
+Turn on **Back up automatically** in a database's settings, or from the **Tasks** tab, and pick a frequency with the visual cron editor. The **Tasks** tab shows the next run, the last runs and their result.
+
+Scheduled backups run while bbdump is open. Turn on **Launch at login** (Settings → General, or the button in the Tasks tab): bbdump then starts hidden in the menu bar, and backups missed while it was closed run at startup.
+
+![Scheduled tasks](../captures/tasks.webp)
+
+## Next steps
+
+- [Projects & Databases](projects-and-databases.md): projects, duplication, anonymized copies, **Update from…**
+- [Backup & Restore](backup-and-restore.md): backup options, encryption, retention, restores
+- [Database Viewer](database-viewer.md): browse and edit data, schema graph, SQL builder, extensions
+- [Scheduled Tasks](scheduled-tasks.md): schedules and catch-up
+- [MCP Server](mcp-server.md): connect your AI assistants, approvals, AI journal, anonymization for AI
+- [Configuration](configuration.md) and [Encryption & Security](encryption-and-security.md)

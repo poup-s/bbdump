@@ -1,48 +1,58 @@
-# System Tray
+# Menu Bar
 
-bbdump lives in your menu bar (macOS) or system tray (Linux) for quick access without opening the full application.
+bbdump lives in the menu bar (macOS) or the system tray (Linux). Closing or minimizing the window keeps it running there: scheduled backups, project proxies and the MCP confirmations keep working.
 
-## Overview
+<p>
+  <img src="../captures/tray.webp" alt="Menu bar popup" width="300">
+</p>
 
-The tray popup provides a compact view of your databases organized by project. It shows:
+## The popup
 
-- Total number of databases and their connection status
-- Total backup count and storage used
-- All projects with their databases
+Click the icon to open it. It shows:
 
-## Features
+- the number of databases;
+- your **projects**, each with its databases (click a project to fold it), and the databases outside any project;
+- for each database, the state of its last backup (dot: success, failure, in progress) and a button to **open it in the explorer**;
+- when a project's proxy is on: its port and state (green: running, amber: no target yet), and a **radio button** on each database to switch the proxy target (with a confirmation);
+- the number of **backups** and the space they take;
+- **Open bbdump**, to bring back the main window.
 
-### Quick Actions
+Right-click the icon for **Open bbdump** and **Quit**.
 
-Each database in the tray has a backup button to trigger an immediate backup without opening the main window.
+Names hidden with **Mask** in the app stay hidden in the popup.
 
-### Proxy Status
+## AI change confirmation
 
-When a project has its proxy enabled:
+When an AI assistant wants to change something through the MCP server (insert, update, delete, a write query, a new database, cancelling a query, undoing a change), the popup opens on its own and shows:
 
-- The project row shows the proxy port (e.g. `:54321`)
-- The proxy target database is highlighted
-- Click the dropdown arrow to expand/collapse the project's databases
+- the operation, the tool, the database and the table;
+- what the change does, how many rows it touches, and whether an undo point will be saved;
+- the SQL.
 
-### MCP Confirmation
+Choose **Approve** or **Deny**. Without an answer within **60 seconds**, the change is refused. If bbdump was closed, the MCP server starts it (hidden) to ask you.
 
-When Claude requests a mutation through the MCP server, the confirmation prompt appears directly in the tray popup:
+**Always allow (disable confirmations)** approves this change and turns confirmations off for the following ones. It is the same setting as **Settings → AI assistants (MCP) → Let assistants change data without asking**, where you can turn confirmations back on. Changes made without asking are still recorded in the AI journal and can be undone.
 
-- The requested SQL operation is displayed
-- **Approve** or **Deny** buttons
-- 60-second countdown timer
-- The tray icon flashes to get your attention
+## Data going to the AI
 
-### Open Full App
+On a database with **Anonymize for AI** on, a result whose text columns cannot be traced to a table (a computed column such as `upper(email)`, a view, free SQL) is shown to you before it goes to the assistant. The popup lists:
 
-Click **Open bbdump** at the bottom of the tray popup to open the main application window.
+- the database and the number of rows;
+- each column with its origin: **anonymized** (a column you chose), **computed or view** (unknown origin), or plain;
+- a few values per column, so you can judge. These values stay on your computer.
 
-## Tray Icon
+Columns that are checked are anonymized; anonymized and unknown columns are checked by default, and you can check or uncheck any of them. Then:
 
-The tray icon indicates the app is running in the background. bbdump continues to:
+- **Send**: the result goes to the assistant with the checked columns anonymized;
+- **Anonymize all**: every column is anonymized;
+- **Block**: the assistant gets nothing, and is told not to ask again.
 
-- Execute scheduled backup tasks
-- Serve proxy connections
-- Listen for MCP requests
+Without an answer within **60 seconds**, the result is sent with the checked columns anonymized. This popup also appears when confirmations of changes are turned off.
 
-Even when the main window is closed.
+See [MCP Server](mcp-server.md#personal-data-anonymized-for-ai) for what is anonymized and how.
+
+## Start at login
+
+**Settings → General → Launch at login** starts bbdump hidden in the menu bar when you log in, so scheduled backups run without opening the app. Backups missed while bbdump was closed run at launch.
+
+On macOS this uses the system login items; on Linux, an autostart entry (`~/.config/autostart/bbdump.desktop`).

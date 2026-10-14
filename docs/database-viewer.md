@@ -1,118 +1,118 @@
-# Database Viewer
+# Database Explorer
 
-The database viewer is a full-featured interface for exploring and interacting with your PostgreSQL databases. Open it by clicking **View** on any database.
+The explorer lets you browse and edit the data of any database, local or remote (cloud, SSH). Open it with **View** on a database card, or from the menu bar popup.
 
-## Navigation
+![Data](../captures/viewer-data.webp)
 
-The viewer has a sidebar on the left listing all tables in the database with their row counts. The main area has four modes accessible from the sidebar:
+## Layout
 
-- **Schema Visualizer** — Interactive relationship graph
-- **Performance** — Table statistics and health metrics
-- **SQL Builder** — Visual query builder and raw SQL editor
-- **Table Explorer** — Browse data, relations, and schema (default)
+The sidebar on the left holds:
 
-## Table Explorer
+- **Schema Visualizer**, **Performance** (databases on the local server) and **SQL Builder**;
+- a **schema selector**: every schema of the database, not only `public`;
+- the tables of the selected schema, with a filter and their row count.
 
-### Data Tab
+### Row counts
 
-Displays table data in a paginated grid.
+Counts in the sidebar are instant: `~1.2K` is an estimate from PostgreSQL's statistics, a plain number is exact, `?` means the table was never analyzed. bbdump only runs an exact `COUNT(*)` for small tables without statistics. Once a table is open, the grid shows its exact total (or the estimate, prefixed with `~`, above a million rows) and the sidebar follows.
 
-**Features:**
+## Tables in tabs
+
+Each table opens in a tab that keeps its search, page, sort, column widths and pending edits when you switch to another one.
+
+- A single click opens a **preview tab** (in italics) that the next table replaces. It stays once you search, sort, page or edit in it, or when you double-click it.
+- A dot marks a tab with unsaved edits; closing it (or the explorer) asks first.
+- Middle-click closes a tab; the tab strip scrolls with the mouse wheel.
+- Open tabs, their view and sort are remembered per database. The search text is not saved to disk.
+
+Each tab has three views: **Data**, **Relations** and **Schema**.
+
+## Data
 
 | Feature | Description |
 |---------|-------------|
-| **Column sorting** | Click any column header to sort ascending/descending |
-| **Column reordering** | Drag column headers to rearrange |
-| **Pagination** | Navigate pages, configure rows per page (10, 25, 50, 100) |
-| **Search** | Full-text search across all columns |
-| **Add row** | Insert a new row directly from the UI |
-| **Refresh** | Reload table data |
-| **Export CSV** | Download the current view as a CSV file |
+| **Search** | Finds rows where any column contains the text (case-insensitive) |
+| **Sort** | Click a column header to sort ascending, then descending |
+| **Resize** | Drag the edge of a column header |
+| **Paging** | 25, 50, 100 or 200 rows per page, or go to a page number |
+| **Foreign keys** | A linked value (🔗) opens the row it points to, next to the grid |
+| **Add row** | Insert a row (tables with a primary key) |
+| **Export CSV** | Download the current page as a CSV file |
+| **Refresh** | Reload the data |
 
-### Row Detail Panel
+### Row detail and edit
 
-Click any row to open the detail panel on the right side:
+Click a row to open its detail on the right:
 
-- View all field values with their PostgreSQL types
-- **Edit mode** — Modify field values inline. Changed fields are highlighted in yellow.
-- **Save** or **Discard** changes
-- **Copy** individual field values
-- **NULL toggle** — Set a field to NULL
+![Row detail](../captures/viewer-row.webp)
 
-### Relations Tab
+- Every field with its type, a copy button and a link to the row it references.
+- Edit fields in place: text, numbers, dates, booleans, JSON. Changed fields are highlighted; **Save** or **Discard**. Nullable fields can be set to `NULL`. The primary key is read-only.
+- **Duplicate** (⌘D) opens the add form pre-filled from the row. Sequences, identities, generated ids and "now" timestamps are left to the database; an id the app generates (Prisma cuid, uuid) gets a fresh value in the same format. A key or unique value still equal to the original is highlighted and blocks adding until it is changed (**Make unique** fixes it in one click).
+- **Delete** asks for confirmation.
 
-Displays foreign key relationships for the selected table:
+In the add form, columns with a default (sequence, `now()`…) can stay empty, and a foreign key column offers a searchable list of the rows it can point to.
 
-- **Outgoing** — Tables this table references
-- **Incoming** — Tables that reference this table
-- Click a related table to navigate to it
+## Relations
 
-### Schema Tab
+A graph of the table and the tables directly linked to it by foreign keys, in both directions, across schemas. **Magic Layout** rearranges it.
 
-Shows the full table structure:
+## Schema
 
-| Info | Description |
-|------|-------------|
-| **Columns** | Name, type, nullable, default value, primary key |
-| **Indexes** | Index name, columns, type (btree, gin, etc.), unique flag |
-| **Constraints** | Primary keys, foreign keys, check constraints, unique constraints |
-| **Triggers** | Associated triggers and their definitions |
+The columns of the table (name, type, nullable, default, primary key, foreign key) and the tables that reference it (**Referenced by**).
 
 ## Schema Visualizer
 
-An interactive graph showing all tables and their relationships:
+An interactive graph of the tables of the selected schema, plus the tables of other schemas linked to them by a foreign key. Each table shows its columns and types; foreign keys are drawn between columns.
 
-- Each table is rendered as a card with column names and types
-- Foreign key relationships are drawn as connecting lines
-- **Pan and zoom** — Navigate large schemas
-- **Drag** — Rearrange table positions
-- Tables from the sidebar can be highlighted in the graph
+![Schema](../captures/viewer-schema.webp)
 
-Powered by Vue Flow with an automatic dagre layout.
-
-## Performance
-
-Displays PostgreSQL statistics for each table:
-
-| Metric | Description |
-|--------|-------------|
-| **Live tuples** | Current number of live rows |
-| **Dead tuples** | Rows marked for deletion (waiting for VACUUM) |
-| **Last vacuum** | When the table was last vacuumed |
-| **Last analyze** | When statistics were last updated |
-| **Sequential scans** | Number of sequential table scans |
-| **Index scans** | Number of index scans |
-| **Table size** | Size on disk |
-| **Index size** | Total size of all indexes |
+- Pan, zoom and drag tables; the layout is automatic at first.
+- Double-click a table to open it in a tab.
 
 ## SQL Builder
 
-### Visual Mode
+![SQL builder](../captures/viewer-sql.webp)
 
-Build queries visually with form controls:
+### Visual mode
 
-| Clause | Description |
-|--------|-------------|
-| **SELECT** | Choose columns, toggle DISTINCT |
-| **FROM** | Select the source table |
-| **WHERE** | Add filter conditions with operators (=, !=, >, <, LIKE, IN, etc.) |
-| **JOIN** | Add JOIN clauses with table, type (INNER, LEFT, RIGHT, FULL), and ON condition |
-| **ORDER BY** | Sort by column, ascending or descending |
-| **LIMIT** | Quick presets (10, 25, 50, 100, 500) or custom value |
+Build `SELECT`, `UPDATE`, `DELETE` or `INSERT` queries from blocks:
 
-The generated SQL is displayed in real time and can be copied.
+| Block | Description |
+|-------|-------------|
+| **SELECT / FROM** | Table and columns |
+| **JOIN** | INNER, LEFT, RIGHT or FULL, with the ON condition suggested from foreign keys |
+| **WHERE** | Conditions with `=`, `!=`, `>`, `<`, `>=`, `<=`, `LIKE`, `ILIKE`, `IN`, `IS NULL`, `IS NOT NULL` |
+| **GROUP BY / ORDER BY / LIMIT** | Grouping, sorting and row limit |
+| **SET / VALUES** | Values for `UPDATE` and `INSERT` |
 
-### Raw SQL Mode
+The generated SQL is shown as you build, and can be copied. An `UPDATE` or `DELETE` without `WHERE` is flagged.
 
-Toggle to raw SQL mode to write queries directly:
+### SQL mode
 
-- Full SQL editor with syntax highlighting
-- Execute queries with **Ctrl+Enter** or the Execute button
-- Results displayed in a data grid
-- Row count and execution time shown
-- **Export CSV** — Download query results
-- Supports SELECT, INSERT, UPDATE, DELETE (mutations must be enabled in Settings)
+Switch the **SQL** toggle to write the query yourself (switching back rebuilds the blocks when it can).
 
-### Unsaved Changes Guard
+- Run with **⌘/Ctrl+Enter** or **Execute**; results show in a grid with the row count and duration.
+- Queries run in a **READ ONLY** transaction, return at most 5,000 rows and stop after 60 seconds. Only one statement is accepted.
+- `INSERT`, `UPDATE`, `DELETE`, `DROP`… need **Settings → Security → Write queries in the SQL editor**, and each one asks for confirmation.
+- **History** keeps the last 20 queries of the session; **Export CSV** downloads the results.
 
-If you have unsaved edits to a row and try to navigate away, a confirmation dialog prevents accidental data loss.
+## Performance
+
+Available for databases on the local server. It lists the **slowest queries** recorded by `pg_stat_statements`: calls, mean time, rows and share of the total execution time, with the full SQL to copy.
+
+When `pg_stat_statements` is not active, the tab explains why and can fix the configuration (`shared_preload_libraries`) and restart PostgreSQL for you. **Reset Statistics** starts over.
+
+## Extensions
+
+Open the catalog from the **⋯** menu of a database on the local server, or from **Settings → Local PostgreSQL**.
+
+![Extensions](../captures/extensions.webp)
+
+- About 90 extensions by category: AI & vectors, geography, search, data types, analytics, scheduling, performance, security, integrations, development. Each has a description, a link to its documentation, and a search.
+- Besides the extensions already on the server, the catalog lists well-known ones to add: pgvector, PostGIS, pgRouting, pg_cron, pg_partman, TimescaleDB, Citus, HypoPG, pgAudit, pg_repack…
+- **Install** puts the package on the local server, then enables the extension: `brew install` with a Homebrew PostgreSQL; on Linux (Debian / Ubuntu, Fedora, PGDG for RHEL-like systems) one system password prompt installs the package. Without a graphical prompt, the exact command for your server's version is shown to copy.
+- Extensions loaded at startup (pg_cron, pgAudit, TimescaleDB, pg_stat_statements…) are added to `shared_preload_libraries`, and PostgreSQL can be restarted from the dialog; they are enabled after the restart.
+- **Remove** asks for confirmation: the extension's types and functions are dropped.
+
+When you duplicate a database that uses an extension the local server lacks (PostGIS, for example), the duplicate dialog names it first and offers to install it.

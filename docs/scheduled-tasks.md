@@ -1,39 +1,43 @@
 # Scheduled Tasks
 
-bbdump supports automatic backup scheduling using cron expressions. Tasks run in the background as long as the app is open.
+bbdump backs up your databases on a schedule, per database. Scheduled backups are the only kind of task: each one is a normal backup (same settings, verification, encryption and retention, see [Backup & Restore](backup-and-restore.md)).
 
-## Creating a Scheduled Task
+## Setting a schedule
 
-1. Go to the **Tasks** tab
-2. Click the **+** button
-3. Select a **database**
-4. Configure the **schedule**
-5. Save
+A schedule belongs to a database. Set it when adding the database (last step), or later in its settings, **Schedule** section:
 
-## Schedule Configuration
+1. Turn on **Back up automatically**.
+2. Choose the frequency in the cron editor.
+3. Save.
 
-### Presets
+The pencil on the **Tasks** page opens the same section.
 
-Quick-select common schedules:
+### Cron editor
 
-| Preset | Cron Expression | Description |
-|--------|----------------|-------------|
-| Every minute | `* * * * *` | For testing only |
-| Every 5 minutes | `*/5 * * * *` | High-frequency monitoring |
-| Every 15 minutes | `*/15 * * * *` | Frequent backups |
-| Every 30 minutes | `*/30 * * * *` | Semi-frequent backups |
-| Every hour | `0 * * * *` | Hourly at :00 |
-| Every 6 hours | `0 */6 * * *` | 4 times per day |
-| Every 12 hours | `0 */12 * * *` | Twice per day |
-| Daily at 2 AM | `0 2 * * *` | Standard daily backup |
-| Daily at midnight | `0 0 * * *` | Midnight backup |
-| Weekly (Sunday 2 AM) | `0 2 * * 0` | Weekly backup |
-| Monthly (1st at 2 AM) | `0 2 1 * *` | Monthly backup |
-| Weekdays at 8 AM | `0 8 * * 1-5` | Business days only |
+Three modes:
 
-### Custom Cron Expression
+- **Preset**: a list of common schedules.
+- **Visual**: minute, hour, day, month and day of week, each as a field.
+- **Manual**: a 5-field cron expression.
 
-Enter a standard 5-field cron expression:
+The schedule is shown in plain words (English or French, following the app's language).
+
+| Preset | Expression |
+|--------|------------|
+| Every minute | `* * * * *` |
+| Every hour | `0 * * * *` |
+| Daily (midnight) | `0 0 * * *` |
+| Daily (2 AM) | `0 2 * * *` |
+| Daily (6 AM) | `0 6 * * *` |
+| Daily (noon) | `0 12 * * *` |
+| Weekly (Sunday, midnight) | `0 0 * * 0` |
+| Monthly (1st, midnight) | `0 0 1 * *` |
+| Twice daily | `0 0,12 * * *` |
+| Every 6 hours | `0 */6 * * *` |
+| Every 12 hours | `0 */12 * * *` |
+| Weekdays only (midnight) | `0 0 * * 1-5` |
+
+Cron format:
 
 ```
 ┌───────── minute (0-59)
@@ -45,42 +49,38 @@ Enter a standard 5-field cron expression:
 * * * * *
 ```
 
-**Examples:**
+Examples: `0 3 * * *` (every day at 3:00), `30 1 * * 1` (Mondays at 1:30), `0 0 1,15 * *` (the 1st and 15th at midnight).
 
-| Expression | Meaning |
-|------------|---------|
-| `0 3 * * *` | Every day at 3:00 AM |
-| `0 */4 * * *` | Every 4 hours |
-| `30 1 * * 1` | Every Monday at 1:30 AM |
-| `0 0 1,15 * *` | 1st and 15th of each month at midnight |
+## Tasks page
 
-bbdump displays a human-readable description of the schedule (in English or French depending on your language setting).
+![Scheduled tasks](../captures/tasks.webp)
 
-## Task Management
+At the top: the next backup, and how many databases are scheduled, off, or failed on their last run.
 
-The Tasks tab displays a table with:
+Each scheduled database shows:
 
-| Column | Description |
-|--------|-------------|
-| **Database** | Target database name |
-| **Schedule** | Visual representation of the cron expression |
-| **Last Backup** | Date and time of the most recent backup |
-| **Status** | Active (green) or Paused |
+- its schedule in words and its cron expression, with what applies to its backups: how many are kept, **Verified**, **Encrypted**;
+- the next run ("in 3 hours", with the day and time), or **Backing up…** while it runs;
+- the last runs as a strip of up to 12 marks, green or red. Hover one for its date, what started it (manual, scheduled, caught up), its duration and size;
+- the error of the last run when it failed;
+- **Back up now**, a switch to turn automatic backups off or on, and the pencil to edit the schedule.
 
-### Task Actions
+Databases without automatic backups are listed under **Automatic backups off**, with **Turn on** (when a schedule is already set) and **Set up**.
 
-- **Pause/Resume** — Temporarily disable a task without deleting it
-- **Edit** — Change the schedule or target database
-- **Delete** — Remove the scheduled task permanently
+When a scheduled backup fails, a system notification says so, since bbdump usually runs hidden. Each database keeps its last 30 runs (in `backup-history.json`).
 
-## How It Works
+## Launch at login
 
-- Tasks are powered by `node-cron` running in the Electron main process
-- Backups are triggered automatically at the scheduled time
-- The app must be running for scheduled tasks to execute
-- Each task execution creates a standard backup (same as manual backups)
-- All task activity is logged in the **Logs** tab
+Scheduled backups only run while bbdump is open. Turn on **Settings → General → Launch at login**: bbdump then starts hidden in the menu bar when you log in (a login item on macOS, an autostart entry on Linux). The **Tasks** page suggests it when backups are scheduled and it is off.
 
-## Retention
+## Missed backups
 
-Backup retention is configured per-task. Older backups beyond the retention period are automatically cleaned up.
+About 30 seconds after bbdump starts, it checks each scheduled database: if the last expected run passed while bbdump was closed (looking back up to 31 days) and no backup was made since, one backup runs, marked **caught up**. Missed backups run one after another, and only once, however many runs were missed.
+
+The **Tasks** page flags a database whose scheduled backup was missed.
+
+## Good to know
+
+- A backup still running when the next one is due is not started twice: the next one is skipped.
+- An invalid cron expression never runs; the **Tasks** page says so.
+- All activity is in the **Logs** page.

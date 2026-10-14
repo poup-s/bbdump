@@ -22,6 +22,8 @@ Once installed, your AI assistant can:
 2. In the **AI assistants (MCP)** section, click **Connect** next to your client
 3. Restart the client
 
+![AI assistants](../captures/ai-clients.webp)
+
 bbdump detects which clients are present. A client shows **Update available** when its entry points to an older bbdump setup (for example after moving the app, or after updating from 1.0.2): click **Update all**.
 
 ### Supported clients
@@ -180,33 +182,48 @@ The MCP server exposes 45 tools and 4 prompts. Tools are annotated (read-only or
 
 ## Mutation Confirmation
 
-Write operations (the tools marked ✱) require user confirmation:
+Write operations (the tools marked ✱) require your approval:
 
-1. The assistant requests a mutation through the MCP server
-2. bbdump shows a confirmation prompt in the system tray popup
+1. The assistant requests a change through the MCP server
+2. bbdump opens the menu bar popup with the operation, the database and table, the SQL, the number of rows touched and whether an undo point will be saved
 3. You have **60 seconds** to approve or deny
-4. If approved, the mutation is executed
-5. If denied or timed out, the operation is cancelled
+4. If approved, the change runs; if denied or without an answer, it is cancelled and the assistant is told which
 
-If bbdump is closed, the MCP server starts it to show the prompt.
+If bbdump is closed, the MCP server starts it (hidden) to show the prompt.
 
 The confirmation server listens on `127.0.0.1` only. At each launch bbdump generates a random token and writes it with the port to `.mcp-confirm-port` (readable by your user only). Requests without the token, requests sent by a web page (with an `Origin` header) and bodies over 64 KB are rejected.
 
 ### Skip Confirmation
 
-In **Settings → AI assistants (MCP)**, **Let assistants change data without asking** approves every change automatically. Use this only in development environments.
+**Settings → AI assistants (MCP) → Let assistants change data without asking** approves every change automatically; **Always allow** in the confirmation prompt turns on the same setting. Use this only in development environments. Changes are still recorded in the AI journal.
+
+## AI Journal and Undo
+
+Every change made through MCP is recorded on this computer, in `ai-journal/` next to `config.json`, encrypted with bbdump's key and kept **30 days**. Nothing is written in your database.
+
+- When it can, a change saves an **undo point**: the rows it touches, before and after, including rows changed or deleted by a foreign key cascade. Structured tools (`insert_rows`, `update_rows`, `delete_rows`) read them in the change's own transaction; a free `INSERT` / `UPDATE` / `DELETE` in `execute_write_query` is watched by a temporary trigger created and removed inside the transaction.
+- Schema changes (DDL) and multi-statement queries have no undo point: the confirmation says so, and the assistant is told to back up first (`create_backup`).
+- **AI journal**, in a database's **⋯** menu, lists every change with its SQL, client, and the rows before and after. **Undo this change** puts the rows back in one transaction. Undo is refused when those rows changed since, and the dialog shows them as they are now.
+- Assistants can do the same with `list_changes` and `undo_change`; an undo asks for your approval too.
 
 ## Personal Data Anonymized for AI
 
 Off by default. In a database's **⋯** menu, **Anonymize for AI** turns it on and chooses the columns: those that look personal (email, phone, name, address, IP…) are preselected and partly starred, keeping their shape (`bob1234@email.fr` → `****234@email.fr`, `sebastien poupi` → `*****tien poupi`); a fake email, phone…, a masked value (`XXXX…`) or NULL can be chosen instead. A column linked by a foreign key follows the one it points to. Databases with masking on show an **AI anonymized** badge.
 
+![Anonymize for AI](../captures/ai-anonymize.webp)
+
 The MCP server reads the setting on every call (`ai-masking.json`, next to `config.json`), so it applies at once, without reconnecting the client. The data itself is never changed.
 
 - `read_rows`, `search_table`, `full_text_search`, `profile_table` and the rows returned after a change come with the chosen columns replaced.
-- A result with text columns whose origin is unknown (a computed column such as `upper(email)`, a view, free SQL in `execute_query`) is shown first in the tray popup: the columns, a few values, and what is about to be masked. You choose to send it, anonymize more or fewer columns, anonymize everything, or block it. Without an answer within 60 seconds, the checked columns are anonymized.
+- A result with text columns whose origin is unknown (a computed column such as `upper(email)`, a view, free SQL in `execute_query`) is shown first in the menu bar popup, **Data going to the AI**: each column with its origin, a few values, and what is about to be anonymized. Choose **Send** (with the checked columns anonymized; you can check or uncheck any), **Anonymize all**, or **Block** (the assistant gets nothing and is told not to retry). Without an answer within 60 seconds, or if bbdump does not answer, the anonymized and unknown columns are anonymized. This popup is shown even when change confirmations are off.
 - The same value always gives the same fake, so the assistant can still count, group and join; results list `masked_columns` and tell it not to try to recover the values.
 
-Masking hides values, it does not stop an assistant from filtering on them (`WHERE email = '…'` still tells whether a row exists). To give an assistant data that holds no real personal value at all, use an anonymized duplicate.
+Limits:
+
+- Masking hides values, it does not stop an assistant from filtering on them (`WHERE email = '…'` still tells whether a row exists).
+- Only rows are filtered. Query texts shown by `get_slow_queries`, `list_active_connections`, `list_locks` or `database_health` are not, and may hold values written in a query.
+
+To give an assistant data that holds no real personal value at all, use an [anonymized duplicate](anonymization.md).
 
 ## Troubleshooting
 
@@ -225,7 +242,6 @@ Masking hides values, it does not stop an assistant from filtering on them (`WHE
 
 ### Mutations are blocked
 
-- Check the confirmation prompt in the system tray
-- Ensure bbdump's main window or tray is accessible
+- Check the confirmation prompt in the menu bar popup (it is refused after 60 seconds without an answer)
 - If the confirmation server is not running, restart bbdump
 - After updating from bbdump 1.0.2, click **Update all** so each client's entry uses the new command

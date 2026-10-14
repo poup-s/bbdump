@@ -1,58 +1,58 @@
-# Roadmap — ideas to discuss
+# Roadmap
 
-Not commitments: directions to discuss before planning. Items move to the changelog once
-they are designed and scheduled.
+What bbdump already does, what comes next, and ideas still being discussed. Plans can change; the [changelog](../CHANGELOG.md) has the details of each release.
 
-## 1. bbdump self-hosted in Docker (Umbrel, CasaOS, Unraid, NAS)
+## Done
 
-**Idea:** run bbdump itself as a container on a home server or NAS, used from a browser,
-backing up the PostgreSQL databases of the other services (other containers, VPS, managed
-databases). Published as an app on Umbrel's app store and similar platforms.
+### 1.1 (October 2026)
 
-**Why:**
-- Backups run 24/7 on an always-on machine, instead of only while the desktop app is open.
-- One place to back up every database of a self-hosted setup.
-- Natural fit for the Umbrel / CasaOS / Unraid community.
+- **Remote databases**: connection URL with SSL modes and CA certificates, databases on a server **via SSH** (bbdump opens the tunnel), cloud guides for Supabase, Neon, Railway and Render, Neon account by API key.
+- **Client tools only**: remote databases work without a local PostgreSQL server ("remote databases only" mode).
+- **Verified backups**: each dump is read back; retention of the last N backups; the right `pg_dump` for the server's version.
+- **Restores that really replace the content**, in one transaction, with a backup of the target first.
+- **Scheduling that survives restarts**: launch at login (hidden), catch-up of missed backups, a notification when one fails.
+- **Update from…**: bring a local copy up to date with another database of its project (schema and missing rows, optionally anonymized).
+- **Explorer**: tables in tabs, every schema, row duplication, extension catalog with package install on the local server.
+- **AI assistants**: one-click setup for Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Devin, VS Code and OpenCode; 45 tools and 4 prompts; **AI journal** with undo of every change.
+- New onboarding, and pages redone (home, tasks, backups, logs, settings).
 
-**What it implies:**
-- Always "remote databases only": no local PostgreSQL server features. The `usageMode:
-  'remote'` introduced in 1.1.0 already hides them; the Docker edition would force it.
-- A **headless server mode**: the core (backups, scheduling, viewer, SSL, MCP) is plain
-  Node already; Electron-only parts (window, tray, dialogs, notifications, app paths)
-  need server equivalents.
-- An **HTTP/WebSocket API** exposing the same actions as today's IPC, and a transport
-  layer in the Vue app so the same UI runs in Electron (IPC) or in a browser (HTTP).
-- **Authentication** (mandatory once the UI is reachable on a network), and HTTPS behind
-  the platform's reverse proxy.
-- Packaging: Docker image (with pg_dump/pg_restore for several PostgreSQL versions),
-  `docker-compose.yml`, `umbrel-app.yml`; data and backups in mounted volumes.
-- The encryption key then lives on the server: document how to back it up.
+### 1.1.2
 
-**Open questions:** one image for all platforms (arm64 + x64)? Which PostgreSQL client
-versions to ship? Notifications (email, webhook, ntfy/Gotify)? Multi-user or single user?
+- **bbdump updates itself on macOS**: download, checksum check, install and restart, from the app.
 
-## 2. Docker as a local PostgreSQL engine (desktop app)
+### 1.2
 
-**Idea:** in the desktop app, a third usage mode (the "Docker — coming soon" card of the
-onboarding) where bbdump creates and drives PostgreSQL containers instead of using a
-PostgreSQL installed on the system.
+- **Anonymized duplicates**: copy a database with its personal data anonymized; the real values never reach your machine.
+- **Anonymization for AI**: chosen columns reach AI assistants anonymized, and results of unknown origin are shown to you first.
+- **What's new** tours after each update, all kept on the Info page.
 
-**Why:**
-- Several PostgreSQL versions side by side (e.g. 14 for an old project, 18 to test).
-- No system install: no Homebrew, no sudo, no service, no role; identical on macOS,
-  Linux and Windows, and the most realistic path to a Windows version.
-- Isolation (deleting a database removes everything), environments matching production,
-  disposable databases to test that a backup really restores.
-- `pg_dump` can run inside the container, with the server's exact version.
+### 1.2.1
 
-**Trade-offs:** requires Docker Desktop installed and running (memory use), slightly
-slower disk on macOS, one more tool to understand.
+- Duplicating a database **checks its extensions first**: a missing one (e.g. PostGIS) is named, with an install button when possible, and the tables not copied are listed.
 
-**Scope to decide:** create/start/stop/delete containers from bbdump, detect existing
-PostgreSQL containers (e.g. from docker compose projects) to back them up, choice of
-image version per database.
+## Next: Windows (beta) in 1.3
 
----
+- **Remote databases and client tools only**: no installation or control of a local PostgreSQL server at first; a PostgreSQL already running on the machine can still be used.
+- Windows installer (x64 and ARM64) and automatic updates. The app will not be code-signed at first, so Windows may show a SmartScreen warning.
+- `pg_dump` and `psql` found in the usual PostgreSQL install folders; SSH through Windows' OpenSSH.
+- Notification area icon, and launch hidden at login.
 
-Also on the list: macOS code signing (blocked on an Apple Developer account), remote
-backup destinations (S3-compatible), Windows support.
+## Later
+
+- **Remote backup destination** (S3-compatible storage): postponed to a later version.
+- **macOS code signing**: blocked for now (no Apple Developer account yet). Until then, the first launch needs right-click → Open, and bbdump updates itself without the macOS updater.
+- Other languages than English and French: not planned for now.
+
+## Ideas being discussed
+
+Not commitments: directions to discuss before planning.
+
+### bbdump self-hosted in Docker (Umbrel, CasaOS, Unraid, NAS)
+
+Run bbdump as a container on a home server or NAS, used from a browser, to back up the PostgreSQL databases of other services around the clock. It would be "remote databases only", and needs a server mode, an HTTP API for the same interface, authentication, and a Docker image with several `pg_dump` versions.
+
+Open questions: arm64 and x64 images, which PostgreSQL client versions to ship, notifications (email, webhook, ntfy/Gotify), single or multiple users.
+
+### Docker as a local PostgreSQL engine
+
+A third usage mode in the desktop app, where bbdump creates and drives PostgreSQL containers instead of using a PostgreSQL installed on the system: several versions side by side, no system install, disposable databases to test that a backup restores. It requires Docker Desktop to be installed and running.

@@ -1,26 +1,23 @@
 # bbdump Documentation
 
-Welcome to the bbdump documentation. These guides cover everything you need to get started and make the most of the application.
-
 ## Getting Started
 
-- [Installation](installation.md) — Download, install, and launch bbdump on macOS or Linux
-- [Quick Start](quick-start.md) — Create your first project, add a database, and run your first backup
+- [Installation](installation.md) — Install bbdump on macOS or Linux, and update it
+- [Quick Start](quick-start.md) — Your first project, database and backup
 
-## Core Features
+## Features
 
-- [Projects & Databases](projects-and-databases.md) — Organize connections into projects, manage local and external databases
-- [Backup & Restore](backup-and-restore.md) — Manual and scheduled backups, restore workflows, encryption
-- [Scheduled Tasks](scheduled-tasks.md) — Automate backups with cron scheduling
-- [Database Viewer](database-viewer.md) — Browse tables, edit rows, inspect schemas, and run queries
-
-## Advanced Features
-
-- [Proxy Server](proxy-server.md) — Route local connections to remote databases through a per-project TCP proxy
-- [MCP Server](mcp-server.md) — Connect Claude Desktop to your databases via Model Context Protocol
-- [Encryption & Security](encryption-and-security.md) — Password encryption, backup encryption, and key management
+- [Projects & Databases](projects-and-databases.md) — Local, remote, SSH and cloud databases, grouped by project
+- [Backup & Restore](backup-and-restore.md) — Verified backups, encryption, retention, restores that replace the content
+- [Scheduled Tasks](scheduled-tasks.md) — Automatic backups and catch-up of missed ones
+- [Anonymization](anonymization.md) — Anonymized duplicates, and anonymization in Update from…
+- [Database Explorer](database-viewer.md) — Tables in tabs, row editing, schema graph, SQL builder, extensions
+- [Proxy per Project](proxy-server.md) — One fixed local address, routed to the database you choose
+- [MCP Server](mcp-server.md) — AI assistants, change confirmation, AI journal, anonymization for AI
+- [Menu Bar](system-tray.md) — Quick access, proxy switch, AI confirmations
 
 ## Reference
 
-- [Configuration](configuration.md) — App settings, file locations, and environment details
-- [System Tray](system-tray.md) — Quick access from the menu bar
+- [Configuration](configuration.md) — Settings and file locations
+- [Encryption & Security](encryption-and-security.md) — Password and backup encryption, key management
+- [Roadmap](ROADMAP.md) — What is done, what comes next

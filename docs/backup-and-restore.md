@@ -1,98 +1,90 @@
 # Backup & Restore
 
-## Backup
+## Backups
 
-bbdump uses `pg_dump` under the hood to create PostgreSQL backups.
+bbdump backs up with `pg_dump` in its custom format (`-F c`), compressed (level 6). A backup can be started:
 
-### Running a Manual Backup
+- from a database card: **Backup**, after a confirmation;
+- from the **Backups** page or the **Tasks** page: **Back up now**;
+- on a schedule (see [Scheduled Tasks](scheduled-tasks.md));
+- by an AI assistant through the MCP server (see [MCP Server](mcp-server.md)).
 
-1. Go to the **DB** tab
-2. Click **Backup** next to the target database
-3. The backup starts immediately
-4. Progress is streamed in real time to the **Logs** tab
+Progress and errors go to the **Logs** page. A database reached through SSH gets its tunnel for the whole dump.
 
-The backup file is saved to your configured backup directory (default: `<data dir>/backups/` (see [Configuration](configuration.md))).
+### Backup settings
 
-### Backup Formats
+Per database, in the **Backup** section of its settings (or the last step when adding it):
 
-| Format | Extension | Description |
-|--------|-----------|-------------|
-| **Custom** | `.backup` | PostgreSQL custom format — compressed, supports selective restore, parallel restore. Recommended. |
-| **Plain** | `.sql` | Plain-text SQL dump — human-readable, can be executed with `psql` |
+| Setting | Description | Default |
+|---------|-------------|---------|
+| **Output directory** | Folder the backups are written to | The default backup folder |
+| **Backups to keep** | Older backups of this database are deleted after each successful backup | All |
+| **Encrypt backup files** | Encrypt each dump with AES-256-GCM | Off |
+| **Verify each backup** | Read the whole dump back before trusting it | On |
 
-### Backup Options
+The default backup folder for new databases is set in **Settings → Backups** (initially `backups/` in the data folder, see [Configuration](configuration.md)).
 
-These options are configured per-database when editing the connection:
+### What happens during a backup
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| **Compression** | Compression level from 0 (none) to 9 (maximum) | 6 |
-| **Parallel jobs** | Number of parallel dump threads for large databases | 1 |
-| **Timeout** | Maximum backup duration in seconds. 0 = no limit | 0 |
-| **Encrypt backup** | Encrypt the backup file with AES-256-GCM after creation | false |
+1. **The right `pg_dump` is picked** for the server's version. `pg_dump` reads servers of its own major version and older ones, never newer ones: bbdump uses the same major version when it is installed, otherwise the closest newer one. If every installed `pg_dump` is older than the server, the backup stops with the command to install the right one (e.g. `brew install postgresql@17`). When the server's version cannot be read, the newest `pg_dump` is used.
+2. **Free disk space is checked** against an estimate of the dump size.
+3. **`pg_dump` runs** (30 minutes at most by default).
+4. **The dump is verified**: `pg_restore` reads the whole archive, not only its table of contents. A truncated or corrupt dump is reported as a failed backup.
+5. **The dump is encrypted**, if turned on, with the key from **Settings → Security** (see [Encryption & Security](encryption-and-security.md)).
+6. **Retention** deletes the oldest backups of this database beyond the number to keep.
+7. **The run is recorded** (success or failure, duration, size) for the **Tasks** page.
 
-### Backup File Naming
+A failed run never leaves a partial file behind.
 
-Files are named with the pattern:
+Files are named `<database id>_<timestamp>.backup`, for example:
 
 ```
-{database_id}_{timestamp}.backup
+c42a45e5-8817-48b2-869e-ca56171e980a_2026-03-30T14-00-00-000Z.backup
 ```
 
-Example: `c42a45e5-8817-48b2-869e-ca56171e980a_2026-03-30T14-00-00-000Z.backup`
+An encrypted backup keeps the same name. Retention only counts files named this way, in the folder of the new backup.
 
-### Encrypted Backups
+### Backups page
 
-When backup encryption is enabled:
+![Backups](../captures/backups.webp)
 
-1. `pg_dump` creates the backup file normally
-2. bbdump encrypts the file using AES-256-GCM with your encryption key
-3. The original unencrypted file is deleted
-4. The encrypted file uses the `.backup.enc` extension
+Backups are grouped by database, the most recently backed up first. Each group shows its total size, its retention ("Keeps the last 5") and a **Back up now** button. A group whose database was removed from bbdump stays listed as "(removed from bbdump)".
 
-Encrypted backups are decrypted automatically when restoring through bbdump.
+Each backup shows its date (the newest is marked **latest**), size and whether it is encrypted, with these actions:
+
+- **Restore** (below)
+- **Show in Finder** / **Show in folder**
+- **Export a copy**: save it elsewhere
+- **Delete**
+
+Several backups can be selected to delete them at once, and the list can be filtered by database. It lists every folder backups are written to: each database's output folder, the default folder and the internal one.
 
 ## Restore
 
-### Restoring a Backup
+**Restore** on a backup opens a two-step dialog.
 
-1. Go to the **Backups** tab
-2. Find the backup you want to restore
-3. Click **Restore**
-4. Choose a target:
-   - **Existing database** — Select a database already configured in bbdump
-   - **New database** — Enter a name to create a new local database
-5. A **5-second countdown** starts before the restore begins — this is a safety measure to prevent accidental restores
-6. Confirm to proceed
+![Restore](../captures/restore.webp)
 
-### Restore Process
+### 1. Target
 
-bbdump uses `pg_restore` (for custom format) or `psql` (for plain SQL) to restore backups:
+- **Existing Database**: any saved database, local or remote. **Next** is enabled after a 5-second wait.
+- **New Database**: a name and a port; a new local database is created, then the backup is restored into it. Not shown in remote-only mode (see [Projects and databases](projects-and-databases.md#usage-mode)).
 
-1. If targeting an existing database, existing data is dropped and replaced
-2. Schema and data are restored from the backup file
-3. If the backup was encrypted, it is decrypted in memory before restore
-4. Progress and any warnings are streamed to the **Logs** tab
+### 2. Confirmation
 
-### Managing Backups
+Type the target's name to confirm. For an existing database, **Back up … before replacing it** is on by default: the target is backed up first, so you can go back from the **Backups** page. If that backup fails, nothing is restored. This backup counts like any other, retention included.
 
-The **Backups** tab lists all backup files with:
+### A restore replaces the content
 
-| Column | Description |
-|--------|-------------|
-| **Database** | Source database name and backup file path |
-| **Date** | Backup creation date and time |
-| **Size** | File size |
-| **Actions** | Restore, Download, Delete |
+Restoring into an existing database replaces its content with the backup's:
 
-**Filtering:** Use the dropdown to filter backups by database (all databases or a specific one).
+1. The schemas the backup contains are emptied first (`DROP SCHEMA … CASCADE`), all in **one transaction**: either every one is emptied, or none is. Tables the backup does not have are deleted with them. Schemas the backup does not contain (Supabase's `auth`, `storage`…) are left alone.
+2. The schema, the data and then the indexes, constraints and triggers are restored with `pg_restore` (without owners or privileges, so a backup restores under another user). CHECK constraints are set aside while the rows load, then put back.
 
-**Download:** Save a copy of the backup file to a custom location.
+If the schemas cannot be emptied (missing rights, a lock held more than 15 seconds), **nothing is changed** and the reason is shown. This is what happens on a hosted database whose schemas belong to another role than yours (common on managed platforms): the restore is refused rather than half done.
 
-**Delete:** Permanently remove the backup file from disk.
+The dialog reports the result: restored, restored with errors (the errors are listed), or failed. Encrypted backups are decrypted to a temporary file for the restore, deleted afterwards.
 
-## Backup Storage
+### Restore into another database
 
-By default, backups are stored in `<data dir>/backups/` (see [Configuration](configuration.md)). You can change this location in **Settings > Backup Location**.
-
-All backup files in the configured directory are scanned and displayed in the Backups tab, regardless of which database they belong to.
+The target does not have to be the database the backup came from: restore a production backup into a local copy, or into a new local database. To bring a local copy up to date without replacing it, use **Update from…** instead (see [Projects and databases](projects-and-databases.md#update-from)).
