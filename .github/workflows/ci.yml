@@ -87,7 +87,12 @@ jobs:
           node -e "const w=require('./dist/main/platform/windows.js'); console.log('outcome:', w.wingetOutcome($LASTEXITCODE, ''))"
           $dump = 'C:\Program Files\PostgreSQL\18\bin\pg_dump.exe'
           if (Test-Path $dump) { & $dump --version } else { throw "no $dump" }
-          if (Test-Path 'C:\Program Files\PostgreSQL\18\bin\postgres.exe') { Write-Host 'Note: the server binaries were installed too' }
+          # Client tools only: no PostgreSQL 18 service and no data folder must have been created
+          $service = Get-Service -Name 'postgresql*18*' -ErrorAction SilentlyContinue
+          if ($service) { Write-Host "SERVICE CREATED: $($service.Name) ($($service.Status))" } else { Write-Host 'No PostgreSQL 18 service: client tools only' }
+          if (Test-Path 'C:\Program Files\PostgreSQL\18\data') { Write-Host 'DATA FOLDER CREATED' } else { Write-Host 'No data folder' }
+          Get-ChildItem 'C:\Program Files\PostgreSQL\18' | Select-Object -ExpandProperty Name
+          Get-ChildItem 'C:\Program Files\PostgreSQL\18\bin' -Filter '*.exe' | Select-Object -ExpandProperty Name
 
       - name: The packaged app starts
         shell: pwsh
