@@ -1063,15 +1063,19 @@ uninstall_homebrew() {
 }
 
 # --- Uninstall: bbdump config & data ---
+# Electron userData: where the app actually stores config.json, keys, backups history and logs
+bbdump_data_dir() {
+  if [ "$(uname -s)" = "Darwin" ]; then
+    echo "$HOME/Library/Application Support/bbdump"
+  else
+    echo "${XDG_CONFIG_HOME:-$HOME/.config}/bbdump"
+  fi
+}
+
 uninstall_config_data() {
   step "Removing bbdump data"
-  # Electron userData: where the app actually stores config.json, keys and logs
   local data_dir
-  if [ "$(uname -s)" = "Darwin" ]; then
-    data_dir="$HOME/Library/Application Support/bbdump"
-  else
-    data_dir="${XDG_CONFIG_HOME:-$HOME/.config}/bbdump"
-  fi
+  data_dir="$(bbdump_data_dir)"
   if [ -d "$data_dir" ]; then
     warn "${E}This will delete all config, encryption keys, and logs${R}"
     echo -ne "    ${Y}Are you sure? [y/N]:${R} "
@@ -1184,8 +1188,10 @@ show_uninstall_components() {
 
   # 5. Config data
   components+=("config")
-  labels+=("bbdump data (~/.bbdump/)")
-  if [ -d "$HOME/.bbdump" ]; then statuses+=("found"); else statuses+=("not found"); fi
+  local data_dir
+  data_dir="$(bbdump_data_dir)"
+  labels+=("bbdump data (${data_dir/#$HOME/~})")
+  if [ -d "$data_dir" ]; then statuses+=("found"); else statuses+=("not found"); fi
 
   # Display components
   local i
@@ -1242,7 +1248,7 @@ show_uninstall_components() {
       pg_macos)   echo -e "    ${E}•${R} PostgreSQL (Homebrew)" ;;
       pg_linux)   echo -e "    ${E}•${R} PostgreSQL server & client tools" ;;
       homebrew)   echo -e "    ${E}•${R} Homebrew (and all packages)" ;;
-      config)     echo -e "    ${E}•${R} bbdump data (~/.bbdump/)" ;;
+      config)     echo -e "    ${E}•${R} bbdump data ($(bbdump_data_dir | sed "s#^$HOME#~#"))" ;;
     esac
   done
   echo ""

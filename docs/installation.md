@@ -142,7 +142,7 @@ Running the install script again also updates bbdump.
 curl -fsSL https://raw.githubusercontent.com/poup-s/bbdump/main/install.sh | bash -s -- --uninstall
 ```
 
-You pick what to remove: the app, the Linux shortcut, PostgreSQL, Homebrew (macOS). Your data is not removed this way: delete it by hand (below).
+You pick what to remove: the app, the Linux shortcut, PostgreSQL, Homebrew (macOS), and bbdump's data (configuration, encryption key, history, logs — asked once more before deleting). Export the encryption key first if you may need your encrypted backups again.
 
 ### By hand
 
