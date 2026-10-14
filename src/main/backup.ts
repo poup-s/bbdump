@@ -13,7 +13,7 @@ import { fileEncryptionManager } from './fileEncryption';
 import { BackupHistory, BackupTrigger } from './backupHistory';
 import { withTunnel } from './sshTunnel';
 import { emptySchemasSql, restoreErrors, schemasInToc } from './restorePlan';
-import { newestPgTool, pickPgDumpForServer, pgDumpInstallHint } from './pgToolChoice';
+import { newestPgTool, pickPgDumpForServer, pgDumpInstallHint, uniqueToolPaths } from './pgToolChoice';
 import { SslSettings, libpqSslEnv, toNodePgSsl, stripSslParams } from './sslConfig';
 import * as Electron from 'electron';
 import { defaultWhich } from './platform/probe';
@@ -151,6 +151,11 @@ export class BackupManager {
         // Ignore
       }
 
+      // The same file found twice (e.g. Program Files, then PATH, which now holds that folder) counts once
+      const unique = uniqueToolPaths(versions);
+      versions.length = 0;
+      versions.push(...unique);
+
       // Organiser par version majeure
       const versionsByMajor = new Map<string, PgDumpVersion[]>();
       for (const v of versions) {
@@ -221,6 +226,11 @@ export class BackupManager {
       } catch {
         // Ignore
       }
+
+      // The same file found twice (e.g. Program Files, then PATH, which now holds that folder) counts once
+      const unique = uniqueToolPaths(versions);
+      versions.length = 0;
+      versions.push(...unique);
 
       // Organiser par version majeure
       const versionsByMajor = new Map<string, PgDumpVersion[]>();

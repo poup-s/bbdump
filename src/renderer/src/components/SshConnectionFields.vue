@@ -151,9 +151,10 @@ watch(() => [ssh.value.host, ssh.value.user, ssh.value.port, ssh.value.remoteHos
 
 const sshErrorText = (failure: SshFailure) => {
   const known = ['auth', 'unknown-host', 'host-changed', 'dns', 'timeout', 'unreachable', 'not-found', 'not-url'];
-  return known.includes(failure.code)
-    ? t(`ssh.errors.${failure.code}`, { host: ssh.value.host, file: ssh.value.envFile ?? '', variable: ssh.value.envVar || 'DATABASE_URL' })
-    : t('ssh.errors.other');
+  if (!known.includes(failure.code)) return t('ssh.errors.other');
+  const text = t(`ssh.errors.${failure.code}`, { host: ssh.value.host, file: ssh.value.envFile ?? '', variable: ssh.value.envVar || 'DATABASE_URL' });
+  // Windows: a key with a passphrase needs the ssh-agent service, off by default
+  return failure.code === 'auth' && navigator.userAgent.includes('Windows') ? `${text} ${t('ssh.errors.authWindows')}` : text;
 };
 
 const runTest = async () => {

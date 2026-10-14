@@ -138,6 +138,7 @@ export const translations = {
             },
             errors: {
                 auth: 'The server refused your SSH key. Check that "ssh {host}" works in a terminal.',
+                authWindows: 'If your key has a passphrase, start the Windows ssh-agent service and add the key (PowerShell as administrator: Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent; then ssh-add).',
                 'unknown-host': 'This server is not yet known to this computer.',
                 'host-changed': 'The server\'s fingerprint changed since the last connection: refused. If it was reinstalled, remove the old key with "ssh-keygen -R" and try again.',
                 dns: 'Host not found: check the name or the alias.',
@@ -2190,6 +2191,7 @@ export const translations = {
             },
             errors: {
                 auth: 'Le serveur a refusé ta clé SSH. Vérifie que « ssh {host} » fonctionne dans un terminal.',
+                authWindows: "Si ta clé a une phrase secrète, démarre le service ssh-agent de Windows et ajoute la clé (PowerShell en administrateur : Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent; puis ssh-add).",
                 'unknown-host': 'Ce serveur n\'est pas encore connu de cet ordinateur.',
                 'host-changed': 'L\'empreinte du serveur a changé depuis la dernière connexion : refusé. S\'il a été réinstallé, retire l\'ancienne clé avec « ssh-keygen -R » puis réessaie.',
                 dns: 'Hôte introuvable : vérifie le nom ou l\'alias.',

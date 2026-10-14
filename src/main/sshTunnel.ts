@@ -148,7 +148,17 @@ export async function hostFingerprints(ssh: SshSettings): Promise<string[]> {
   if (!isSafeSshValue(hostname)) return [];
   const scan = await run(binary('ssh-keyscan'), ['-T', '5', '-p', String(port), hostname], undefined, 10000);
   if (!scan.stdout.trim()) return [];
-  const keygen = await run(binary('ssh-keygen'), ['-l', '-f', '-'], scan.stdout, 5000);
+  let keygen = await run(binary('ssh-keygen'), ['-l', '-f', '-'], scan.stdout, 5000);
+  // Some builds (Windows' OpenSSH) may not read the keys from stdin: through a temporary file then
+  if (!keygen.stdout.trim()) {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'bbdump-keys-')), 'keys');
+    try {
+      fs.writeFileSync(file, scan.stdout);
+      keygen = await run(binary('ssh-keygen'), ['-l', '-f', file], undefined, 5000);
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
+  }
   // "256 SHA256:abc… host (ED25519)" → "ED25519 SHA256:abc…"
   return keygen.stdout.split('\n').filter(Boolean).map(line => {
     const parts = line.trim().split(/\s+/);

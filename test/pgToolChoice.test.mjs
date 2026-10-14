@@ -32,9 +32,22 @@ test('newer server than every pg_dump: nothing to use, and the hint names the ve
   assert.equal(pickPgDumpForServer([tool('16.4'), tool('17.10')], '18'), null);
   assert.match(pgDumpInstallHint('darwin', '18'), /brew install postgresql@18/);
   assert.match(pgDumpInstallHint('linux', '18'), /postgresql-client-18/);
+  assert.match(pgDumpInstallHint('win32', '18'), /winget install -e --id PostgreSQL\.PostgreSQL\.18/);
 });
 
 test('server version unknown: the newest pg_dump', () => {
   assert.equal(newestPgTool([tool('16.4'), tool('18.1'), tool('18.4', 'system'), tool('17.10')]).version, '18.4');
   assert.equal(newestPgTool([]), null);
+});
+
+test('the same pg_dump found twice counts once (Windows paths without case)', () => {
+  const { uniqueToolPaths } = require(path.join(process.cwd(), 'dist/main/pgToolChoice.js'));
+  const win = [
+    { path: 'C:\\Program Files\\PostgreSQL\\17\\bin\\pg_dump.exe', source: 'postgresql' },
+    { path: 'c:\\program files\\postgresql\\17\\bin\\pg_dump.exe', source: 'system' },
+    { path: 'C:\\Program Files\\PostgreSQL\\16\\bin\\pg_dump.exe', source: 'postgresql' },
+  ];
+  assert.deepEqual(uniqueToolPaths(win, 'win32').map(t => t.source), ['postgresql', 'postgresql']);
+  const mac = [{ path: '/opt/homebrew/bin/pg_dump' }, { path: '/opt/homebrew/bin/pg_dump' }, { path: '/opt/homebrew/opt/libpq/bin/pg_dump' }];
+  assert.equal(uniqueToolPaths(mac, 'darwin').length, 2);
 });

@@ -129,12 +129,15 @@ Download the latest release from [GitHub Releases](https://github.com/poup-s/bbd
 | macOS 13+ (Apple Silicon) | `bbdump-*-arm64.dmg` |
 | macOS 13+ (Intel) | `bbdump-*.dmg` |
 | Linux (beta) | `bbdump-*.AppImage` or `bbdump-*.deb` |
+| Windows 10/11 (beta) | `bbdump-*-setup.exe` (x64 and ARM64) |
 
 **macOS:** the app is not code-signed yet. On first launch, right-click it and choose **Open**, then confirm, or run:
 
 ```bash
 xattr -cr /Applications/bbdump.app
 ```
+
+**Windows (beta):** remote databases and a PostgreSQL already running on the computer; bbdump does not install a local server there. The installer is not signed yet: on "Windows protected your PC", choose **More info → Run anyway**. Backups need the PostgreSQL client tools — see [installation](docs/installation.md#postgresql-client-tools).
 
 Later versions install themselves from the app. The `.deb` package does not update itself: install the new one.
 

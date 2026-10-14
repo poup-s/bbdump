@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Windows (beta).** An installer for Windows 10 and 11 (x64 and ARM64), updated in place
+  like the AppImage. The beta manages remote databases (and a PostgreSQL already running on the
+  computer); it does not install a local server. The PostgreSQL client tools are found where
+  the EDB installer puts them, SSH goes through Windows' OpenSSH, and the AI assistants
+  (Claude Desktop, including the Microsoft Store version, Claude Code…) can be connected as on
+  macOS and Linux. Backups go to Documents\bbdump by default and can be on any drive.
+
 ## 1.2.2 — 2026-10-14
 
 ### Fixed

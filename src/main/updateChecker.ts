@@ -35,6 +35,11 @@ export function supportsAutoInstall(): boolean {
   return usesElectronUpdater() || macUpdatableBundle() !== null;
 }
 
+/** electron-updater's error when the latest release has no manifest for this system (latest.yml…) */
+export function isMissingPlatformManifest(message: string): boolean {
+  return /Cannot find latest(-[a-z0-9]+)*\.yml/i.test(message);
+}
+
 function sendToWindow(channel: string, payload?: unknown): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 }
@@ -99,6 +104,10 @@ export function initAutoUpdater(win: BrowserWindow): void {
   });
 
   autoUpdater.on('error', (error) => {
+    if (isMissingPlatformManifest(error.message)) {
+      logger.info('The latest release has no build for this system yet');
+      return;
+    }
     logger.error(`Auto-updater error: ${error.message}`);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('update-error', error.message);
@@ -127,6 +136,10 @@ export async function checkForUpdates(): Promise<UpdateInfo> {
       releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
     };
   } catch (error) {
+    // A release without this system's files (e.g. no Windows build yet): simply no update
+    if (isMissingPlatformManifest(getErrorMessage(error))) {
+      return { updateAvailable: false, version: '', url: '', releaseNotes: '' };
+    }
     logger.error(`Update check failed: ${getErrorMessage(error)}`);
     return {
       updateAvailable: false,

@@ -4,6 +4,7 @@
  * closest newer one. Only when every installed pg_dump is older than the server is there
  * nothing to use.
  */
+import * as path from 'path';
 
 export interface PgToolVersion {
   path: string;
@@ -47,5 +48,19 @@ export function pgDumpInstallHint(platform: NodeJS.Platform, serverMajor: string
   if (platform === 'linux') {
     return `Install the matching client:\n  sudo apt install postgresql-client-${serverMajor}\n  or: sudo dnf install postgresql${serverMajor}`;
   }
+  if (platform === 'win32') {
+    return `Install the PostgreSQL ${serverMajor} client tools (bbdump finds them in Program Files):\n  winget install -e --id PostgreSQL.PostgreSQL.${serverMajor} --override "--mode unattended --enable-components commandlinetools --disable-components server,pgAdmin,stackbuilder"\n  or the EDB installer from postgresql.org`;
+  }
   return `Install the PostgreSQL ${serverMajor} client tools`;
+}
+
+/** First of each file (paths compared without case on Windows) */
+export function uniqueToolPaths<T extends { path: string }>(tools: T[], platform: string = process.platform): T[] {
+  const seen = new Set<string>();
+  return tools.filter(t => {
+    const key = platform === 'win32' ? path.win32.normalize(t.path).toLowerCase() : path.normalize(t.path);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

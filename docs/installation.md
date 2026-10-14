@@ -73,6 +73,12 @@ AppImages need FUSE 2 (`sudo apt install libfuse2` on Debian/Ubuntu).
 sudo apt install ./bbdump-*.deb
 ```
 
+### Windows (beta)
+
+Download `bbdump-*-setup.exe` (one installer for x64 and ARM64) and run it: bbdump installs for your user, without administrator rights, with Start menu and desktop shortcuts. The app is not code-signed yet, so Windows shows "Windows protected your PC": choose **More info → Run anyway**.
+
+The Windows beta manages **remote databases** (and a PostgreSQL already running on the computer); it does not install or drive a local PostgreSQL server. Backups need the PostgreSQL client tools (below). The install script is for macOS and Linux only.
+
 ## First launch
 
 A short setup guides you through:
@@ -95,6 +101,12 @@ brew install postgresql@17    # server + client tools
 
 # Debian/Ubuntu
 sudo apt install postgresql-client
+```
+
+On Windows, bbdump looks in `Program Files\PostgreSQL\<version>\bin`, where the EDB installer puts them (it does not add them to `PATH`). To install the client tools only, in PowerShell:
+
+```powershell
+winget install -e --id PostgreSQL.PostgreSQL.17 --override "--mode unattended --enable-components commandlinetools --disable-components server,pgAdmin,stackbuilder"
 ```
 
 ## From source
@@ -131,6 +143,7 @@ bbdump checks for a new version on GitHub at launch, and from **About → Check 
 | macOS 1.0.2 – 1.1.1 | No in-place update: install 1.1.2 or later once by hand (or with the script). |
 | Linux AppImage | In place: **Install and restart**, or at the next quit once downloaded. |
 | Linux `.deb` | No automatic update: the release page opens, install the new `.deb`. |
+| Windows (beta) | In place: the new installer is downloaded, then **Install and restart**. |
 
 Running the install script again also updates bbdump.
 
