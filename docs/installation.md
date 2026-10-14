@@ -103,7 +103,7 @@ brew install postgresql@17    # server + client tools
 sudo apt install postgresql-client
 ```
 
-On Windows, bbdump looks in `Program Files\PostgreSQL\<version>\bin`, where the EDB installer puts them (it does not add them to `PATH`). To install the client tools only, in PowerShell:
+On Windows, bbdump looks in `Program Files\PostgreSQL\<version>\bin`, where the EDB installer puts them (it does not add them to `PATH`). The first launch installs them for you with winget (client tools only; Windows asks once for administrator rights), and so does the **Install PostgreSQL N** button of a backup that needs another version. By hand, in PowerShell:
 
 ```powershell
 winget install -e --id PostgreSQL.PostgreSQL.17 --override "--mode unattended --enable-components commandlinetools --disable-components server,pgAdmin,stackbuilder"

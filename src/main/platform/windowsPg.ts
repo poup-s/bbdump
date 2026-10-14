@@ -55,3 +55,16 @@ export function windowsPgTool(
     .map(dir => path.win32.join(dir, `${tool}.exe`))
     .filter(file => exists(file));
 }
+
+/**
+ * Puts the newest version's bin folder first in this process's PATH (the EDB installer does
+ * not), at launch and right after installing the tools. No-op elsewhere or when already there.
+ */
+export function addNewestPgBinToPath(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (process.platform !== 'win32') return null;
+  const newest = windowsPgBinDirs(env)[0];
+  const current = env.PATH || env.Path || '';
+  if (!newest || current.toLowerCase().split(path.delimiter).includes(newest.toLowerCase())) return null;
+  env.PATH = [newest, current].join(path.delimiter);
+  return newest;
+}

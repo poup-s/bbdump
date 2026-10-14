@@ -334,12 +334,8 @@ app.whenReady().then(async () => {
     }
   } else if (process.platform === 'win32') {
     // The EDB installer does not put PostgreSQL's tools on PATH: add the newest version's bin
-    const { windowsPgBinDirs } = await import('./platform/windowsPg');
-    const newest = windowsPgBinDirs()[0];
-    const currentPath = process.env.PATH || '';
-    if (newest && !currentPath.toLowerCase().includes(newest.toLowerCase())) {
-      process.env.PATH = [newest, currentPath].join(path.delimiter);
-    }
+    const { addNewestPgBinToPath } = await import('./platform/windowsPg');
+    addNewestPgBinToPath();
   } else if (process.platform === 'linux') {
     const additionalPaths = ['/usr/local/bin', '/usr/bin', '/snap/bin'];
     const currentPath = process.env.PATH || '';

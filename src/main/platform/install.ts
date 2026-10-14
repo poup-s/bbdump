@@ -11,7 +11,8 @@ import {
   buildLinuxScript, isValidUsername, parseStepLine, runScriptWithPkexec, sudoCommand, type LinuxComponent,
 } from './linux';
 import { defaultBrewPath, macosCommand, macosSteps, runBrew } from './macos';
-import { windowsCommand } from './windows';
+import { WINGET_CLIENT_MAJORS, windowsCommand, wingetClientToolsArgs, wingetOutcome } from './windows';
+import { addNewestPgBinToPath } from './windowsPg';
 import { defaultWhich } from './probe';
 
 export const SETUP_COMPONENTS: readonly SetupComponent[] = ['homebrew', 'client-tools', 'server'];
@@ -52,7 +53,12 @@ export function planFor(component: SetupComponent, env: SetupEnvironment, user =
     return { component, automatic: env.canAutoInstall && command !== '', command };
   }
 
-  return { component, automatic: false, command: windowsCommand(component) };
+  // Windows (beta): the client tools only, through winget when it is there
+  return {
+    component,
+    automatic: component === 'client-tools' && env.packageManager?.id === 'winget',
+    command: windowsCommand(component),
+  };
 }
 
 type ProgressFn = (percent: number, message: string, stage?: SetupStage) => void;
@@ -100,7 +106,9 @@ export async function runInstall(
     const plan = planFor(component, env);
     const progress: ProgressFn = (percent, message, stage) => onProgress({ component, percent, message, stage });
 
-    if (!env.supported || !plan.automatic) {
+    // Windows is "not supported" for a local server, but its client tools install with winget
+    const windowsClientTools = env.os === 'windows' && component === 'client-tools' && plan.automatic;
+    if ((!env.supported && !windowsClientTools) || !plan.automatic) {
       return {
         success: false,
         error: env.supported
@@ -112,7 +120,9 @@ export async function runInstall(
     }
 
     let outcome: { success: boolean; error?: string };
-    if (env.os === 'macos') {
+    if (env.os === 'windows') {
+      outcome = await installWindowsClientTools(env, progress);
+    } else if (env.os === 'macos') {
       outcome = await installMacos(component, env, progress);
     } else {
       outcome = await installLinux(component as LinuxComponent, env, progress);
@@ -165,6 +175,62 @@ async function installMacos(
     }
   }
   return { success: true };
+}
+
+/**
+ * PostgreSQL's client tools on Windows: winget runs the EDB installer (Windows asks once for
+ * administrator rights), newest version winget has first. Then their folder joins PATH.
+ */
+async function installWindowsClientTools(
+  env: SetupEnvironment,
+  progress: ProgressFn,
+  majors: readonly string[] = WINGET_CLIENT_MAJORS,
+): Promise<{ success: boolean; error?: string }> {
+  const winget = env.packageManager?.path;
+  if (!winget) return { success: false, error: 'winget is not available on this computer' };
+  const { spawn } = await import('child_process');
+
+  for (const major of majors) {
+    progress(10, `winget install PostgreSQL ${major} (client tools)`, 'packages');
+    const run = await new Promise<{ code: number | null; output: string }>((resolve) => {
+      let output = '';
+      const child = spawn(winget, wingetClientToolsArgs(major), { windowsHide: true });
+      const timer = setTimeout(() => child.kill(), 20 * 60 * 1000);
+      const onData = (chunk: Buffer) => {
+        output += chunk.toString();
+        // winget redraws its progress bar with \r: show the last meaningful line
+        const line = chunk.toString().split(/[\r\n]+/).map(l => l.trim()).filter(l => /[a-z]{3}/i.test(l)).pop();
+        if (line) progress(40, line.slice(0, 160), 'packages');
+      };
+      child.stdout?.on('data', onData);
+      child.stderr?.on('data', onData);
+      child.on('error', (error) => { clearTimeout(timer); resolve({ code: null, output: `${output}\n${error.message}` }); });
+      child.on('close', (code) => { clearTimeout(timer); resolve({ code, output }); });
+    });
+    const outcome = wingetOutcome(run.code, run.output);
+    if (outcome === 'installed') {
+      addNewestPgBinToPath();
+      return { success: true };
+    }
+    if (outcome === 'not-found') continue;
+    if (outcome === 'cancelled') return { success: false, error: 'The administrator prompt was refused: nothing was installed.' };
+    const tail = run.output.trim().split(/\r?\n/).slice(-5).join('\n');
+    return { success: false, error: `winget could not install PostgreSQL ${major}${tail ? `:\n${tail}` : ''}` };
+  }
+  return { success: false, error: 'winget has no PostgreSQL package for this computer' };
+}
+
+/** Windows: the client tools of one PostgreSQL version (a backup needs that version's pg_dump) */
+export async function installWindowsPgClient(major: string): Promise<{ success: boolean; error?: string }> {
+  if (process.platform !== 'win32' || !/^\d{2}$/.test(major)) return { success: false, error: 'Not available on this system' };
+  if (installing) return { success: false, error: 'Another installation is already running' };
+  installing = true;
+  try {
+    const env = await getEnvironment(60000);
+    return await installWindowsClientTools(env, () => { /* the toast says it is running */ }, [major]);
+  } finally {
+    installing = false;
+  }
 }
 
 async function installLinux(

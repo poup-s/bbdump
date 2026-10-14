@@ -75,6 +75,20 @@ jobs:
       - name: Windows installer (not published)
         run: npx electron-builder --win --publish never
 
+      # The winget command bbdump runs from its onboarding: PostgreSQL 18's client tools only
+      - name: Client tools through winget (bbdump's own command)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Write-Host 'winget is not on this runner: skipped'; exit 0 }
+          $wingetArgs = node -e "console.log(JSON.stringify(require('./dist/main/platform/windows.js').wingetClientToolsArgs('18')))" | ConvertFrom-Json
+          & winget @wingetArgs
+          Write-Host "winget exit code: $LASTEXITCODE"
+          node -e "const w=require('./dist/main/platform/windows.js'); console.log('outcome:', w.wingetOutcome($LASTEXITCODE, ''))"
+          $dump = 'C:\Program Files\PostgreSQL\18\bin\pg_dump.exe'
+          if (Test-Path $dump) { & $dump --version } else { throw "no $dump" }
+          if (Test-Path 'C:\Program Files\PostgreSQL\18\bin\postgres.exe') { Write-Host 'Note: the server binaries were installed too' }
+
       - name: The packaged app starts
         shell: pwsh
         run: |

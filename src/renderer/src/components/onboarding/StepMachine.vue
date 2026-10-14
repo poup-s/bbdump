@@ -5,7 +5,6 @@ import { useI18n } from '../../composables/useI18n';
 import { useOnboarding } from './useOnboarding';
 import StepHeader from './StepHeader.vue';
 import SetupRow from './SetupRow.vue';
-import CommandDisclosure from './CommandDisclosure.vue';
 import InstallAction from './InstallAction.vue';
 
 const { t } = useI18n();
@@ -149,7 +148,13 @@ const skipCheck = () => {
         <SetupRow :title="t('onboarding.machine.clientTools')" :detail="toolsDetail" :status="env.clientTools.ready ? 'ok' : 'missing'">
           <template v-if="!env.clientTools.ready">
             <p class="text-xs text-zinc-400">{{ t('onboarding.machine.windowsNoTools') }}</p>
-            <CommandDisclosure component="client-tools" />
+            <!-- winget runs the PostgreSQL installer (client tools only); Windows asks once for administrator rights -->
+            <InstallAction
+              component="client-tools"
+              :label="t('onboarding.machine.windowsInstallTools')"
+              :automatic="env.packageManager?.id === 'winget'"
+              :manual-hint="env.packageManager?.id === 'winget' ? undefined : t('onboarding.machine.windowsNoWinget')"
+            />
             <div class="mt-3 flex flex-wrap gap-2">
               <button type="button" class="btn-secondary" @click="loadEnvironment">{{ t('onboarding.retry') }}</button>
               <!-- The explorer and AI assistants work without them; backups need them -->

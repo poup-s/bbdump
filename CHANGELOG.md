@@ -10,6 +10,8 @@
   the EDB installer puts them, SSH goes through Windows' OpenSSH, and the AI assistants
   (Claude Desktop, including the Microsoft Store version, Claude Code…) can be connected as on
   macOS and Linux. Backups go to Documents\bbdump by default and can be on any drive.
+  The PostgreSQL client tools install in one click with winget (Windows asks once for
+  administrator rights), from the first launch or from a backup that needs another version.
 
 ## 1.2.2 — 2026-10-14
 

@@ -36,3 +36,23 @@ test('a tool where it exists, newest first', () => {
   assert.deepEqual(windowsPgTool('psql', env, readdir, exists), ['C:\\Program Files\\PostgreSQL\\17\\bin\\psql.exe']);
   assert.deepEqual(windowsPgTool('pg_dump', {}, () => { throw new Error('ENOENT'); }, exists), []);
 });
+
+test('winget: the client tools only, without a shell window to answer', () => {
+  const { wingetClientToolsArgs, WINGET_CLIENT_MAJORS } = require(path.join(process.cwd(), 'dist/main/platform/windows.js'));
+  const args = wingetClientToolsArgs('18');
+  assert.deepEqual(args.slice(0, 4), ['install', '-e', '--id', 'PostgreSQL.PostgreSQL.18']);
+  assert.ok(args.includes('--disable-interactivity'));
+  const override = args[args.indexOf('--override') + 1];
+  assert.match(override, /--enable-components commandlinetools/);
+  assert.match(override, /--disable-components server,pgAdmin,stackbuilder/);
+  assert.deepEqual(WINGET_CLIENT_MAJORS, ['18', '17']);
+});
+
+test("winget's answers: installed, already there, no such version, prompt refused", () => {
+  const { wingetOutcome } = require(path.join(process.cwd(), 'dist/main/platform/windows.js'));
+  assert.equal(wingetOutcome(0, 'Successfully installed'), 'installed');
+  assert.equal(wingetOutcome(-1978335135, 'Found an existing package already installed.'), 'installed');
+  assert.equal(wingetOutcome(-1978335212, 'No package found matching input criteria.'), 'not-found');
+  assert.equal(wingetOutcome(1223, 'Installer failed'), 'cancelled');
+  assert.equal(wingetOutcome(1, 'Installer failed with exit code: 3'), 'failed');
+});

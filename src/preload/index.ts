@@ -36,7 +36,7 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
     'get-postgres-performance-stats', 'reset-postgres-performance-stats',
     'restart-postgres', 'check-postgres-config', 'fix-postgres-config', 'get-database-size',
     // Database creation
-    'create-local-database', 'duplicate-external-to-local', 'duplicate-anonymize-plan', 'duplicate-check-extensions', 'ai-masking-get', 'ai-masking-set', 'ai-masking-list',
+    'create-local-database', 'duplicate-external-to-local', 'duplicate-anonymize-plan', 'duplicate-check-extensions', 'setup-install-pg-client', 'ai-masking-get', 'ai-masking-set', 'ai-masking-list',
     // Proxy
     'proxy-start', 'proxy-stop', 'proxy-switch-target', 'proxy-status', 'proxy-status-all',
     'proxy-check-port', 'proxy-get-logs', 'proxy-clear-logs',

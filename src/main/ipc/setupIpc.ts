@@ -1,6 +1,6 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import type { SetupEnvironment, SetupInstallPlan, SetupInstallResult, SetupProgress } from '../../types/setup';
-import { getEnvironment, getInstallPlan, isSetupComponent, runInstall } from '../platform/install';
+import { getEnvironment, getInstallPlan, installWindowsPgClient, isSetupComponent, runInstall } from '../platform/install';
 import { logger } from '../logger';
 import { backupManager } from '../backup';
 import { getErrorMessage } from '../utils';
@@ -44,5 +44,15 @@ export function registerSetupHandlers(getMainWindow: () => BrowserWindow | null)
             logger.error(`Setup: ${component} failed: ${getErrorMessage(error)}`);
             return { success: false, error: getErrorMessage(error) };
         }
+    });
+
+    // Windows: the pg_dump a server needs, installed from a backup error's button
+    ipcMain.handle('setup-install-pg-client', async (_, major: unknown) => {
+        if (typeof major !== 'string') return { success: false, error: 'Invalid version' };
+        logger.info(`Setup: installing the PostgreSQL ${major} client tools with winget`);
+        const result = await installWindowsPgClient(major);
+        if (result.success) await backupManager.refreshToolPaths();
+        else logger.warn(`Setup: PostgreSQL ${major} client tools not installed: ${result.error}`);
+        return result;
     });
 }
