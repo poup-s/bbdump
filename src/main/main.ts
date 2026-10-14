@@ -30,6 +30,24 @@ let handlersRegistered = false;
 let isQuitting = false;
 let mcpConfirmActive = false;
 const isMcpConfirmLaunch = process.argv.includes('--mcp-confirm');
+/** Set when the popup hid itself on blur: the tray click that caused the blur must not reopen it */
+let trayPopupHiddenAt = 0;
+
+// One bbdump at a time (Windows starts a new process from the Start menu while bbdump sits in
+// the tray): a second launch brings this one forward instead of running its own backups
+const isFirstInstance = app.requestSingleInstanceLock();
+if (!isFirstInstance) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    // An MCP confirmation reaches this instance through its local server
+    if (argv.includes('--mcp-confirm') || argv.includes('--hidden')) return;
+    showWindow();
+  });
+}
+
+// Windows: notifications are attributed to the app only with its id
+if (process.platform === 'win32') app.setAppUserModelId('com.bbdump.app');
 
 function isSafeExternalUrl(url: string): boolean {
   try {
@@ -74,6 +92,8 @@ function createWindow(): void {
       titleBarStyle: 'hidden',
       trafficLightPosition: { x: 20, y: 20 },
     } : {}),
+    // Windows: no File/Edit/View menu bar (Alt still shows it)
+    ...(process.platform === 'win32' ? { autoHideMenuBar: true } : {}),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -209,6 +229,7 @@ function createTrayPopup(): void {
     // Don't auto-hide while an MCP confirmation is pending
     if (mcpConfirmActive) return;
     trayPopup?.hide();
+    trayPopupHiddenAt = Date.now();
   });
 }
 
@@ -222,9 +243,14 @@ function positionTrayPopup(): void {
   try {
     const popup = trayPopup.getBounds();
     const trayBounds = tray && !tray.isDestroyed() ? tray.getBounds() : null;
-    const anchor = trayBounds && trayBounds.width > 0 && trayBounds.height > 0
+    let anchor = trayBounds && trayBounds.width > 0 && trayBounds.height > 0
       ? { x: trayBounds.x + trayBounds.width / 2, y: trayBounds.y + trayBounds.height + 4, below: true }
       : { ...screen.getCursorScreenPoint(), below: false };
+    // Windows: the taskbar is usually at the bottom, so the popup opens above the icon
+    if (trayBounds && anchor.below) {
+      const area = screen.getDisplayNearestPoint({ x: Math.round(anchor.x), y: Math.round(anchor.y) }).workArea;
+      if (trayBounds.y > area.y + area.height / 2) anchor = { x: anchor.x, y: trayBounds.y, below: false };
+    }
     const { workArea } = screen.getDisplayNearestPoint({ x: Math.round(anchor.x), y: Math.round(anchor.y) });
     let x = Math.round(anchor.x - popup.width / 2);
     let y = Math.round(anchor.below ? anchor.y : anchor.y - popup.height - 4);
@@ -242,6 +268,8 @@ function toggleTrayPopup(): void {
     trayPopup.hide();
     return;
   }
+  // Windows: clicking the icon first blurs (and hides) the open popup; that click closes it
+  if (Date.now() - trayPopupHiddenAt < 300) return;
   // Reload data each time popup is shown
   trayPopup.webContents.send('tray-refresh');
 
@@ -250,9 +278,10 @@ function toggleTrayPopup(): void {
 }
 
 function createTray(): void {
-  const iconPath = path.join(__dirname, 'assets', 'trayIconTemplate.png');
+  // macOS: a template image tinted by the menu bar; Windows: a coloured icon readable on any taskbar
+  const iconPath = path.join(__dirname, 'assets', process.platform === 'win32' ? 'trayIconWin.png' : 'trayIconTemplate.png');
   const icon = nativeImage.createFromPath(iconPath);
-  icon.setTemplateImage(true);
+  if (process.platform === 'darwin') icon.setTemplateImage(true);
   tray = new Tray(icon);
   tray.setToolTip('bbdump');
 
@@ -293,6 +322,7 @@ function createTray(): void {
 
 // Application initialization
 app.whenReady().then(async () => {
+  if (!isFirstInstance) return;
   // Fix PATH for macOS/Linux: when the app is launched from Finder/Dock,
   // the PATH does not include Homebrew/usr/local paths
   if (process.platform === 'darwin') {
@@ -301,6 +331,14 @@ app.whenReady().then(async () => {
     const missingPaths = additionalPaths.filter(p => !currentPath.includes(p));
     if (missingPaths.length > 0) {
       process.env.PATH = [...missingPaths, currentPath].join(':');
+    }
+  } else if (process.platform === 'win32') {
+    // The EDB installer does not put PostgreSQL's tools on PATH: add the newest version's bin
+    const { windowsPgBinDirs } = await import('./platform/windowsPg');
+    const newest = windowsPgBinDirs()[0];
+    const currentPath = process.env.PATH || '';
+    if (newest && !currentPath.toLowerCase().includes(newest.toLowerCase())) {
+      process.env.PATH = [newest, currentPath].join(path.delimiter);
     }
   } else if (process.platform === 'linux') {
     const additionalPaths = ['/usr/local/bin', '/usr/bin', '/snap/bin'];

@@ -22,7 +22,8 @@ after(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-describe('backup folders', () => {
+// POSIX paths in the expectations (path.resolve gives C:\\… on Windows)
+describe('backup folders', { skip: process.platform === 'win32' }, () => {
   const internal = '/data/bbdump/backups';
   const appData = '/data/bbdump';
 

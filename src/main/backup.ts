@@ -3,7 +3,7 @@ import { spawn, exec, execFile, ChildProcess } from 'child_process';
 import { getErrorMessage, parsePgVersion } from './utils';
 import * as path from 'path';
 import * as fs from 'fs';
-import { userInfo, homedir } from 'os';
+import { userInfo, homedir, devNull } from 'os';
 import type { ClientConfig } from 'pg';
 import { promisify } from 'util';
 import { DatabaseConfig, BackupResult } from '../types/config';
@@ -16,6 +16,8 @@ import { emptySchemasSql, restoreErrors, schemasInToc } from './restorePlan';
 import { newestPgTool, pickPgDumpForServer, pgDumpInstallHint } from './pgToolChoice';
 import { SslSettings, libpqSslEnv, toNodePgSsl, stripSslParams } from './sslConfig';
 import * as Electron from 'electron';
+import { defaultWhich } from './platform/probe';
+import { windowsPgTool } from './platform/windowsPg';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -122,11 +124,19 @@ export class BackupManager {
         await this.detectLinuxVersions(versions);
       }
 
-      // Also add the system version (in PATH)
+      // Windows: the EDB installer's folders (not on PATH), newest first
+      if (os === 'win32') {
+        for (const toolPath of windowsPgTool('pg_dump')) {
+          const version = await this.getPgDumpVersion(toolPath);
+          if (version) versions.push({ path: toolPath, version, majorVersion: version.split('.')[0], source: 'postgresql' });
+        }
+      }
+
+      // Also add the system version (in PATH); no shell, so the same on every system
       try {
-        const { stdout } = await execAsync('which pg_dump 2>/dev/null || echo ""');
-        if (stdout.trim()) {
-          const systemPath = stdout.trim();
+        const found = await defaultWhich('pg_dump');
+        if (found) {
+          const systemPath = found;
           const version = await this.getPgDumpVersion(systemPath);
           if (version) {
             versions.push({
@@ -185,11 +195,19 @@ export class BackupManager {
         await this.detectLinuxPgRestoreVersions(versions);
       }
 
-      // Also add the system version (in PATH)
+      // Windows: the EDB installer's folders (not on PATH), newest first
+      if (os === 'win32') {
+        for (const toolPath of windowsPgTool('pg_restore')) {
+          const version = await this.getPgRestoreVersion(toolPath);
+          if (version) versions.push({ path: toolPath, version, majorVersion: version.split('.')[0], source: 'postgresql' });
+        }
+      }
+
+      // Also add the system version (in PATH); no shell, so the same on every system
       try {
-        const { stdout } = await execAsync('which pg_restore 2>/dev/null || echo ""');
-        if (stdout.trim()) {
-          const systemPath = stdout.trim();
+        const found = await defaultWhich('pg_restore');
+        if (found) {
+          const systemPath = found;
           const version = await this.getPgRestoreVersion(systemPath);
           if (version) {
             versions.push({
@@ -502,8 +520,8 @@ export class BackupManager {
    */
   private async getPgDumpVersion(pgDumpPath: string): Promise<string | null> {
     try {
-      const { stdout } = await execAsync(`"${pgDumpPath}" --version 2>&1`);
-      return parsePgVersion(stdout);
+      const { stdout, stderr } = await execFileAsync(pgDumpPath, ['--version'], { windowsHide: true, timeout: 10000 });
+      return parsePgVersion(`${stdout}${stderr}`);
     } catch {
       return null;
     }
@@ -514,8 +532,8 @@ export class BackupManager {
    */
   private async getPgRestoreVersion(pgRestorePath: string): Promise<string | null> {
     try {
-      const { stdout } = await execAsync(`"${pgRestorePath}" --version 2>&1`);
-      return parsePgVersion(stdout);
+      const { stdout, stderr } = await execFileAsync(pgRestorePath, ['--version'], { windowsHide: true, timeout: 10000 });
+      return parsePgVersion(`${stdout}${stderr}`);
     } catch {
       return null;
     }
@@ -963,21 +981,10 @@ apt-get install -y postgresql-client-${majorVersion}
         ? absolutePath
         : path.dirname(absolutePath);
 
-      // Use df to get disk space (compatible with macOS and Linux)
-      const { stdout: dfOutput } = await execFileAsync('df', ['-k', dirPath]);
-      const stdout = dfOutput.trim().split('\n').pop() || '';
-
-      // Parser la sortie de df
-      // Format: Filesystem 1K-blocks Used Available Capacity Mounted
-      const parts = stdout.trim().split(/\s+/);
-
-      if (parts.length < 4) {
-        logger.warn(`Unable to parse df output: ${stdout}`);
-        return null;
-      }
-
-      const available = parseInt(parts[3], 10) * 1024; // Convertir Ko en octets
-      const total = parseInt(parts[1], 10) * 1024; // Convertir Ko en octets
+      // statfs: the same on macOS, Linux and Windows (no df to run)
+      const stats = await fs.promises.statfs(dirPath);
+      const available = stats.bavail * stats.bsize;
+      const total = stats.blocks * stats.bsize;
 
       return { available, total };
     } catch (error) {
@@ -1033,6 +1040,7 @@ apt-get install -y postgresql-client-${majorVersion}
         args,
         {
           env,
+          windowsHide: true,
           timeout: 10000 // 10 secondes de timeout
         }
       );
@@ -1205,12 +1213,15 @@ apt-get install -y postgresql-client-${majorVersion}
       const backupsPath = pathManager.backupsPath;
       const homeDir = homedir();
 
-      // Check that the absolute path starts with an authorized directory
-      if (!outputDir.startsWith(appDataPath) &&
-        !outputDir.startsWith(backupsPath) &&
-        !outputDir.startsWith(homeDir) &&
-        !outputDir.startsWith('/tmp') &&
-        !outputDir.startsWith('/var/tmp')) {
+      // Windows: any drive (D:\Backups…), only the system folders are refused; paths there
+      // are case-insensitive
+      const windowsSystem = process.platform === 'win32'
+        && [process.env.SystemRoot, process.env.ProgramFiles, process.env['ProgramFiles(x86)']]
+          .some(root => !!root && outputDir.toLowerCase().startsWith(root.toLowerCase()));
+      const allowed = process.platform === 'win32'
+        ? !windowsSystem
+        : [appDataPath, backupsPath, homeDir, '/tmp', '/var/tmp'].some(root => outputDir.startsWith(root));
+      if (!allowed) {
         return {
           valid: false,
           error: `Output path is outside allowed directories: ${db.output}`
@@ -1384,7 +1395,7 @@ apt-get install -y postgresql-client-${majorVersion}
 
     // Check the pg_dump version to ensure it matches
     try {
-      const { stdout } = await execAsync(`"${compatiblePgDump}" --version`);
+      const { stdout } = await execFileAsync(compatiblePgDump, ['--version'], { windowsHide: true });
       const versionMatch = stdout.match(/(\d+\.\d+)/);
       if (versionMatch) {
         const pgDumpVersion = versionMatch[1];
@@ -1471,7 +1482,7 @@ apt-get install -y postgresql-client-${majorVersion}
         env.PGPASSWORD = db.password;
       }
 
-      const pgDump = spawn(compatiblePgDump, args, { env });
+      const pgDump = spawn(compatiblePgDump, args, { env, windowsHide: true });
       this.activeProcesses.add(pgDump);
 
       let errorOutput = '';
@@ -1701,7 +1712,8 @@ apt-get install -y postgresql-client-${majorVersion}
   private async verifyDump(filePath: string, db: DatabaseConfig): Promise<{ valid: boolean; error?: string }> {
     try {
       const pgRestore = await this.findCompatiblePgRestore(filePath);
-      await execFileAsync(pgRestore, ['--file=/dev/null', filePath], {
+      await execFileAsync(pgRestore, [`--file=${devNull}`, filePath], {
+        windowsHide: true,
         timeout: db.backupTimeout ?? 30 * 60 * 1000,
         maxBuffer: 10 * 1024 * 1024,
       });
@@ -1803,7 +1815,7 @@ apt-get install -y postgresql-client-${majorVersion}
       const args = [...baseArgs, `--section=${section}`, backupPath];
       logger.info(`[restore:${section}] pg_restore --section=${section}`, targetName);
 
-      const proc = spawn(pgRestorePath, args, { env });
+      const proc = spawn(pgRestorePath, args, { env, windowsHide: true });
       this.activeProcesses.add(proc);
       let stdout = '';
       let stderr = '';
@@ -1856,7 +1868,7 @@ apt-get install -y postgresql-client-${majorVersion}
     }
 
     return new Promise((resolve) => {
-      const proc = spawn(psqlPath, args, { env });
+      const proc = spawn(psqlPath, args, { env, windowsHide: true });
       let stdout = '';
       let stderr = '';
 
@@ -1996,7 +2008,7 @@ apt-get install -y postgresql-client-${majorVersion}
 
       // STEP 0: empty what the backup will recreate, so its content replaces the target's
       if (options.replace !== false) {
-        const listing = await execFileAsync(compatiblePgRestorePath, ['-l', actualBackupPath], { env, maxBuffer: 64 * 1024 * 1024 });
+        const listing = await execFileAsync(compatiblePgRestorePath, ['-l', actualBackupPath], { env, maxBuffer: 64 * 1024 * 1024, windowsHide: true });
         const schemas = schemasInToc(String(listing.stdout));
         if (schemas.length) {
           logger.info(`[restore] Emptying ${schemas.join(', ')} before restoring (one transaction)...`, target.name);

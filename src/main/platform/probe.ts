@@ -45,7 +45,7 @@ function isExecutable(file: string): boolean {
 export const defaultWhich: WhichFn = async (name) => {
   if (path.isAbsolute(name)) return isExecutable(name) ? name : null;
   const dirs = [...(process.env.PATH || '').split(path.delimiter), ...EXTRA_DIRS].filter(Boolean);
-  const exts = process.platform === 'win32' ? ['.exe', '.cmd', ''] : [''];
+  const exts = process.platform === 'win32' ? ['.exe', ''] : [''];
   for (const dir of [...new Set(dirs)]) {
     for (const ext of exts) {
       const candidate = path.join(dir, name + ext);
@@ -67,7 +67,7 @@ export function firstExisting(candidates: string[]): string | null {
 export function run(file: string, args: string[], timeoutMs = 5000, env?: NodeJS.ProcessEnv): Promise<CommandResult> {
   return new Promise((resolve) => {
     try {
-      execFile(file, args, { timeout: timeoutMs, env: env || process.env, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+      execFile(file, args, { timeout: timeoutMs, env: env || process.env, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
         // Non-zero exit: error.code is the exit code; spawn failure: a string like ENOENT
         const rawCode: unknown = error ? (error as { code?: unknown }).code : 0;
         const code = typeof rawCode === 'number' ? rawCode : null;

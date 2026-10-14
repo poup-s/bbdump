@@ -112,8 +112,10 @@ const usageModeStatus = computed(() => {
   return { tone: 'ok', title, detail: t('settings.usageModeLocalRunning', { version, port: server.port }) };
 });
 
-const showAddLocalServer = computed(() =>
-  isRemoteOnly() || (localServerChecked.value && !(localServer.value?.installed && localServer.value.running)));
+// Not on Windows: bbdump does not install or drive a PostgreSQL server there (beta)
+const isWindows = navigator.userAgent.includes('Windows');
+const showAddLocalServer = computed(() => !isWindows
+  && (isRemoteOnly() || (localServerChecked.value && !(localServer.value?.installed && localServer.value.running))));
 
 const addLocalServer = () => {
   store.onboardingEntry = 'add-local-server';

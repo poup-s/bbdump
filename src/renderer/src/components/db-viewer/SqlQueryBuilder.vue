@@ -9,6 +9,9 @@ import { buildDbConfig, Database, type FullSchema } from '../../types';
 import { store } from '../../store';
 import { DEFAULT_SCHEMA, displayTableName, quoteIdent, qualifiedIdent } from './schemaNames';
 
+/** Shortcut labels: ⌘ on macOS, Ctrl elsewhere (the handlers accept both) */
+const isMacKeys = navigator.userAgent.includes('Mac');
+
 const props = withDefaults(defineProps<{
   db: Database | null;
   /** Schema selected in the viewer: its tables are listed first. */
@@ -1248,7 +1251,7 @@ onMounted(() => {
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               {{ isExecuting ? t('viewer.sqlExecuting') : t('viewer.sqlExecute') }}
-              <span class="text-[10px] opacity-60 ml-1">⌘↵</span>
+              <span class="text-[10px] opacity-60 ml-1">{{ isMacKeys ? '⌘↵' : 'Ctrl+↵' }}</span>
             </button>
           </div>
         </template>

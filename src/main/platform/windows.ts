@@ -25,9 +25,9 @@ export function windowsCommand(component: SetupComponent): string {
     case 'homebrew':
       return '';
     case 'client-tools':
-      // The EDB installer has no client-only package on winget: it installs everything,
-      // the server service can be left stopped
-      return `winget install -e --id ${WINGET_POSTGRES_ID} --accept-package-agreements --accept-source-agreements`;
+      // The EDB installer through winget, asked for its command line tools only (no server,
+      // pgAdmin or Stack Builder); bbdump finds them in Program Files\PostgreSQL\<v>\bin
+      return `winget install -e --id ${WINGET_POSTGRES_ID} --accept-package-agreements --accept-source-agreements --override "--mode unattended --unattendedmodeui minimal --enable-components commandlinetools --disable-components server,pgAdmin,stackbuilder"`;
     case 'server':
       return `winget install -e --id ${WINGET_POSTGRES_ID} --accept-package-agreements --accept-source-agreements`;
   }

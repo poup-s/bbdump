@@ -880,7 +880,7 @@ export const translations = {
             sections: { general: 'General', usage: 'Usage mode', backups: 'Backups', security: 'Security', ai: 'AI assistants (MCP)', postgres: 'Local PostgreSQL' },
             theme: 'Appearance',
             themes: { light: 'Light', dark: 'Dark', auto: 'System' },
-            launchAtLoginDesc: 'bbdump starts hidden in the menu bar so scheduled backups run; the ones missed while it was closed are caught up at startup.',
+            launchAtLoginDesc: 'bbdump starts hidden in the menu bar (the notification area on Windows) so scheduled backups run; the ones missed while it was closed are caught up at startup.',
             introduction: 'Introduction',
             introductionDesc: 'The tour shown at first launch, with the check of this computer.',
             replay: 'Replay',
@@ -1772,9 +1772,9 @@ export const translations = {
                 serverMissingTitle: 'No local server ready yet',
                 serverMissingDesc: 'Set it up above, or continue with remote databases only: you can add a local server later.',
                 switchToRemote: 'Use remote mode',
-                windowsTitle: 'Windows is coming soon',
-                windowsDesc: 'bbdump cannot set up PostgreSQL on Windows yet. If the client tools are installed, you can already manage remote databases.',
-                windowsNoTools: 'Install the PostgreSQL client tools (for example with the EDB installer), then re-check.',
+                windowsTitle: 'Windows (beta): remote databases',
+                windowsDesc: 'On Windows, bbdump manages remote databases (and a PostgreSQL already running on this computer); it does not install a server. Backups need the PostgreSQL client tools.',
+                windowsNoTools: 'Install the PostgreSQL client tools with the command below (or the EDB installer from postgresql.org), then check again.',
                 windowsRemote: 'The client tools are here: remote databases will work.'
             },
             databases: {
@@ -2991,7 +2991,7 @@ export const translations = {
             sections: { general: 'Général', usage: 'Mode d\'usage', backups: 'Sauvegardes', security: 'Sécurité', ai: 'Assistants IA (MCP)', postgres: 'PostgreSQL local' },
             theme: 'Apparence',
             themes: { light: 'Clair', dark: 'Sombre', auto: 'Système' },
-            launchAtLoginDesc: 'bbdump démarre masqué dans la barre des menus pour que les sauvegardes planifiées tournent ; celles manquées pendant qu\'il était fermé sont rattrapées au démarrage.',
+            launchAtLoginDesc: 'bbdump démarre masqué dans la barre des menus (la zone de notification sur Windows) pour que les sauvegardes planifiées tournent ; celles manquées pendant qu\'il était fermé sont rattrapées au démarrage.',
             introduction: 'Introduction',
             introductionDesc: 'La présentation du premier lancement, avec la vérification de cet ordinateur.',
             replay: 'Revoir',
@@ -3824,9 +3824,9 @@ export const translations = {
                 serverMissingTitle: 'Aucun serveur local prêt pour l\'instant',
                 serverMissingDesc: 'Configure-le ci-dessus, ou continue avec des bases distantes uniquement : tu pourras ajouter un serveur local plus tard.',
                 switchToRemote: 'Continuer en mode distant',
-                windowsTitle: 'Windows arrive bientôt',
-                windowsDesc: 'bbdump ne sait pas encore installer PostgreSQL sur Windows. Si les outils clients sont présents, tu peux déjà gérer des bases distantes.',
-                windowsNoTools: 'Installe les outils clients PostgreSQL (par exemple avec l\'installeur EDB), puis revérifie.',
+                windowsTitle: 'Windows (bêta) : bases distantes',
+                windowsDesc: 'Sur Windows, bbdump gère les bases distantes (et un PostgreSQL déjà lancé sur cet ordinateur) ; il n\'installe pas de serveur. Les sauvegardes ont besoin des outils clients PostgreSQL.',
+                windowsNoTools: 'Installe les outils clients PostgreSQL avec la commande ci-dessous (ou l\'installeur EDB de postgresql.org), puis revérifie.',
                 windowsRemote: 'Les outils clients sont présents : les bases distantes fonctionneront.'
             },
             databases: {

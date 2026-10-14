@@ -150,6 +150,12 @@ const skipCheck = () => {
           <template v-if="!env.clientTools.ready">
             <p class="text-xs text-zinc-400">{{ t('onboarding.machine.windowsNoTools') }}</p>
             <CommandDisclosure component="client-tools" />
+            <div class="mt-3 flex flex-wrap gap-2">
+              <button type="button" class="btn-secondary" @click="loadEnvironment">{{ t('onboarding.retry') }}</button>
+              <!-- The explorer and AI assistants work without them; backups need them -->
+              <button v-if="!state.envSkipped" type="button" class="btn-ghost !text-xs" @click="skipCheck">{{ t('onboarding.machine.skipCheck') }}</button>
+            </div>
+            <p v-if="state.envSkipped" class="mt-2 text-xs text-zinc-500">{{ t('onboarding.machine.skipped') }}</p>
           </template>
         </SetupRow>
       </div>

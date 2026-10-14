@@ -1,12 +1,10 @@
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import * as fs from 'fs';
 import * as path from 'path';
 import { detectOS, getOSType } from '../os/osDetector';
 import { getToolPaths } from '../os/osPaths';
 import { logger } from '../logger';
+import { defaultWhich, run } from '../platform/probe';
 
-const execAsync = promisify(exec);
 
 export interface ToolDetectionResult {
   installed: boolean;
@@ -29,7 +27,8 @@ async function resolveWildcardPath(wildcardPath: string): Promise<string[]> {
   try {
     // Extract the parent directory and pattern
     const parts = wildcardPath.split('*');
-    const baseDir = parts[0].substring(0, parts[0].lastIndexOf('/'));
+    // Folders end with \ on Windows, / elsewhere
+    const baseDir = parts[0].substring(0, Math.max(parts[0].lastIndexOf('/'), parts[0].lastIndexOf('\\')));
     const suffix = parts[parts.length - 1];
 
     if (fs.existsSync(baseDir)) {
@@ -55,117 +54,54 @@ async function resolveWildcardPath(wildcardPath: string): Promise<string[]> {
   return resolved;
 }
 
+/** Version printed by `<tool> --version`, run without a shell (and without a console window on Windows) */
+async function toolVersion(toolPath: string): Promise<string | undefined> {
+  const result = await run(toolPath, ['--version'], 10000);
+  const match = `${result.stdout}${result.stderr}`.match(/(\d+\.\d+)/);
+  return match ? match[1] : undefined;
+}
+
+function isFile(file: string): boolean {
+  try {
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Detects a tool using which first, then standard paths
+ * Detects a tool: PATH first (macOS, Windows), or the version-specific folders first (Linux,
+ * where PATH gives the distribution's older version). No shell, so the same everywhere.
  */
 export async function detectTool(
   toolName: string,
   possiblePaths?: string[]
 ): Promise<ToolDetectionResult> {
   const isLinux = getOSType() === 'linux';
-
-  // On Linux, check version-specific paths FIRST (before `which`) because `which`
-  // returns the system package version (e.g. pg_dump v14 from apt) while a newer
-  // version (v17) may be installed at /usr/lib/postgresql/17/bin/pg_dump.
-  // On macOS, `which` is fine because Homebrew manages PATH correctly.
-  if (!isLinux) {
-    // Step 1 (macOS/Windows): Try which
-    try {
-      const { stdout } = await execAsync(`which ${toolName} 2>/dev/null || echo ""`);
-      const whichPath = stdout.trim();
-
-      if (whichPath && !whichPath.includes('not found') && fs.existsSync(whichPath)) {
-        let version: string | undefined;
-        try {
-          const { stdout: versionOutput } = await execAsync(`${whichPath} --version 2>/dev/null || echo ""`);
-          const versionMatch = versionOutput.match(/(\d+\.\d+)/);
-          version = versionMatch ? versionMatch[1] : undefined;
-        } catch {
-          // Ignore
-        }
-
-        return {
-          installed: true,
-          path: whichPath,
-          method: 'which',
-          version
-        };
-      }
-    } catch {
-      // Continue with standard paths
-    }
-  }
-
-  // Step 2: Check the provided standard paths (version-specific first on Linux)
-  if (possiblePaths && possiblePaths.length > 0) {
-    for (const testPath of possiblePaths) {
-      // Resolve wildcards
-      const resolvedPaths = await resolveWildcardPath(testPath);
-      
-      for (const resolvedPath of resolvedPaths) {
-        if (fs.existsSync(resolvedPath)) {
-          // Check that it's executable (or at least a file)
-          try {
-            await execAsync(`test -x "${resolvedPath}" || test -f "${resolvedPath}"`);
-            
-            // Check the version if possible
-            let version: string | undefined;
-            try {
-              const { stdout: versionOutput } = await execAsync(`${resolvedPath} --version 2>/dev/null || echo ""`);
-              const versionMatch = versionOutput.match(/(\d+\.\d+)/);
-              version = versionMatch ? versionMatch[1] : undefined;
-            } catch {
-              // Ignore version errors
-            }
-            
-            return {
-              installed: true,
-              path: resolvedPath,
-              method: 'standard_path',
-              version
-            };
-          } catch {
-            // Continue with the next path
-            continue;
-          }
-        }
-      }
-    }
-  }
-  
-  // On Linux, try `which` as last resort (after version-specific paths)
-  if (isLinux) {
-    try {
-      const { stdout } = await execAsync(`which ${toolName} 2>/dev/null || echo ""`);
-      const whichPath = stdout.trim();
-
-      if (whichPath && !whichPath.includes('not found') && fs.existsSync(whichPath)) {
-        let version: string | undefined;
-        try {
-          const { stdout: versionOutput } = await execAsync(`${whichPath} --version 2>/dev/null || echo ""`);
-          const versionMatch = versionOutput.match(/(\d+\.\d+)/);
-          version = versionMatch ? versionMatch[1] : undefined;
-        } catch {
-          // Ignore
-        }
-
-        return {
-          installed: true,
-          path: whichPath,
-          method: 'which',
-          version
-        };
-      }
-    } catch {
-      // Ignore
-    }
-  }
-
-  // If nothing is found
-  return {
-    installed: false,
-    error: `${toolName} not found`
+  const fromPath = async (): Promise<ToolDetectionResult | null> => {
+    const found = await defaultWhich(toolName);
+    return found ? { installed: true, path: found, method: 'which', version: await toolVersion(found) } : null;
   };
+
+  if (!isLinux) {
+    const found = await fromPath();
+    if (found) return found;
+  }
+
+  for (const testPath of possiblePaths ?? []) {
+    for (const resolvedPath of await resolveWildcardPath(testPath)) {
+      if (isFile(resolvedPath)) {
+        return { installed: true, path: resolvedPath, method: 'standard_path', version: await toolVersion(resolvedPath) };
+      }
+    }
+  }
+
+  if (isLinux) {
+    const found = await fromPath();
+    if (found) return found;
+  }
+
+  return { installed: false, error: `${toolName} not found` };
 }
 
 /**

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [dev, main]
+    branches: [dev, main, windows-beta]
   pull_request:
     branches: [dev, main]
 
@@ -45,3 +45,53 @@ jobs:
 
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
+
+  # Windows (beta): build, tests, the installer, and a start of the packaged app
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mcp-postgres/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (tsc + vue-tsc + vite)
+        run: npm run build
+
+      - name: Build and bundle the MCP server
+        run: npm run bundle:mcp
+
+      - name: Tests
+        run: npm test
+
+      - name: Windows installer (not published)
+        run: npx electron-builder --win --publish never
+
+      - name: The packaged app starts
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD 'release\win-unpacked\bbdump.exe'
+          $app = Start-Process $exe -ArgumentList '--hidden' -PassThru
+          Start-Sleep -Seconds 30
+          $log = Join-Path $env:APPDATA 'bbdump\logs\app.log'
+          if (Test-Path $log) { Get-Content $log -Tail 60 } else { Write-Host "No log at $log" }
+          if ($app.HasExited) { throw "bbdump exited early (code $($app.ExitCode))" }
+          if (-not (Test-Path $log)) { throw 'bbdump started but wrote no log' }
+          Stop-Process -Id $app.Id -Force
+
+      - name: Keep the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: bbdump-windows-installer
+          path: |
+            release/*-setup.exe
+            release/latest.yml
+          retention-days: 14

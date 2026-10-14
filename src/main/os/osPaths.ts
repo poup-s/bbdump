@@ -1,3 +1,4 @@
+import { windowsPgTool } from '../platform/windowsPg';
 import { OSType, Architecture } from './osDetector';
 
 export interface ToolPaths {
@@ -111,36 +112,16 @@ export function getToolPaths(os: OSType, arch?: Architecture): ToolPaths {
       pg_ctl: buildLinuxPaths('pg_ctl'),
     };
   } else {
-    // Windows
+    // Windows: the EDB installer's folders, found by scanning Program Files (newest first)
+    const tool = (name: string) => windowsPgTool(name);
     return {
-      pgDump: [
-        'C:\\Program Files\\PostgreSQL\\*\\bin\\pg_dump.exe',
-        'C:\\Program Files (x86)\\PostgreSQL\\*\\bin\\pg_dump.exe'
-      ],
-      psql: [
-        'C:\\Program Files\\PostgreSQL\\*\\bin\\psql.exe',
-        'C:\\Program Files (x86)\\PostgreSQL\\*\\bin\\psql.exe'
-      ],
-      pgRestore: [
-        'C:\\Program Files\\PostgreSQL\\*\\bin\\pg_restore.exe',
-        'C:\\Program Files (x86)\\PostgreSQL\\*\\bin\\pg_restore.exe'
-      ],
-      pgConfig: [
-        'C:\\Program Files\\PostgreSQL\\*\\bin\\pg_config.exe',
-        'C:\\Program Files (x86)\\PostgreSQL\\*\\bin\\pg_config.exe'
-      ],
-      initdb: [
-        'C:\\Program Files\\PostgreSQL\\*\\bin\\initdb.exe',
-        'C:\\Program Files (x86)\\PostgreSQL\\*\\bin\\initdb.exe'
-      ],
-      postgres: [
-        'C:\\Program Files\\PostgreSQL\\*\\bin\\postgres.exe',
-        'C:\\Program Files (x86)\\PostgreSQL\\*\\bin\\postgres.exe'
-      ],
-      pg_ctl: [
-        'C:\\Program Files\\PostgreSQL\\*\\bin\\pg_ctl.exe',
-        'C:\\Program Files (x86)\\PostgreSQL\\*\\bin\\pg_ctl.exe'
-      ]
+      pgDump: tool('pg_dump'),
+      psql: tool('psql'),
+      pgRestore: tool('pg_restore'),
+      pgConfig: tool('pg_config'),
+      initdb: tool('initdb'),
+      postgres: tool('postgres'),
+      pg_ctl: tool('pg_ctl'),
     };
   }
 }

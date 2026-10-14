@@ -38,7 +38,7 @@ describe('finding the env file on the server', () => {
       { file: '/srv/app/.env.example', variables: ['DATABASE_URL'], example: true, copy: false },
     ]);
   });
-  test('the script finds the files, skips node_modules and prints names, never values', () => {
+  test('the script finds the files, skips node_modules and prints names, never values', { skip: process.platform === 'win32' }, () => {
     const fs = require('node:fs');
     const os = require('node:os');
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bbdump-envsearch-'));

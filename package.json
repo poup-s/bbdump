@@ -5,7 +5,7 @@
   "main": "dist/main/main.js",
   "scripts": {
     "build": "tsc && vue-tsc --noEmit -p src/renderer/tsconfig.json && npm run copy:assets && npm run build:renderer",
-    "copy:assets": "mkdir -p dist/main/assets && cp src/main/assets/* dist/main/assets/",
+    "copy:assets": "node scripts/copy-assets.mjs",
     "build:renderer": "vite build",
     "dev": "npm run build && electron .",
     "build:mcp": "cd mcp-postgres && npm ci && npm run build",
@@ -15,6 +15,7 @@
     "dist:mac": "npm run build && npm run bundle:mcp && electron-builder --mac",
     "postdist:mac": "node scripts/set-update-min-os.mjs",
     "dist:linux": "npm run build && npm run bundle:mcp && electron-builder --linux",
+    "dist:win": "npm run build && npm run bundle:mcp && electron-builder --win",
     "start": "electron .",
     "lint": "eslint src/",
     "test": "tsc && node --test \"test/*.test.mjs\"",
@@ -183,6 +184,26 @@
       "category": "Utility",
       "icon": "logo.png",
       "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "resources/windows/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "bbdump",
+      "artifactName": "${productName}-${version}-setup.${ext}"
     }
   }
 }

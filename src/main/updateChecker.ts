@@ -20,15 +20,19 @@ let pendingMacApp: string | null = null;
 
 const RELEASES_URL = 'https://github.com/poup-s/bbdump/releases';
 
-const isAppImage = () => process.platform === 'linux' && !!process.env.APPIMAGE;
+/**
+ * electron-updater installs the update itself: the Linux AppImage, and the Windows installer
+ * (NSIS; an unsigned build is accepted when no publisher is declared).
+ */
+const usesElectronUpdater = () => (process.platform === 'linux' && !!process.env.APPIMAGE) || (process.platform === 'win32' && app.isPackaged);
 
 /**
- * In-place updates: electron-updater for the Linux AppImage, bbdump's own updater on macOS
+ * In-place updates: electron-updater (AppImage, Windows), bbdump's own updater on macOS
  * (Squirrel.Mac rejects unsigned apps) when the app sits in a folder it can write to.
  * .deb installs, and Macs where the bundle cannot be replaced, get the release page.
  */
 export function supportsAutoInstall(): boolean {
-  return isAppImage() || macUpdatableBundle() !== null;
+  return usesElectronUpdater() || macUpdatableBundle() !== null;
 }
 
 function sendToWindow(channel: string, payload?: unknown): void {
@@ -57,7 +61,7 @@ export function initAutoUpdater(win: BrowserWindow): void {
 
   autoUpdater.autoDownload = false;
   // Never on macOS: Squirrel.Mac would try (and fail) to install on quit
-  autoUpdater.autoInstallOnAppQuit = isAppImage();
+  autoUpdater.autoInstallOnAppQuit = usesElectronUpdater();
 
   autoUpdater.on('update-available', (info: ElectronUpdateInfo) => {
     logger.info(`Update available: ${info.version}`);
@@ -146,7 +150,7 @@ export async function downloadUpdate(): Promise<{ manual: boolean }> {
     }
     return { manual: false };
   }
-  if (!isAppImage()) {
+  if (!usesElectronUpdater()) {
     await shell.openExternal(releaseUrl(latestVersion));
     return { manual: true };
   }
@@ -160,7 +164,7 @@ export function quitAndInstall(): void {
     installMacUpdateAndQuit(pendingMacApp, macBundle);
     return;
   }
-  if (!isAppImage()) {
+  if (!usesElectronUpdater()) {
     // Tearing down the windows before a doomed install left the app with no window
     shell.openExternal(releaseUrl(latestVersion));
     return;
