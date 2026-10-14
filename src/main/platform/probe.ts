@@ -30,14 +30,30 @@ const EXTRA_DIRS = [
 ];
 
 function isExecutable(file: string): boolean {
+  if (process.platform === 'win32') return isWindowsExecutable(file);
   try {
-    const stat = fs.statSync(file);
-    if (!stat.isFile()) return false;
-    if (process.platform === 'win32') return true;
+    if (!fs.statSync(file).isFile()) return false;
     fs.accessSync(file, fs.constants.X_OK);
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Windows: winget (and other Store apps) is an app execution alias in WindowsApps, a link
+ * that stat() cannot follow; lstat() sees it, and Windows runs it like any .exe.
+ */
+export function isWindowsExecutable(file: string, fsApi: Pick<typeof fs, 'statSync' | 'lstatSync'> = fs): boolean {
+  try {
+    return fsApi.statSync(file).isFile();
+  } catch {
+    try {
+      const link = fsApi.lstatSync(file);
+      return !link.isDirectory() && (link.isFile() || link.isSymbolicLink());
+    } catch {
+      return false;
+    }
   }
 }
 

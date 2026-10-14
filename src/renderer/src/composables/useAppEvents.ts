@@ -2,7 +2,7 @@ import { onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
 import { useI18n } from './useI18n';
 import { useToast } from './useToast';
-import { ipcRenderer } from '../electron';
+import { ipcRenderer, isWindows } from '../electron';
 import { getErrorMessage } from '../utils';
 import type { BackupCompleteEvent, BackupProgress } from '../types';
 import { shouldShowWhatsNew } from '../whatsNew';
@@ -79,7 +79,7 @@ export function useAppEvents() {
             } else {
                 const db = store.databases.find(d => d.id === result.databaseId);
                 // Windows: no pg_dump for this server's version; the error gives the winget command: one click instead
-                const major = navigator.userAgent.includes('Windows') ? /PostgreSQL\.PostgreSQL\.(\d+)/.exec(result.error || '')?.[1] : undefined;
+                const major = isWindows ? /PostgreSQL\.PostgreSQL\.(\d+)/.exec(result.error || '')?.[1] : undefined;
                 addToast(t('backup.error', { db: db?.displayName || db?.name || result.database }), 'error', {
                     detail: result.error,
                     ...(major ? {

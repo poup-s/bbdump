@@ -35,9 +35,12 @@ export function supportsAutoInstall(): boolean {
   return usesElectronUpdater() || macUpdatableBundle() !== null;
 }
 
-/** electron-updater's error when the latest release has no manifest for this system (latest.yml…) */
-export function isMissingPlatformManifest(message: string): boolean {
-  return /Cannot find latest(-[a-z0-9]+)*\.yml/i.test(message);
+/**
+ * electron-updater's error when the latest release has no Windows build yet (no latest.yml).
+ * Windows only: on macOS and Linux a missing manifest is a release mistake worth showing.
+ */
+export function isMissingPlatformManifest(message: string, platform: NodeJS.Platform = process.platform): boolean {
+  return platform === 'win32' && /Cannot find latest(-[a-z0-9]+)*\.yml/i.test(message);
 }
 
 function sendToWindow(channel: string, payload?: unknown): void {

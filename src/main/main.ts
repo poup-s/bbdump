@@ -37,7 +37,8 @@ let trayPopupHiddenAt = 0;
 // the tray): a second launch brings this one forward instead of running its own backups
 const isFirstInstance = app.requestSingleInstanceLock();
 if (!isFirstInstance) {
-  app.quit();
+  // exit, not quit: no before-quit cleanup, which would log a shutdown of the running bbdump
+  app.exit(0);
 } else {
   app.on('second-instance', (_event, argv) => {
     // An MCP confirmation reaches this instance through its local server

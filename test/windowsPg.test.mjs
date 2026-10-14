@@ -56,3 +56,35 @@ test("winget's answers: installed, already there, no such version, prompt refuse
   assert.equal(wingetOutcome(1223, 'Installer failed'), 'cancelled');
   assert.equal(wingetOutcome(1, 'Installer failed with exit code: 3'), 'failed');
 });
+
+test('a tool in folders scanned once', () => {
+  const { toolInDirs } = require(path.join(process.cwd(), 'dist/main/platform/windowsPg.js'));
+  const binDirs = windowsPgBinDirs(env, readdir, exists);
+  assert.deepEqual(toolInDirs(binDirs, 'psql', exists), ['C:\\Program Files\\PostgreSQL\\17\\bin\\psql.exe']);
+});
+
+test('winget, an app execution alias that stat() cannot follow, is still found', () => {
+  const { isWindowsExecutable } = require(path.join(process.cwd(), 'dist/main/platform/probe.js'));
+  const fail = () => { throw Object.assign(new Error('UNKNOWN'), { code: 'UNKNOWN' }); };
+  const stats = kind => ({ isFile: () => kind === 'file', isDirectory: () => kind === 'dir', isSymbolicLink: () => kind === 'link' });
+  assert.equal(isWindowsExecutable('winget.exe', { statSync: fail, lstatSync: () => stats('link') }), true);
+  assert.equal(isWindowsExecutable('pg_dump.exe', { statSync: () => stats('file'), lstatSync: fail }), true);
+  assert.equal(isWindowsExecutable('bin', { statSync: () => stats('dir'), lstatSync: () => stats('dir') }), false);
+  assert.equal(isWindowsExecutable('missing.exe', { statSync: fail, lstatSync: fail }), false);
+});
+
+test('Windows: the client tools install with winget, nothing else', () => {
+  const { canRunInstall, planFor } = require(path.join(process.cwd(), 'dist/main/platform/install.js'));
+  const windows = { os: 'windows', osLabel: 'Windows', supported: false, arch: 'x64', packageManager: { id: 'winget', path: 'winget.exe' } };
+  const tools = planFor('client-tools', windows, 'me');
+  assert.equal(tools.automatic, true);
+  assert.equal(canRunInstall('client-tools', windows, tools), true);
+  const server = planFor('server', windows, 'me');
+  assert.equal(server.automatic, false);
+  assert.equal(canRunInstall('server', windows, server), false);
+  const noWinget = { ...windows, packageManager: null };
+  const manual = planFor('client-tools', noWinget, 'me');
+  assert.equal(manual.automatic, false);
+  assert.match(manual.command, /^winget install/);
+  assert.equal(canRunInstall('client-tools', noWinget, manual), false);
+});

@@ -95,9 +95,17 @@ export async function getInstallPlan(component: SetupComponent): Promise<SetupIn
 
 let installing = false;
 
+/** Whether runInstall goes ahead: a supported system, or Windows' client tools through winget */
+export function canRunInstall(component: SetupComponent, env: SetupEnvironment, plan: SetupInstallPlan): boolean {
+  // Windows is "not supported" for a local server, but its client tools install with winget
+  const windowsClientTools = env.os === 'windows' && component === 'client-tools';
+  return plan.automatic && (env.supported || windowsClientTools);
+}
+
 export async function runInstall(
   component: SetupComponent,
   onProgress: (progress: SetupProgress) => void,
+  options: { windowsMajors?: readonly string[] } = {},
 ): Promise<SetupInstallResult> {
   if (installing) return { success: false, error: 'Another installation is already running' };
   installing = true;
@@ -106,9 +114,7 @@ export async function runInstall(
     const plan = planFor(component, env);
     const progress: ProgressFn = (percent, message, stage) => onProgress({ component, percent, message, stage });
 
-    // Windows is "not supported" for a local server, but its client tools install with winget
-    const windowsClientTools = env.os === 'windows' && component === 'client-tools' && plan.automatic;
-    if ((!env.supported && !windowsClientTools) || !plan.automatic) {
+    if (!canRunInstall(component, env, plan)) {
       return {
         success: false,
         error: env.supported
@@ -121,7 +127,7 @@ export async function runInstall(
 
     let outcome: { success: boolean; error?: string };
     if (env.os === 'windows') {
-      outcome = await installWindowsClientTools(env, progress);
+      outcome = await installWindowsClientTools(env, progress, options.windowsMajors);
     } else if (env.os === 'macos') {
       outcome = await installMacos(component, env, progress);
     } else {
@@ -221,16 +227,10 @@ async function installWindowsClientTools(
 }
 
 /** Windows: the client tools of one PostgreSQL version (a backup needs that version's pg_dump) */
-export async function installWindowsPgClient(major: string): Promise<{ success: boolean; error?: string }> {
+export async function installWindowsPgClient(major: string): Promise<SetupInstallResult> {
   if (process.platform !== 'win32' || !/^\d{2}$/.test(major)) return { success: false, error: 'Not available on this system' };
-  if (installing) return { success: false, error: 'Another installation is already running' };
-  installing = true;
-  try {
-    const env = await getEnvironment(60000);
-    return await installWindowsClientTools(env, () => { /* the toast says it is running */ }, [major]);
-  } finally {
-    installing = false;
-  }
+  // The toast says it is running: no progress to show
+  return runInstall('client-tools', () => {}, { windowsMajors: [major] });
 }
 
 async function installLinux(

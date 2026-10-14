@@ -94,6 +94,18 @@ jobs:
           Get-ChildItem 'C:\Program Files\PostgreSQL\18' | Select-Object -ExpandProperty Name
           Get-ChildItem 'C:\Program Files\PostgreSQL\18\bin' -Filter '*.exe' | Select-Object -ExpandProperty Name
 
+      # Not allowed to fail: bbdump's own detection, which decides whether the install button shows
+      - name: bbdump finds winget and the installed client tools
+        shell: pwsh
+        run: |
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Write-Host 'winget is not on this runner: skipped'; exit 0 }
+          node -e "require('./dist/main/platform/environment.js').detectPackageManager('windows', 'unknown').then(p => { console.log('package manager:', JSON.stringify(p)); if (!p || p.id !== 'winget') process.exit(1) })"
+          if ($LASTEXITCODE -ne 0) { throw 'bbdump does not find winget' }
+          if (Test-Path 'C:\Program Files\PostgreSQL\18\bin\pg_dump.exe') {
+            node -e "const t = require('./dist/main/platform/windowsPg.js').windowsPgTool('pg_dump'); console.log('pg_dump:', t); if (!t.length) process.exit(1)"
+            if ($LASTEXITCODE -ne 0) { throw 'bbdump does not find pg_dump' }
+          }
+
       - name: The packaged app starts
         shell: pwsh
         run: |

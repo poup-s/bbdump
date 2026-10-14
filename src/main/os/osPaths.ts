@@ -1,4 +1,4 @@
-import { windowsPgTool } from '../platform/windowsPg';
+import { toolInDirs, windowsPgBinDirs } from '../platform/windowsPg';
 import { OSType, Architecture } from './osDetector';
 
 export interface ToolPaths {
@@ -112,8 +112,9 @@ export function getToolPaths(os: OSType, arch?: Architecture): ToolPaths {
       pg_ctl: buildLinuxPaths('pg_ctl'),
     };
   } else {
-    // Windows: the EDB installer's folders, found by scanning Program Files (newest first)
-    const tool = (name: string) => windowsPgTool(name);
+    // Windows: the EDB installer's folders, found by scanning Program Files once (newest first)
+    const binDirs = windowsPgBinDirs();
+    const tool = (name: string) => toolInDirs(binDirs, name);
     return {
       pgDump: tool('pg_dump'),
       psql: tool('psql'),

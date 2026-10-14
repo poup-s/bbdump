@@ -51,9 +51,12 @@ export function windowsPgTool(
   readdir?: ReadDir,
   exists: (p: string) => boolean = fs.existsSync,
 ): string[] {
-  return windowsPgBinDirs(env, readdir, exists)
-    .map(dir => path.win32.join(dir, `${tool}.exe`))
-    .filter(file => exists(file));
+  return toolInDirs(windowsPgBinDirs(env, readdir, exists), tool, exists);
+}
+
+/** Every copy of a tool in already scanned bin folders (scan once for several tools) */
+export function toolInDirs(binDirs: string[], tool: string, exists: (p: string) => boolean = fs.existsSync): string[] {
+  return binDirs.map(dir => path.win32.join(dir, `${tool}.exe`)).filter(file => exists(file));
 }
 
 /**

@@ -35,4 +35,7 @@ if (window.electron) {
     };
 }
 
-export { ipcRenderer, shell };
+/** Windows (beta): set from the preload, the user agent as a fallback */
+const isWindows = (window.electron?.platform ?? (navigator.userAgent.includes('Windows') ? 'win32' : '')) === 'win32';
+
+export { ipcRenderer, shell, isWindows };
