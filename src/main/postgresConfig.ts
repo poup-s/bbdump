@@ -753,6 +753,16 @@ export async function installExtension(dbName: string, extensionName: string, po
   }
 }
 
+/** Extensions the local server can create (its installed packages) */
+export async function availableExtensionNames(port: number = 5432): Promise<string[]> {
+  const client = await createPostgresConnection(port, 'postgres');
+  try {
+    return (await client.query<{ name: string }>('SELECT name FROM pg_available_extensions')).rows.map(r => r.name);
+  } finally {
+    await client.end();
+  }
+}
+
 /**
  * Uninstalls an extension from a database. shared_preload_libraries is left as is: other
  * databases of the server may still use the library.

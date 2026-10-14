@@ -127,6 +127,32 @@ export function packageInstallCommand(entry: CatalogEntry, manager: PackageManag
   return manager === 'apt' ? `sudo apt install ${pkg}` : `sudo dnf install ${pkg}`;
 }
 
+export interface MissingExtension {
+  name: string;
+  /** bbdump can install its package on this server */
+  installable: boolean;
+  /** What to run by hand, when the catalog knows the package */
+  command: string | null;
+}
+
+/**
+ * Extensions a source database uses that the local server cannot create: copying it there
+ * would fail on them (and on the tables or columns that need them).
+ */
+export function missingExtensions(
+  used: string[],
+  available: Iterable<string>,
+  server: { packageManager: PackageManager | null; major: number; autoInstall: boolean } | null,
+): MissingExtension[] {
+  const have = new Set(available);
+  return used.filter(name => name !== 'plpgsql' && !have.has(name)).map(name => {
+    const entry = catalogEntry(name);
+    const manager = server?.packageManager ?? null;
+    const pkg = entry && manager ? extensionPackage(entry, manager, server!.major) : null;
+    return { name, installable: !!(pkg && server?.autoInstall), command: entry && manager ? packageInstallCommand(entry, manager, server!.major) : null };
+  });
+}
+
 /** Package names come from the catalog only; this guards what reaches a root script anyway */
 const PACKAGE_RE = /^[a-z0-9][a-z0-9.+_-]*$/;
 

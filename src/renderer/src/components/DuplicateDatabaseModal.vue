@@ -16,7 +16,7 @@ import FormField from './ui/FormField.vue';
 import SwitchRow from './ui/SwitchRow.vue';
 import AnonymizeModal from './AnonymizeModal.vue';
 import type { AnonymizeChoices } from '../anonymize';
-import { btnGhost, btnPrimary, inputClass, monoInputClass, panelClass } from './ui/classes';
+import { btnGhost, btnPrimary, btnSecondary, inputClass, monoInputClass, panelClass } from './ui/classes';
 
 const ICON_COPY = 'M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2';
 const STEPS = ['backup', 'creating', 'restoring', 'complete'];
@@ -64,6 +64,60 @@ const confirmAnonymize = (choices: AnonymizeChoices) => {
 const sourceLabel = computed(() => (props.sourceDb ? (props.sourceDb.masked ? '••••••••' : (props.sourceDb.displayName || props.sourceDb.name)) : ''));
 const sourceWhere = computed(() => (props.sourceDb ? `${props.sourceDb.host}:${props.sourceDb.port} · ${props.sourceDb.name}` : ''));
 
+interface MissingExtension { name: string; installable: boolean; command: string | null }
+/** Extensions of the source the local server lacks: what depends on them would not be copied */
+const missingExt = ref<MissingExtension[]>([]);
+const installingExt = ref<string | null>(null);
+const extError = ref('');
+
+const checkExtensions = async () => {
+  if (!props.sourceDb) return;
+  try {
+    const result = await ipcRenderer.invoke('duplicate-check-extensions', props.sourceDb.id, duplicateForm.value.port);
+    missingExt.value = result?.missing ?? [];
+  } catch {
+    missingExt.value = [];
+  }
+};
+
+const installExtension = async (name: string) => {
+  installingExt.value = name;
+  extError.value = '';
+  try {
+    const result = await ipcRenderer.invoke('install-extension-package', 'postgres', name, duplicateForm.value.port);
+    if (!result?.success) extError.value = result?.error || t('databases.duplicateExtInstallError');
+    else addToast(t('databases.duplicateExtInstalled', { name }), 'success');
+  } catch (error) {
+    extError.value = getErrorMessage(error);
+  } finally {
+    installingExt.value = null;
+    await checkExtensions();
+  }
+};
+
+/**
+ * pg_restore lines said plainly: the missing extensions once, the tables that could not be
+ * created (a type of a missing extension…) by name; the other lines as they are.
+ */
+const explainWarnings = (lines: string[]) => {
+  const missing = new Set<string>();
+  const lost = new Set<string>();
+  const rest: string[] = [];
+  for (const line of lines) {
+    const ext = /extension "([^"]+)" (is not available|does not exist)/.exec(line);
+    // pg_restore, or the anonymized copy ("schema.table: not created by the schema restore…")
+    const table = /relation "([^"]+)" does not exist/.exec(line) ?? /^(\S+): not created by the schema restore/.exec(line);
+    if (ext) missing.add(ext[1]);
+    else if (table) lost.add(table[1].replace(/^public\./, ''));
+    else if (!(missing.size && /type "[^"]+" does not exist/.test(line))) rest.push(line);
+  }
+  return [
+    ...(missing.size ? [t('databases.duplicateExtWarning', { names: [...missing].join(', ') })] : []),
+    ...(lost.size ? [t('databases.duplicateLostTables', { tables: [...lost].join(', ') })] : []),
+    ...rest,
+  ];
+};
+
 onMounted(async () => {
   if (!props.sourceDb) return;
   const names = new Set(store.databases.map(d => d.name));
@@ -74,6 +128,7 @@ onMounted(async () => {
     console.error('Failed to fetch physical databases for name check', e);
   }
   existingNames.value = names;
+  checkExtensions();
 
   // First free "<name>_copy", "<name>_copy_2"…
   const baseName = `${props.sourceDb.name}_copy`;
@@ -153,7 +208,8 @@ const duplicateToLocal = async () => {
     if (result.success) {
       isDuplicating.value = false;
       if (result.warnings?.length) {
-        addToast(t('databases.duplicateWarnings', { name: formName, count: result.warnings.length }), 'warning', { detail: result.warnings.join('\n') });
+        const explained = explainWarnings(result.warnings);
+        addToast(t('databases.duplicateWarnings', { name: formName, count: explained.length }), 'warning', { detail: explained.join('\n') });
       } else {
         addToast(t(anonymizeOn.value ? 'databases.duplicateAnonymizedSuccess' : 'databases.duplicateSuccess', { name: formName }), 'success');
       }
@@ -226,6 +282,25 @@ const duplicateToLocal = async () => {
           <FormField :label="t('database.port')" for="dup-port" :error="portError">
             <input id="dup-port" v-model.number="duplicateForm.port" type="number" min="1024" max="65535" :class="monoInputClass" />
           </FormField>
+        </div>
+
+        <!-- Extensions the local server lacks (e.g. postgis): install them before copying -->
+        <div v-if="missingExt.length" class="rounded-xl border border-amber-300/60 dark:border-amber-800/60 bg-amber-50/60 dark:bg-amber-950/20 px-3.5 py-3" role="alert">
+          <div class="text-[13px] font-medium text-amber-900 dark:text-amber-200">{{ t('databases.duplicateExtMissing', { names: missingExt.map(e => e.name).join(', ') }) }}</div>
+          <p class="mt-0.5 text-[11.5px] leading-relaxed text-amber-800/90 dark:text-amber-300/80">{{ t('databases.duplicateExtHint') }}</p>
+          <ul class="mt-2 space-y-1.5">
+            <li v-for="ext in missingExt" :key="ext.name" class="flex items-center gap-2 text-[12px]">
+              <span class="font-mono text-gray-900 dark:text-zinc-100">{{ ext.name }}</span>
+              <span class="flex-1" />
+              <button v-if="ext.installable" type="button" :class="btnSecondary" :disabled="!!installingExt" @click="installExtension(ext.name)">
+                <svg v-if="installingExt === ext.name" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" /><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                {{ installingExt === ext.name ? t('databases.duplicateExtInstalling') : t('databases.duplicateExtInstall') }}
+              </button>
+              <code v-else-if="ext.command" class="font-mono text-[11px] text-gray-600 dark:text-zinc-400 select-all">{{ ext.command }}</code>
+              <span v-else class="text-[11px] text-gray-500 dark:text-zinc-400">{{ t('databases.duplicateExtHosted') }}</span>
+            </li>
+          </ul>
+          <p v-if="extError" class="mt-1.5 text-[11px] text-red-600 dark:text-red-400 break-words">{{ extError }}</p>
         </div>
 
         <SwitchRow v-model="anonymizeOn" :title="t('anonymize.switch')" :description="t('anonymize.switchHint')">

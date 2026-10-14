@@ -68,3 +68,19 @@ describe('shared_preload_libraries', () => {
     assert.equal(catalog.preloadLiterals([], format), "''");
   });
 });
+
+describe('extensions missing before a copy', () => {
+  const brew = { packageManager: 'brew', major: 17, autoInstall: true };
+  test('postgis missing on a Homebrew server: installable, with its command', () => {
+    assert.deepEqual(catalog.missingExtensions(['plpgsql', 'postgis', 'pgcrypto'], ['plpgsql', 'pgcrypto'], brew), [
+      { name: 'postgis', installable: true, command: 'brew install postgis' },
+    ]);
+  });
+  test("an extension of the host (not in the catalog), or no package manager: said, not installable", () => {
+    assert.deepEqual(catalog.missingExtensions(['supabase_vault'], [], brew), [{ name: 'supabase_vault', installable: false, command: null }]);
+    assert.deepEqual(catalog.missingExtensions(['postgis'], [], null), [{ name: 'postgis', installable: false, command: null }]);
+  });
+  test('nothing missing: nothing said', () => {
+    assert.deepEqual(catalog.missingExtensions(['plpgsql', 'postgis'], ['postgis'], brew), []);
+  });
+});

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.1 — 2026-10-14
+
+### Fixed
+
+- **Duplicating a database that uses an extension missing on the local server (e.g. PostGIS)**
+  said "duplicated" while the tables needing it were left out, with only raw pg_restore lines
+  (`extension "postgis" is not available`) at best. The duplicate dialog now checks the
+  source's extensions first: a missing one is named, with an "Install" button when bbdump can
+  install it (Homebrew, apt, dnf), or the command to run, or a note when it only exists at the
+  host. After copying, the warnings say plainly which extensions were missing and which tables
+  were not copied.
+
 ## 1.2.0 — 2026-10-14
 
 ### Upgrading

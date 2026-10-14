@@ -12,7 +12,8 @@ import * as path from 'path';
 import { pathManager } from '../paths';
 import { DatabaseConfig } from '../../types/config';
 import { withConnection } from '../dbViewer';
-import { dropDatabase } from '../postgresConfig';
+import { availableExtensionNames, dropDatabase, getExtensionServerInfo } from '../postgresConfig';
+import { missingExtensions } from '../extensionCatalog';
 import { readCatalog } from '../sync/catalog';
 import { onSource } from '../sync/syncEngine';
 import { buildAnonymizePlan, copyAnonymized, resolveAnonymization, type AnonymizeChoices } from '../sync/anonymizedCopy';
@@ -130,6 +131,20 @@ async function duplicateAnonymized(
 }
 
 export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWindow | null) {
+
+    // Extensions of the source the local server lacks (e.g. postgis): said before copying, installed on request
+    ipcMain.handle('duplicate-check-extensions', async (_, sourceId: string, port: number = 5432) => {
+        try {
+            const used = await onSource(sourceId, async src =>
+                (await src.query<{ extname: string }>('SELECT extname FROM pg_extension ORDER BY 1')).rows.map(r => r.extname));
+            const available = await availableExtensionNames(port);
+            const server = await getExtensionServerInfo('postgres', port).catch(() => null);
+            return { success: true, missing: missingExtensions(used, available, server) };
+        } catch (error) {
+            logger.warn(`Could not compare the extensions before duplicating: ${getErrorMessage(error)}`);
+            return { success: false, missing: [], error: getErrorMessage(error) };
+        }
+    });
 
     // Tables and columns of a database, with what can be anonymized: for the duplicate dialog
     ipcMain.handle('duplicate-anonymize-plan', async (_, sourceId: string) => {
@@ -359,7 +374,8 @@ export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWin
 
             sendProgress('complete', 'Database duplicated successfully', 100);
 
-            return { success: true };
+            // What did not restore (a missing extension, the tables needing it…) is said, not hidden
+            return { success: true, warnings: restoreResult.warnings?.length ? restoreResult.warnings : undefined };
 
         } catch (error) {
             logger.error(`Error duplicating database: ${getErrorMessage(error)}`);
