@@ -13,6 +13,7 @@ import { journalAvailable, listEntries, writeEntry, MAX_UNDO_ROWS, type UndoTabl
 import {
   primaryKey, selectForUndo, captureDelete, modifiedTable, snapshotTable, diffSnapshots, touchedRows, startTriggerCapture, UndoUnavailable,
 } from '../undo.js';
+import { protectRows, maskingNote } from '../masking.js';
 import { WRITE, READ, databaseParam, schemaParam, tableParam, filterSchema } from './common.js';
 
 type Client = pg.PoolClient;
@@ -29,13 +30,16 @@ const cellValue = z.union([z.string(), z.number(), z.boolean(), z.null(), z.arra
 /** node-postgres sends objects as JSON and arrays as PostgreSQL arrays */
 const toParam = (value: unknown) => value;
 
-const returned = (rows: Record<string, unknown>[]) => {
-  const clean = rows.map(({ [ROW_JSON]: _json, ...rest }) => rest);
+/** Rows sent back after a write, with the database's personal columns masked (the write itself was confirmed) */
+async function returned(client: Client, result: pg.QueryResult, database: string | undefined, tool: string) {
+  const clean = (result.rows ?? []).map(({ [ROW_JSON]: _json, ...rest }) => rest);
+  const shown = await protectRows(client, { fields: (result.fields ?? []).filter(f => f.name !== ROW_JSON), rows: clean.slice(0, RETURNED_ROWS) }, { tool, database, ask: false });
   return {
-    rows: clean.slice(0, RETURNED_ROWS),
+    rows: shown.rows,
     ...(clean.length > RETURNED_ROWS ? { rows_truncated: `${clean.length - RETURNED_ROWS} more row(s) not shown` } : {}),
+    ...maskingNote(shown),
   };
-};
+}
 
 let clientName: () => string | undefined = () => undefined;
 /** The AI client's name (Claude, Cursor…), for the journal */
@@ -156,7 +160,7 @@ export function registerMutationTools(server: McpServer) {
           inserted: result.rowCount,
           table: `${nsp}.${table}`,
           ...journal({ tool: 'insert_rows', database, sql, description, rowsAffected: result.rowCount, tables, reason: plan.reason }),
-          ...returned(result.rows),
+          ...(await returned(client, result, database, 'insert_rows')),
         });
       });
     }
@@ -223,7 +227,7 @@ export function registerMutationTools(server: McpServer) {
           updated: result.rowCount,
           table: `${nsp}.${table}`,
           ...journal({ tool: 'update_rows', database, sql: shownSql, description, rowsAffected: result.rowCount, tables, reason: plan.reason }),
-          ...returned(result.rows),
+          ...(await returned(client, result, database, 'update_rows')),
         });
       });
     }
@@ -287,7 +291,7 @@ export function registerMutationTools(server: McpServer) {
           table: `${nsp}.${table}`,
           ...(cascaded.length ? { also_changed_by_foreign_keys: cascaded.map(t => `${t.schema}.${t.table}: ${t.before.length} row(s)`) } : {}),
           ...journal({ tool: 'delete_rows', database, sql, description, rowsAffected: result.rowCount, tables, reason }),
-          ...returned(result.rows),
+          ...(await returned(client, result, database, 'delete_rows')),
         });
       });
     }
@@ -396,7 +400,7 @@ export function registerMutationTools(server: McpServer) {
           affected_rows: result.rowCount,
           fields: result.fields?.map(f => f.name) || [],
           ...(dry_run ? {} : journal({ tool: 'execute_write_query', database, sql, description, rowsAffected: result.rowCount, tables, reason: plan.reason })),
-          ...returned(result.rows || []),
+          ...(await returned(client, result, database, 'execute_write_query')),
           duration_ms: duration,
           dry_run,
           ...(statements > 1 ? { statements, note: 'Several statements: the result is the last one\'s.' } : {}),

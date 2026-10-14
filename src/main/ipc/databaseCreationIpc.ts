@@ -11,6 +11,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { pathManager } from '../paths';
 import { DatabaseConfig } from '../../types/config';
+import { withConnection } from '../dbViewer';
+import { dropDatabase } from '../postgresConfig';
+import { readCatalog } from '../sync/catalog';
+import { onSource } from '../sync/syncEngine';
+import { buildAnonymizePlan, copyAnonymized, resolveAnonymization, type AnonymizeChoices } from '../sync/anonymizedCopy';
 
 // Define explicit types for database objects to avoid TS errors
 interface DatabaseInfo {
@@ -24,7 +29,130 @@ interface DatabaseInfo {
     encrypted?: boolean;
 }
 
+type SendProgress = (step: string, message: string, progress: number) => void;
+
+/** Adds a copy made on the local server to the saved databases */
+function saveLocalCopy(name: string, port: number, user: string, password?: string): void {
+    const config = getConfig();
+    config.databases.push(sanitizeDatabaseConfig({
+        name,
+        displayName: name,
+        host: 'localhost',
+        port,
+        user,
+        password: password || '',
+        encrypted: !!password,
+        encryptBackups: false,
+        cron: '0 0 * * *',
+        output: config.defaultBackupPath || pathManager.backupsPath,
+        enabled: false,
+        ssl: false,
+        isLocalBbdump: true
+    }));
+    saveConfig(config);
+}
+
+/**
+ * Copy with personal data anonymized: the schema from a schema-only dump (in a temporary
+ * folder, deleted after), the rows streamed from the source with the chosen columns already
+ * replaced. Nothing of the source is kept as a backup, since it would hold the real values.
+ */
+async function duplicateAnonymized(
+    sourceDb: DatabaseConfig,
+    params: { targetName: string; targetPort: number; targetPassword?: string },
+    choices: AnonymizeChoices,
+    sendProgress: SendProgress,
+): Promise<{ success: boolean; error?: string; warnings?: string[] }> {
+    // Under the backups folder: where pg_dump may write (removed at the end, whatever happens)
+    fs.mkdirSync(pathManager.backupsPath, { recursive: true });
+    const schemaDir = fs.mkdtempSync(path.join(pathManager.backupsPath, '.schema-'));
+    let created = false;
+    try {
+        sendProgress('schema', `Reading the schema of "${sourceDb.name}"...`, 5);
+        // Choices checked before anything is created
+        await onSource(sourceDb.id, async src => resolveAnonymization(buildAnonymizePlan(await readCatalog(src), new Map()), choices.columns));
+        const dump = await backupManager.dumpSchema(toRuntimeDatabase(sourceDb), schemaDir);
+        if (!dump.success || !dump.filePath) {
+            return { success: false, error: `Failed to read the source schema: ${dump.error || 'Unknown error'}` };
+        }
+
+        sendProgress('creating', `Creating local database "${params.targetName}"...`, 15);
+        const config = getConfig();
+        const createResult = await databaseCreator.createLocalDatabase(
+            { name: params.targetName, displayName: params.targetName, port: params.targetPort, password: params.targetPassword },
+            config.databases.map(db => db.port),
+        );
+        if (!createResult.success || !createResult.database) {
+            return { success: false, error: `Failed to create local database: ${createResult.error || 'Unknown error'}` };
+        }
+        created = true;
+        const user = createResult.database.user;
+        const target = { host: 'localhost', port: params.targetPort, user, password: params.targetPassword || '', database: params.targetName };
+
+        sendProgress('copying', 'Creating the tables...', 25);
+        let copyWarnings: string[] = [];
+        let copiedRows = 0;
+        const restore = await backupManager.restoreBackup(dump.filePath, { ...target, name: params.targetName }, {
+            replace: false,
+            loadData: () => onSource(sourceDb.id, src => withConnection(target, async tgt => {
+                const sourceCatalog = await readCatalog(src);
+                const plan = buildAnonymizePlan(sourceCatalog, new Map());
+                const result = await copyAnonymized(src, tgt, sourceCatalog, await readCatalog(tgt), plan, choices, p => {
+                    sendProgress('copying', `${p.table} · ${p.rows.toLocaleString('en-US')} rows`, 30 + Math.round((60 * p.index) / Math.max(1, p.total)));
+                });
+                copyWarnings = result.warnings;
+                copiedRows = result.rows;
+                sendProgress('copying', 'Creating indexes and constraints...', 92);
+            })),
+        });
+        if (!restore.success) {
+            return { success: false, error: restore.error || 'Restore failed' };
+        }
+
+        sendProgress('complete', 'Adding database to configuration...', 97);
+        saveLocalCopy(params.targetName, params.targetPort, user, params.targetPassword);
+        created = false;
+        const warnings = [...(restore.warnings ?? []), ...copyWarnings];
+        logger.info(`Anonymized copy of "${sourceDb.name}" into "${params.targetName}": ${copiedRows} row(s), ${choices.columns.length} column(s) chosen, ${choices.emptyTables.length} table(s) left empty${warnings.length ? `, ${warnings.length} warning(s)` : ''}`);
+        sendProgress('complete', 'Database duplicated', 100);
+        return { success: true, warnings: warnings.length ? warnings : undefined };
+    } catch (error) {
+        logger.error(`Error duplicating database with anonymization: ${getErrorMessage(error)}`);
+        return { success: false, error: getErrorMessage(error) };
+    } finally {
+        fs.rmSync(schemaDir, { recursive: true, force: true });
+        // A half-made copy is not left on the server
+        if (created) {
+            const dropped = await dropDatabase(params.targetName, params.targetPort);
+            if (!dropped.success) logger.warn(`Could not remove the unfinished copy "${params.targetName}": ${dropped.error}`);
+        }
+    }
+}
+
 export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWindow | null) {
+
+    // Tables and columns of a database, with what can be anonymized: for the duplicate dialog
+    ipcMain.handle('duplicate-anonymize-plan', async (_, sourceId: string) => {
+        try {
+            const plan = await onSource(sourceId, async src => {
+                const catalog = await readCatalog(src);
+                // Statistics may be missing on small or fresh tables: count those
+                const counts = new Map<string, number>();
+                for (const table of catalog.tables.values()) {
+                    if (table.estimate > 0) continue;
+                    const rel = `"${table.schema.replace(/"/g, '""')}"."${table.name.replace(/"/g, '""')}"`;
+                    // ONLY: rows of inheriting tables are counted (and copied) with their own table
+                    counts.set(table.key, Number((await src.query(`SELECT count(*) AS n FROM ${table.partitioned ? '' : 'ONLY '}${rel}`)).rows[0].n));
+                }
+                return buildAnonymizePlan(catalog, counts);
+            });
+            return { success: true, plan };
+        } catch (error) {
+            logger.error(`Could not read the tables to anonymize: ${getErrorMessage(error)}`);
+            return { success: false, error: getErrorMessage(error) };
+        }
+    });
+
 
     ipcMain.handle('create-local-database', async (_, params: { name: string; displayName?: string; port: number; password?: string; enabled?: boolean }) => {
         try {
@@ -87,6 +215,8 @@ export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWin
         targetName: string;
         targetPort: number;
         targetPassword?: string;
+        /** Personal data replaced while copying (no backup of the source is made) */
+        anonymize?: AnonymizeChoices;
     }) => {
         // Helper to send progress
         const sendProgress = (step: string, message: string, progress: number) => {
@@ -108,6 +238,13 @@ export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWin
 
             if (!sourceDb) {
                 throw new Error(`Source database not found: ${sourceDbId}`);
+            }
+
+            if (params.anonymize) {
+                return duplicateAnonymized(sourceDb, params, {
+                    columns: Array.isArray(params.anonymize.columns) ? params.anonymize.columns : [],
+                    emptyTables: Array.isArray(params.anonymize.emptyTables) ? params.anonymize.emptyTables : [],
+                }, sendProgress);
             }
 
             // 2. Backup Source (credentials decrypted below, in sourceDbConfig)
@@ -214,26 +351,8 @@ export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWin
             // 5. Add new DB to config
             sendProgress('complete', 'Adding database to configuration...', 95);
 
-            const targetDbConfig: DatabaseConfig = sanitizeDatabaseConfig({
-                name: params.targetName,
-                displayName: params.targetName,
-                host: 'localhost',
-                port: params.targetPort,
-                user: newDbUser,
-                password: params.targetPassword || '',
-                encrypted: !!params.targetPassword,
-                encryptBackups: false,
-                cron: '0 0 * * *',
-                output: config.defaultBackupPath || pathManager.backupsPath,
-                enabled: false,
-                ssl: false,
-                isLocalBbdump: true
-            });
-
             // No lastBackup: the dump belongs to the source, the copy was never backed up
-
-            config.databases.push(targetDbConfig);
-            saveConfig(config);
+            saveLocalCopy(params.targetName, params.targetPort, newDbUser, params.targetPassword);
 
             // Duplication succeeded, backup file is kept as part of normal backups
             createdBackupFile = null;

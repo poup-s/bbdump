@@ -33,14 +33,26 @@ interface TrayBackupStats {
   totalSize: number;
 }
 
+interface DisclosedColumn {
+  name: string;
+  /** rule: masked by the database's setting · unknown: computed or from a view · clear */
+  origin: 'rule' | 'unknown' | 'clear';
+  source?: string;
+  samples: string[];
+}
+
 interface McpConfirmRequest {
   id: string;
+  /** 'disclose': a read result that may hold personal data, before it goes to the AI */
+  kind?: 'disclose';
   tool: string;
   database: string;
   table?: string;
   schema?: string;
   sql: string;
-  description: string;
+  description?: string;
+  rows?: number;
+  columns?: DisclosedColumn[];
 }
 
 const databases = ref<TrayDatabase[]>([]);
@@ -92,6 +104,25 @@ function stopCountdown() {
     countdownInterval = null;
   }
 }
+
+/** Columns masked in the result about to go to the AI (a disclosure) */
+const discloseMask = ref(new Set<string>());
+const toggleDisclosed = (name: string) => {
+  const next = new Set(discloseMask.value);
+  if (next.has(name)) next.delete(name); else next.add(name);
+  discloseMask.value = next;
+};
+
+const answerDisclosure = (approved: boolean, mask: string[] = []) => {
+  if (!mcpConfirm.value) return;
+  ipcRenderer.invoke('mcp-confirm-response', { id: mcpConfirm.value.id, approved, mask: [...mask] });
+  stopCountdown();
+  mcpConfirm.value = null;
+  ipcRenderer.send('mcp-confirm-done');
+};
+const sendDisclosed = () => answerDisclosure(true, [...discloseMask.value]);
+const maskAllDisclosed = () => answerDisclosure(true, (mcpConfirm.value?.columns ?? []).map(c => c.name));
+const blockDisclosed = () => answerDisclosure(false);
 
 const approveConfirm = () => {
   if (!mcpConfirm.value) return;
@@ -232,6 +263,7 @@ onMounted(() => {
 
   ipcRenderer.on('mcp-confirm-request', (_: unknown, data: McpConfirmRequest) => {
     mcpConfirm.value = data;
+    discloseMask.value = new Set((data.columns ?? []).filter(c => c.origin !== 'clear').map(c => c.name));
     startCountdown();
   });
 
@@ -253,12 +285,79 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="w-[320px] select-none p-1">
+  <div class="select-none p-1" :class="mcpConfirm?.kind === 'disclose' ? 'w-[360px]' : 'w-[320px]'">
     <!-- Card -->
     <div class="bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl overflow-hidden">
 
+      <!-- ===== MCP DISCLOSURE: what a read is about to send to the AI ===== -->
+      <template v-if="mcpConfirm && mcpConfirm.kind === 'disclose'">
+        <div class="px-4 pt-3 pb-2 flex items-center gap-2 border-b border-zinc-800">
+          <div class="w-6 h-6 bg-sky-500/20 rounded-lg flex items-center justify-center">
+            <svg class="w-3.5 h-3.5 text-sky-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+            </svg>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="text-xs font-bold text-white">{{ t('mcp.discloseTitle') }}</div>
+            <div class="text-[10px] text-zinc-400">{{ t('mcp.discloseMessage') }}</div>
+          </div>
+        </div>
+
+        <div class="px-3 py-2.5 space-y-2.5 max-h-[420px] overflow-y-auto">
+          <div class="p-2 bg-zinc-800/50 rounded-lg border border-zinc-700/50 space-y-1">
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-[10px] text-zinc-500">{{ t('mcp.database') }}</span>
+              <span class="text-[11px] font-semibold text-white font-mono truncate">{{ mcpConfirm.database }}</span>
+            </div>
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-[10px] text-zinc-500 font-mono">{{ mcpConfirm.tool }}</span>
+              <span class="text-[11px] text-zinc-300">{{ t('mcp.discloseRows', { count: mcpConfirm.rows ?? 0 }) }}</span>
+            </div>
+          </div>
+
+          <div>
+            <div class="text-[10px] text-zinc-500 mb-1">{{ t('mcp.discloseColumns') }}</div>
+            <ul class="rounded-lg border border-zinc-800 divide-y divide-zinc-800">
+              <li v-for="c in mcpConfirm.columns" :key="c.name">
+                <label class="flex items-start gap-2 px-2 py-1.5 cursor-pointer">
+                  <input type="checkbox" class="mt-0.5 accent-sky-500" :checked="discloseMask.has(c.name)" @change="toggleDisclosed(c.name)" />
+                  <span class="min-w-0 flex-1">
+                    <span class="flex items-center gap-1.5">
+                      <span class="text-[11px] font-mono text-white truncate">{{ c.name }}</span>
+                      <span v-if="c.origin === 'rule'" class="shrink-0 px-1.5 rounded text-[9px] bg-emerald-500/15 text-emerald-400">{{ t('mcp.originRule') }}</span>
+                      <span v-else-if="c.origin === 'unknown'" class="shrink-0 px-1.5 rounded text-[9px] bg-amber-500/15 text-amber-400">{{ t('mcp.originUnknown') }}</span>
+                    </span>
+                    <span v-if="c.samples.length" class="block text-[10px] font-mono truncate" :class="discloseMask.has(c.name) ? 'text-zinc-600 line-through' : 'text-zinc-400'">{{ c.samples.join(' · ') }}</span>
+                  </span>
+                </label>
+              </li>
+            </ul>
+            <p class="mt-1 text-[10px] text-zinc-500">{{ t('mcp.discloseHint') }}</p>
+          </div>
+
+          <details>
+            <summary class="text-[10px] text-zinc-500 cursor-pointer">{{ t('mcp.sql') }}</summary>
+            <pre class="mt-1 p-2 bg-black rounded-lg text-[10px] text-emerald-400 font-mono max-h-[100px] overflow-y-auto whitespace-pre-wrap break-all border border-zinc-800">{{ mcpConfirm.sql }}</pre>
+          </details>
+
+          <div class="flex items-center gap-2">
+            <span class="text-[10px] text-amber-400">{{ t('mcp.discloseTimeout', { seconds: countdown }) }}</span>
+            <div class="flex-1 h-1 bg-zinc-800 rounded-full overflow-hidden">
+              <div class="h-full bg-amber-500 rounded-full transition-all duration-1000 ease-linear" :style="{ width: `${(countdown / 60) * 100}%` }"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="px-3 pb-3 pt-1 flex gap-2">
+          <button class="flex-1 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl text-xs font-bold transition-colors" @click="blockDisclosed">{{ t('mcp.discloseBlock') }}</button>
+          <button class="flex-1 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-xs font-bold transition-colors" @click="maskAllDisclosed">{{ t('mcp.discloseMaskAll') }}</button>
+          <button class="flex-1 py-2 bg-sky-600 hover:bg-sky-700 text-white rounded-xl text-xs font-bold transition-colors" @click="sendDisclosed">{{ t('mcp.discloseSend') }}</button>
+        </div>
+      </template>
+
       <!-- ===== MCP CONFIRMATION VIEW ===== -->
-      <template v-if="mcpConfirm">
+      <template v-else-if="mcpConfirm">
         <!-- Header -->
         <div class="px-4 pt-3 pb-2 flex items-center gap-2 border-b border-zinc-800">
           <div class="w-6 h-6 bg-amber-500/20 rounded-lg flex items-center justify-center">

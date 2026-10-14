@@ -1,5 +1,8 @@
 <script setup lang="ts">
-/** Copy a database into a new local one (backup → create → restore), in the shared dialog shell. */
+/**
+ * Copy a database into a new local one (backup → create → restore), in the shared dialog shell.
+ * Anonymized: schema only, then the rows streamed with personal data replaced (no backup kept).
+ */
 import { ref, computed, onMounted } from 'vue';
 import { getErrorMessage } from '../utils';
 import { useI18n } from '../composables/useI18n';
@@ -10,10 +13,14 @@ import { store } from '../store';
 import AppModal from './ui/AppModal.vue';
 import ModalHeading from './ui/ModalHeading.vue';
 import FormField from './ui/FormField.vue';
+import SwitchRow from './ui/SwitchRow.vue';
+import AnonymizeModal from './AnonymizeModal.vue';
+import type { AnonymizeChoices } from '../anonymize';
 import { btnGhost, btnPrimary, inputClass, monoInputClass, panelClass } from './ui/classes';
 
 const ICON_COPY = 'M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2';
-const STEPS = ['backup', 'creating', 'restoring', 'complete'] as const;
+const STEPS = ['backup', 'creating', 'restoring', 'complete'];
+const ANONYMIZED_STEPS = ['schema', 'creating', 'copying', 'complete'];
 
 const props = defineProps<{
   modelValue: boolean;
@@ -34,12 +41,25 @@ const duplicateProgress = ref<{ step: string; message: string; progress: number 
 const attempted = ref(false);
 /** Names taken in bbdump or on the local server */
 const existingNames = ref(new Set<string>());
+const anonymizeOn = ref(false);
+const anonymizeChoices = ref<AnonymizeChoices | null>(null);
+const showAnonymize = ref(false);
+const steps = computed(() => (anonymizeOn.value ? ANONYMIZED_STEPS : STEPS));
 
 const currentStepIndex = computed(() => {
   if (!duplicateProgress.value) return 0;
-  return Math.max(0, STEPS.indexOf(duplicateProgress.value.step as typeof STEPS[number]));
+  return Math.max(0, steps.value.indexOf(duplicateProgress.value.step));
 });
-const stepLabels = computed(() => STEPS.map(step => t(`databases.duplicateSteps.${step}`)));
+const stepLabels = computed(() => steps.value.map(step => t(`databases.duplicateSteps.${step}`)));
+const anonymizeSummary = computed(() => {
+  const choices = anonymizeChoices.value;
+  return choices ? t('anonymize.chosen', { columns: choices.columns.length, tables: choices.emptyTables.length }) : '';
+});
+
+const confirmAnonymize = (choices: AnonymizeChoices) => {
+  anonymizeChoices.value = choices;
+  showAnonymize.value = false;
+};
 
 const sourceLabel = computed(() => (props.sourceDb ? (props.sourceDb.masked ? '••••••••' : (props.sourceDb.displayName || props.sourceDb.name)) : ''));
 const sourceWhere = computed(() => (props.sourceDb ? `${props.sourceDb.host}:${props.sourceDb.port} · ${props.sourceDb.name}` : ''));
@@ -83,10 +103,17 @@ const duplicateToLocal = async () => {
   if (!props.sourceDb || isDuplicating.value) return;
   attempted.value = true;
   if (nameError.value || portError.value) return;
+  // The data to anonymize is chosen before anything starts
+  if (anonymizeOn.value && !anonymizeChoices.value) {
+    showAnonymize.value = true;
+    return;
+  }
 
   const formName = duplicateForm.value.name.trim();
   isDuplicating.value = true;
-  duplicateProgress.value = { step: 'backup', message: t('databases.duplicateStepBackup'), progress: 0 };
+  duplicateProgress.value = anonymizeOn.value
+    ? { step: 'schema', message: t('databases.duplicateStepSchema'), progress: 0 }
+    : { step: 'backup', message: t('databases.duplicateStepBackup'), progress: 0 };
 
   const progressHandler = (_event: unknown, progress: { step: string; message: string; progress: number }) => {
     duplicateProgress.value = progress;
@@ -118,12 +145,18 @@ const duplicateToLocal = async () => {
       sourceDb: sourceDbConfig,
       targetName: formName,
       targetPassword: duplicateForm.value.password || undefined,
-      targetPort: duplicateForm.value.port
+      targetPort: duplicateForm.value.port,
+      // Plain objects: reactive proxies cannot cross IPC
+      anonymize: anonymizeOn.value && anonymizeChoices.value ? JSON.parse(JSON.stringify(anonymizeChoices.value)) : undefined,
     });
 
     if (result.success) {
       isDuplicating.value = false;
-      addToast(t('databases.duplicateSuccess', { name: formName }), 'success');
+      if (result.warnings?.length) {
+        addToast(t('databases.duplicateWarnings', { name: formName, count: result.warnings.length }), 'warning', { detail: result.warnings.join('\n') });
+      } else {
+        addToast(t(anonymizeOn.value ? 'databases.duplicateAnonymizedSuccess' : 'databases.duplicateSuccess', { name: formName }), 'success');
+      }
       emit('success', formName);
       closeModal();
     } else {
@@ -164,7 +197,7 @@ const duplicateToLocal = async () => {
     </div>
 
     <template v-else>
-      <ModalHeading :eyebrow="t('databases.duplicateEyebrow')" :title="t('databases.duplicateTitle', { name: sourceLabel })" :subtitle="t('databases.duplicateInfo')" />
+      <ModalHeading :eyebrow="t('databases.duplicateEyebrow')" :title="t('databases.duplicateTitle', { name: sourceLabel })" :subtitle="t(anonymizeOn ? 'databases.duplicateInfoAnonymized' : 'databases.duplicateInfo')" />
       <div class="space-y-4">
         <!-- Source → copy -->
         <div v-if="sourceDb" :class="panelClass" class="px-3.5 py-2.5 flex items-center gap-3">
@@ -194,6 +227,13 @@ const duplicateToLocal = async () => {
             <input id="dup-port" v-model.number="duplicateForm.port" type="number" min="1024" max="65535" :class="monoInputClass" />
           </FormField>
         </div>
+
+        <SwitchRow v-model="anonymizeOn" :title="t('anonymize.switch')" :description="t('anonymize.switchHint')">
+          <span v-if="anonymizeOn && anonymizeChoices" class="mt-1.5 flex items-center gap-2 text-[12px]">
+            <span class="text-emerald-700 dark:text-emerald-400">{{ anonymizeSummary }}</span>
+            <span role="button" tabindex="0" class="underline text-gray-600 dark:text-zinc-300 hover:text-gray-900 dark:hover:text-white" @click.stop="showAnonymize = true" @keydown.enter.stop.prevent="showAnonymize = true">{{ t('anonymize.edit') }}</span>
+          </span>
+        </SwitchRow>
       </div>
     </template>
 
@@ -206,8 +246,17 @@ const duplicateToLocal = async () => {
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
         </svg>
-        {{ t('databases.duplicateButton') }}
+        {{ anonymizeOn && !anonymizeChoices ? t('anonymize.choose') : t('databases.duplicateButton') }}
       </button>
     </template>
   </AppModal>
+
+  <AnonymizeModal
+    v-if="modelValue && showAnonymize && sourceDb"
+    :source-id="sourceDb.id"
+    :source-label="sourceLabel"
+    :initial="anonymizeChoices"
+    @close="showAnonymize = false"
+    @confirm="confirmAnonymize"
+  />
 </template>

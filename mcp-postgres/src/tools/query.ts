@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { withClient, executeReadOnly, getActiveConnectionInfo } from '../db.js';
 import { jsonResult, errorResult, textResult, config, MAX_TIMEOUT_MS } from '../types.js';
+import { protectRows, maskingNote } from '../masking.js';
 import { recordQuery } from '../history.js';
 import { findWriteKeyword, isRowQuery, limitedQuery, toCsv, toMarkdown, trimStatement } from '../sql.js';
 import { READ, databaseParam, formatParam } from './common.js';
@@ -100,7 +101,12 @@ export function registerQueryTools(server: McpServer) {
         recordQuery({ tool: 'execute_query', database: dbName, sql, duration_ms: duration, rows_affected: result.rowCount ?? undefined });
 
         const truncated = result.rows.length > limit;
-        const rows = truncated ? result.rows.slice(0, limit) : result.rows;
+        // EXPLAIN / SHOW output holds plans and settings, not rows
+        const shown = /^\s*(explain|show)\b/i.test(sql)
+          ? { rows: truncated ? result.rows.slice(0, limit) : result.rows }
+          : await protectRows(client, { fields: result.fields ?? [], rows: truncated ? result.rows.slice(0, limit) : result.rows }, { tool: 'execute_query', database, sql });
+        if ('blocked' in shown && shown.blocked) return errorResult(shown.blocked);
+        const rows = shown.rows;
         const fields = result.fields?.map(f => f.name) || [];
         const meta = {
           row_count: rows.length,
@@ -108,6 +114,7 @@ export function registerQueryTools(server: McpServer) {
           ...(truncated ? { note: `More than ${limit} rows: add a LIMIT/WHERE or raise max_rows.` } : {}),
           ...(!limitedOnServer && result.rowCount !== null ? { total_row_count: result.rowCount } : {}),
           duration_ms: duration,
+          ...maskingNote(shown),
         };
         if (format === 'json') return jsonResult({ ...meta, fields, rows });
         const body = format === 'csv' ? toCsv(fields, rows) : toMarkdown(fields, rows);

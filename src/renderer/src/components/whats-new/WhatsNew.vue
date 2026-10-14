@@ -12,17 +12,19 @@ import { store } from '../../store';
 import { useI18n } from '../../composables/useI18n';
 import { ipcRenderer } from '../../electron';
 import { getErrorMessage } from '../../utils';
-import { SLIDES, WHATS_NEW_VERSION, shotUrl } from '../../whatsNew';
+import { tourSlides, shotUrl } from '../../whatsNew';
 
 const { t } = useI18n();
 const index = ref(0);
 const direction = ref(1);
 const panel = ref<HTMLElement | null>(null);
+// The tours not seen yet (newest first), or the one replayed from the Info page
+const SLIDES = tourSlides(store.whatsNewSeen, store.whatsNewTour);
 const slide = computed(() => SLIDES[index.value]);
 const isFirst = computed(() => index.value === 0);
 const isLast = computed(() => index.value === SLIDES.length - 1);
 const lang = computed<'en' | 'fr'>(() => (store.language === 'fr' ? 'fr' : 'en'));
-const version = WHATS_NEW_VERSION.replace(/\.0$/, '');
+const version = computed(() => slide.value.version.replace(/\.0$/, ''));
 
 // What changes for the user, with what they can do about it now
 const actions = reactive({
@@ -97,10 +99,11 @@ const close = async () => {
   if (closing) return;
   closing = true;
   try {
-    await ipcRenderer.invoke('whats-new-seen');
+    store.whatsNewSeen = await ipcRenderer.invoke('whats-new-seen');
   } catch (error) {
     console.error('Could not save that the tour was seen:', getErrorMessage(error));
   }
+  store.whatsNewTour = null;
   store.showWhatsNew = false;
 };
 
@@ -125,7 +128,6 @@ onMounted(() => {
 });
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 
-const POINTS = ['p1', 'p2', 'p3', 'p4'] as const;
 </script>
 
 <template>
@@ -174,10 +176,10 @@ const POINTS = ['p1', 'p2', 'p3', 'p4'] as const;
             <p class="mt-3 text-sm leading-relaxed text-zinc-400">{{ t(`whatsNew.slides.${slide.id}.body`) }}</p>
 
             <!-- Intro: the headlines -->
-            <ul v-if="slide.id === 'intro'" class="mt-6 space-y-2.5">
-              <li v-for="p in POINTS" :key="p" class="flex gap-3 text-sm text-zinc-300">
+            <ul v-if="slide.points" class="mt-6 space-y-2.5">
+              <li v-for="p in slide.points" :key="p" class="flex gap-3 text-sm text-zinc-300">
                 <span class="mt-[7px] w-1.5 h-1.5 shrink-0 rounded-full bg-emerald-400" aria-hidden="true" />
-                <span>{{ t(`whatsNew.slides.intro.${p}`) }}</span>
+                <span>{{ t(`whatsNew.slides.${slide.id}.p${p}`) }}</span>
               </li>
             </ul>
 
@@ -216,7 +218,7 @@ const POINTS = ['p1', 'p2', 'p3', 'p4'] as const;
               <p v-if="actions.error" role="alert" class="text-[12.5px] text-red-400">{{ actions.error }}</p>
             </div>
 
-            <p v-else-if="slide.id === 'explore'" class="mt-6 text-[12.5px] text-zinc-500">{{ t('whatsNew.slides.explore.again') }}</p>
+            <p v-if="isLast" class="mt-6 text-[12.5px] text-zinc-500">{{ t('whatsNew.again') }}</p>
           </div>
         </Transition>
       </div>

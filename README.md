@@ -25,6 +25,12 @@ Organize your databases into color-coded projects. Add local or external connect
 
 ![Databases](captures/databases.png)
 
+### Anonymization
+
+Duplicate a database with its personal data anonymized: columns that look personal (email, phone, name, address, IP…) are chosen for you and partly starred by default, keeping their shape (`bob1234@email.fr` → `****234@email.fr`). Each column can become a fake value, a masked one or NULL, and a table can be copied without its rows. The rows are streamed with the chosen columns already replaced, so the real values never reach your machine.
+
+![Anonymize while duplicating](src/renderer/public/whats-new/en/anon-picker.webp)
+
 ### Backup & Restore
 
 Manual and scheduled backups using `pg_dump`/`pg_restore`. Supports custom format, plain SQL, compression, and AES-256-GCM encryption.
@@ -79,6 +85,8 @@ Real-time application logs with level and database filtering. Track every backup
 ### MCP Server (Claude Desktop)
 
 bbdump includes a built-in PostgreSQL MCP server that connects Claude to your databases. Install it in one click from Settings — Claude can then explore schemas, read data, run queries, and execute mutations with confirmation prompts. 45 tools and 4 prompts: whole-schema overview in one call, data profiling, query plans with a summary, health check, index advice (with hypothetical indexes), slow queries, backups before risky changes, and more.
+
+Per database, **Anonymize for AI** hides personal data in what AI clients read: chosen columns arrive anonymized, and a result whose origin is unknown (computed column, view, free SQL) is shown to you first in the tray, to send, anonymize or block. The database itself is never changed.
 
 ### System Tray
 

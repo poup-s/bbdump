@@ -100,8 +100,8 @@ export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null
 
 
     // MCP Confirmation Handler
-    ipcMain.handle('mcp-confirm-response', (_, { id, approved }: { id: string; approved: boolean }) => {
-        resolveConfirmation(id, approved);
+    ipcMain.handle('mcp-confirm-response', (_, { id, approved, mask }: { id: string; approved: boolean; mask?: unknown }) => {
+        resolveConfirmation(id, approved, mask);
     });
 
     // Backup & Restore Handlers

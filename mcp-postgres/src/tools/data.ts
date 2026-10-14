@@ -6,6 +6,7 @@ import { jsonResult, errorResult, textResult, config } from '../types.js';
 import { buildWhereClause, type Filter } from '../filters.js';
 import { toCsv, toMarkdown } from '../sql.js';
 import { READ, databaseParam, schemaParam, tableParam, filterSchema, formatParam } from './common.js';
+import { protectRows, maskingNote } from '../masking.js';
 
 /** Rows in the asked format, with paging info */
 function rowsResult(fields: string[], rows: Record<string, unknown>[], format: 'json' | 'markdown' | 'csv', meta: Record<string, unknown>) {
@@ -63,7 +64,9 @@ export function registerDataTools(server: McpServer) {
       // One extra row tells whether there are more
       const result = await executeReadOnly(client, sql, [...where.params, effectiveLimit + 1, offset]);
       const hasMore = result.rows.length > effectiveLimit;
-      const rows = hasMore ? result.rows.slice(0, effectiveLimit) : result.rows;
+      const shown = await protectRows(client, { fields: result.fields, rows: hasMore ? result.rows.slice(0, effectiveLimit) : result.rows }, { tool: 'read_rows', database, sql });
+      if (shown.blocked) return errorResult(shown.blocked);
+      const rows = shown.rows;
 
       const estimate = filters?.length ? null : (await executeReadOnly(client, estimateSql, [table, nsp])).rows[0]?.estimate;
       return rowsResult(result.fields.map(f => f.name), rows, format, {
@@ -73,6 +76,7 @@ export function registerDataTools(server: McpServer) {
         has_more: hasMore,
         ...(hasMore ? { next_offset: offset + rows.length } : {}),
         ...(estimate !== null && estimate !== undefined && Number(estimate) >= 0 ? { total_estimate: Number(estimate) } : {}),
+        ...maskingNote(shown),
       });
     })
   );
@@ -112,11 +116,14 @@ export function registerDataTools(server: McpServer) {
       const needle = search.toLowerCase();
       const matchedColumns = Array.from(new Set(result.rows.flatMap((row: any) =>
         Object.keys(row).filter(key => row[key] !== null && String(typeof row[key] === 'object' ? JSON.stringify(row[key]) : row[key]).toLowerCase().includes(needle)))));
-      return rowsResult(result.fields.map(f => f.name), result.rows, format, {
+      const shown = await protectRows(client, result, { tool: 'search_table', database, sql });
+      if (shown.blocked) return errorResult(shown.blocked);
+      return rowsResult(result.fields.map(f => f.name), shown.rows, format, {
         table: `${nsp}.${table}`,
         search_term: search,
-        row_count: result.rows.length,
+        row_count: shown.rows.length,
         matched_columns: matchedColumns,
+        ...maskingNote(shown),
       });
     })
   );
@@ -160,12 +167,15 @@ export function registerDataTools(server: McpServer) {
       const sql = pgFormat('SELECT *, ts_rank(%s, %s) AS search_rank FROM %I.%I', tsvector, tsquery, nsp, table)
         + ` WHERE ${tsvector} @@ ${tsquery} ORDER BY search_rank DESC LIMIT $3`;
       const result = await executeReadOnly(client, sql, [language, query, limit]);
-      return rowsResult(result.fields.map(f => f.name), result.rows, format, {
+      const shown = await protectRows(client, result, { tool: 'full_text_search', database, sql });
+      if (shown.blocked) return errorResult(shown.blocked);
+      return rowsResult(result.fields.map(f => f.name), shown.rows, format, {
         table: `${nsp}.${table}`,
         query,
         language,
         searched_columns: searchColumns,
-        row_count: result.rows.length,
+        row_count: shown.rows.length,
+        ...maskingNote(shown),
       });
     })
   );

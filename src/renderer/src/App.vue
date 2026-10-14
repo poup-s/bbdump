@@ -33,6 +33,7 @@ onMounted(() => {
 import VideoLoader from './components/VideoLoader.vue';
 import ExtensionsModal from './components/ExtensionsModal.vue';
 import AiJournalModal from './components/AiJournalModal.vue';
+import AnonymizeModal from './components/AnonymizeModal.vue';
 import SyncFromSourceModal from './components/SyncFromSourceModal.vue';
 
 const { t } = useI18n();
@@ -185,6 +186,14 @@ const handleLoaderComplete = () => {
     <Transition enter-active-class="transition duration-200 ease-out" enter-from-class="opacity-0" enter-to-class="opacity-100" leave-active-class="transition duration-150 ease-in" leave-from-class="opacity-100" leave-to-class="opacity-0">
       <ExtensionsModal v-if="store.showExtensionsModal" />
       <AiJournalModal v-if="store.aiJournalDb" />
+      <AnonymizeModal
+        v-if="store.aiMaskingDb"
+        mode="ai"
+        :source-id="store.aiMaskingDb.id"
+        :source-label="store.aiMaskingDb.masked ? '••••••••' : (store.aiMaskingDb.displayName || store.aiMaskingDb.name)"
+        :initial="null"
+        @close="store.aiMaskingDb = null"
+      />
       <SyncFromSourceModal v-if="store.syncTargetDb" />
     </Transition>
     <DbViewer

@@ -37,6 +37,10 @@ export const store = reactive({
     extensionsModalDb: null as Pick<Database, 'name' | 'port' | 'host' | 'user'> | null,
     /** Database whose AI journal (changes made through MCP) is open */
     aiJournalDb: null as Database | null,
+    /** Database whose masking of personal data for AI clients is being set */
+    aiMaskingDb: null as Database | null,
+    /** Databases whose personal data is masked for AI clients */
+    aiMaskedIds: [] as string[],
     /** Local database being updated from another one ("Update from…") */
     syncTargetDb: null as Database | null,
     backupProgress: null as BackupProgress | null,
@@ -55,6 +59,10 @@ export const store = reactive({
     onboardingCompleted: false,
     /** The "What's new" tour is open (after an update, or from Info) */
     showWhatsNew: false,
+    /** Last tour seen (config whatsNewSeen) */
+    whatsNewSeen: undefined as string | undefined,
+    /** A tour replayed from the history on the Info page (its version), else the ones not seen */
+    whatsNewTour: null as string | null,
     /** How the onboarding was opened from the app (null: first run). Not persisted. */
     onboardingEntry: null as null | 'replay' | 'add-local-server',
     language: 'en' as 'en' | 'fr',

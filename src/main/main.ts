@@ -390,7 +390,7 @@ app.whenReady().then(async () => {
     const confirmPort = await startConfirmServer();
 
     // Register callback: show tray popup when a MCP mutation needs confirmation
-    onConfirmRequest(async (_data) => {
+    onConfirmRequest(async (data) => {
       if (!trayPopup || trayPopup.isDestroyed()) return null;
 
       mcpConfirmActive = true;
@@ -402,8 +402,9 @@ app.whenReady().then(async () => {
         });
       }
 
-      // Resize tray popup to accommodate the confirmation UI
-      trayPopup.setSize(320, 520);
+      // Resize tray popup to accommodate the confirmation UI (a disclosure lists columns)
+      if (data.kind === 'disclose') trayPopup.setSize(360, 600);
+      else trayPopup.setSize(320, 520);
 
       positionTrayPopup();
 

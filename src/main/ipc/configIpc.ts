@@ -1,4 +1,5 @@
 import { app, ipcMain } from 'electron';
+import { aiMaskedDatabaseIds, forgetAiMasking, getAiMasking, setAiMasking } from '../aiMasking';
 import { AppConfig, DatabaseConfig, ProjectConfig } from '../../types/config';
 import { encryptionManager } from '../encryption';
 import { isUsageMode, sanitizeAppConfig, sanitizeDatabaseConfig, sanitizeProjectConfig } from '../configHelper';
@@ -83,6 +84,11 @@ export function loadConfig(): AppConfig {
                 // Same sign of a configuration written before 1.1: show the 1.1 tour once
                 // (the exact earlier version is not known)
                 if (loadedConfig.whatsNewSeen === undefined) loadedConfig.whatsNewSeen = '1.0.0';
+                saveConfig(loadedConfig);
+            }
+            // Set up with the 1.1 onboarding (which marked nothing): later tours are still to see
+            if (loadedConfig.onboardingCompleted === true && loadedConfig.whatsNewSeen === undefined) {
+                loadedConfig.whatsNewSeen = '1.1.0';
                 saveConfig(loadedConfig);
             }
 
@@ -231,6 +237,8 @@ export function registerConfigHandlers() {
         config.defaultBackupPath = settings.defaultBackupPath;
         // The previous onboarding did not send a mode: it always set up a local server
         config.usageMode = settings.usageMode ?? 'local';
+        // The onboarding shows this version as it is: no tour of it afterwards
+        config.whatsNewSeen = app.getVersion();
         saveConfig(config);
         return config;
     });
@@ -337,8 +345,17 @@ export function registerConfigHandlers() {
         return config;
     });
 
+    // Personal data hidden from AI clients (read by the MCP server, see aiMasking.ts)
+    ipcMain.handle('ai-masking-get', (_, id: string) => getAiMasking(id));
+    ipcMain.handle('ai-masking-set', (_, id: string, settings: unknown) => {
+        if (!config.databases.some(db => db.id === id)) throw new Error('Unknown database');
+        return setAiMasking(id, settings);
+    });
+    ipcMain.handle('ai-masking-list', () => aiMaskedDatabaseIds());
+
     ipcMain.handle('remove-database', async (_, id: string): Promise<AppConfig> => {
         config.databases = config.databases.filter(db => db.id !== id);
+        try { forgetAiMasking(id); } catch (error) { logger.warn(`AI masking of ${id} not removed: ${error}`); }
         import('../backup').then(({ backupManager }) => backupManager.backupHistory().forget(id)).catch(() => { /* history is optional */ });
 
         // If this DB was the proxy target of any project, stop the proxy

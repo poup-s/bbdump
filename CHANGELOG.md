@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.2.0 — 2026-10-14
+
+### Upgrading
+
+- **macOS from 1.1.2:** bbdump updates itself ("Download update", then "Install and restart").
+- **macOS from 1.1.0 or 1.1.1:** install 1.2.0 once with the install script or the DMG; from
+  then on, bbdump updates itself.
+- **AI clients (Claude Desktop, Cursor…):** restart them after updating, so they start the new
+  MCP server.
+
+### Added
+
+- **What's new in 1.2, and every tour kept on the Info page.** After updating, a short tour
+  shows the new features (anonymized duplicates, anonymization for AI). Info now lists the
+  tours version by version, each with "See again". Coming from 1.0, the 1.2 tour is followed
+  by the 1.1 one; installs made with 1.1 see the 1.2 tour too.
+- **Personal data anonymized for AI assistants.** In a database's ⋯ menu, "Anonymize for AI" chooses
+  the columns that AI clients (Claude, Cursor… through MCP) only see anonymized; it is off by
+  default and applies at once. When a result holds text whose origin is unknown (a computed
+  column, a view, free SQL), bbdump shows it to you first, with a few values, and you choose:
+  send it, anonymize some columns, anonymize everything, or block it. The data itself is not changed.
+- **Duplicate a database with its personal data anonymized.** In the duplicate dialog, turn
+  on "Anonymize personal data" and choose, table by table, what each column becomes (partly
+  starred, fake email, phone, name, address or IP, masked, or emptied) and which tables are copied without
+  their rows. Columns that look personal are partly starred by default, keeping their shape
+  (bob1234@email.fr → ****234@email.fr, sebastien poupi → *****tien poupi; distinct values on a
+  unique column), sessions and tokens are left empty, and a column linked by a foreign key follows the one it points to, so the copy stays
+  consistent; the same value always gives the same fake one. The schema comes from the
+  source, then the rows are streamed with the chosen columns already replaced: the real
+  values never reach your computer, and no backup of the source is made. Indexes,
+  constraints, triggers, sequences and materialized views are rebuilt as in the source.
+
 ## 1.1.2 — 2026-10-08
 
 ### Upgrading from 1.1.0 or 1.1.1

@@ -24,6 +24,7 @@ export function useAppEvents() {
             }
             store.allowSqlMutations = config.allowSqlMutations || false;
             store.usageMode = config.usageMode === 'remote' ? 'remote' : 'local';
+            store.whatsNewSeen = config.whatsNewSeen;
             // Updated from a version before this tour: show it once
             if (store.onboardingCompleted && shouldShowWhatsNew(config.whatsNewSeen)) store.showWhatsNew = true;
         } catch (error) {

@@ -253,6 +253,8 @@ const ungroupedDragOver = ref(false);
 
 onMounted(() => {
   fetchDatabaseSizes();
+  // Badges of the databases masked for AI clients
+  ipcRenderer.invoke('ai-masking-list').then((ids: string[]) => { store.aiMaskedIds = Array.isArray(ids) ? ids : []; }).catch(() => {});
 
   const onDragStartGlobal = (e: DragEvent) => {
     if (e.dataTransfer?.types.includes('application/x-bbdump-db')) {

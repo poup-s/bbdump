@@ -196,6 +196,18 @@ The confirmation server listens on `127.0.0.1` only. At each launch bbdump gener
 
 In **Settings → AI assistants (MCP)**, **Let assistants change data without asking** approves every change automatically. Use this only in development environments.
 
+## Personal Data Anonymized for AI
+
+Off by default. In a database's **⋯** menu, **Anonymize for AI** turns it on and chooses the columns: those that look personal (email, phone, name, address, IP…) are preselected and partly starred, keeping their shape (`bob1234@email.fr` → `****234@email.fr`, `sebastien poupi` → `*****tien poupi`); a fake email, phone…, a masked value (`XXXX…`) or NULL can be chosen instead. A column linked by a foreign key follows the one it points to. Databases with masking on show an **AI anonymized** badge.
+
+The MCP server reads the setting on every call (`ai-masking.json`, next to `config.json`), so it applies at once, without reconnecting the client. The data itself is never changed.
+
+- `read_rows`, `search_table`, `full_text_search`, `profile_table` and the rows returned after a change come with the chosen columns replaced.
+- A result with text columns whose origin is unknown (a computed column such as `upper(email)`, a view, free SQL in `execute_query`) is shown first in the tray popup: the columns, a few values, and what is about to be masked. You choose to send it, anonymize more or fewer columns, anonymize everything, or block it. Without an answer within 60 seconds, the checked columns are anonymized.
+- The same value always gives the same fake, so the assistant can still count, group and join; results list `masked_columns` and tell it not to try to recover the values.
+
+Masking hides values, it does not stop an assistant from filtering on them (`WHERE email = '…'` still tells whether a row exists). To give an assistant data that holds no real personal value at all, use an anonymized duplicate.
+
 ## Troubleshooting
 
 ### The client doesn't see the MCP server

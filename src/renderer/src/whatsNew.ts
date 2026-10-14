@@ -1,5 +1,6 @@
 /**
- * "What's new" tour shown once to users who update from an earlier version.
+ * "What's new" tours shown once to users who update from an earlier version: every tour newer
+ * than the last one seen, the newest first (from 1.0.2, the 1.2 tour then the 1.1 one).
  *
  * Each slide is a screenshot sequence ("beats"): the stage zooms on an area measured in the
  * capture (whatsNewMarks.ts), draws a ring around it and shows a label. Screenshots live in
@@ -7,8 +8,6 @@
  */
 import { SHOT_MARKS, type MarkRect } from './whatsNewMarks';
 
-/** Version whose tour this is. Bump it (and the slides) when a new tour is written. */
-export const WHATS_NEW_VERSION = '1.1.0';
 
 /** -1, 0 or 1, comparing "major.minor.patch" versions (missing parts count as 0) */
 export function compareVersions(a: string, b: string): number {
@@ -21,13 +20,6 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-/**
- * Show the tour when the last one seen is older than this tour. Configurations created by
- * 1.1 or later have no value: they started with the onboarding, which already shows all this.
- */
-export function shouldShowWhatsNew(seen: string | undefined | null): boolean {
-  return typeof seen === 'string' && compareVersions(seen, WHATS_NEW_VERSION) < 0;
-}
 
 export interface Beat {
   shot: string;
@@ -39,16 +31,47 @@ export interface Beat {
   hold?: number;
 }
 
-export type SlideId = 'intro' | 'actions' | 'remote' | 'backups' | 'sync' | 'ai' | 'explore';
+export type SlideId = 'intro' | 'actions' | 'remote' | 'backups' | 'sync' | 'ai' | 'explore' | 'intro12' | 'anonCopy' | 'aiAnon';
 
 export interface Slide {
   id: SlideId;
   /** 'scene': the 3D server stack; otherwise the screenshots to play */
   beats: Beat[] | 'scene';
+  /** Scene slides: how many headlines (whatsNew.slides.<id>.p1…) */
+  points?: number;
 }
 
-export const SLIDES: Slide[] = [
-  { id: 'intro', beats: 'scene' },
+export interface Tour {
+  version: string;
+  /** Release date (YYYY-MM-DD), shown in the history on the Info page */
+  date?: string;
+  slides: Slide[];
+}
+
+const TOUR_1_2: Slide[] = [
+  { id: 'intro12', beats: 'scene', points: 3 },
+  {
+    id: 'anonCopy',
+    beats: [
+      { shot: 'dup-anon', mark: 'switch', hold: 3200 },
+      { shot: 'anon-picker', mark: 'columns' },
+      { shot: 'anon-picker', mark: 'rows' },
+      { shot: 'dup-anon', mark: 'summary' },
+    ],
+  },
+  {
+    id: 'aiAnon',
+    beats: [
+      { shot: 'ai-anon', mark: 'switch' },
+      { shot: 'ai-anon', mark: 'safe', hold: 3400 },
+      { shot: 'db-badge', mark: 'badge' },
+      { shot: 'db-badge', overlay: 'ai-disclose', hold: 4200 },
+    ],
+  },
+];
+
+const TOUR_1_1: Slide[] = [
+  { id: 'intro', beats: 'scene', points: 4 },
   {
     id: 'actions',
     beats: [
@@ -107,6 +130,37 @@ export const SLIDES: Slide[] = [
     ],
   },
 ];
+
+/** Newest first. A new tour goes on top, with its slides, texts and screenshots. */
+export const TOURS: Tour[] = [
+  { version: '1.2.0', date: '2026-10-14', slides: TOUR_1_2 },
+  { version: '1.1.0', date: '2026-10-02', slides: TOUR_1_1 },
+];
+
+/** Version of the newest tour */
+export const WHATS_NEW_VERSION = TOURS[0].version;
+
+/** Every slide of every tour (checks, preloading) */
+export const ALL_SLIDES: Slide[] = TOURS.flatMap(t => t.slides);
+
+/**
+ * Show the tours when the last one seen is older than the newest. Configurations without a
+ * value are new: their onboarding is under way, and it shows the current version.
+ */
+export function shouldShowWhatsNew(seen: string | undefined | null): boolean {
+  return typeof seen === 'string' && compareVersions(seen, WHATS_NEW_VERSION) < 0;
+}
+
+/**
+ * The slides to play, each with its tour's version: one tour replayed from the history
+ * (`replay`), else the tours newer than `seen`, else the newest.
+ */
+export function tourSlides(seen: string | undefined | null, replay?: string | null): Array<Slide & { version: string }> {
+  const asked = replay ? TOURS.filter(t => t.version === replay) : [];
+  const newer = TOURS.filter(t => typeof seen === 'string' && compareVersions(seen, t.version) < 0);
+  const tours = asked.length ? asked : newer.length ? newer : TOURS.slice(0, 1);
+  return tours.flatMap(t => t.slides.map(s => ({ ...s, version: t.version })));
+}
 
 export const DEFAULT_HOLD = 2800;
 

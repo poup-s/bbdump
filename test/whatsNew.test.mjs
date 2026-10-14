@@ -14,7 +14,7 @@ const load = (file) => {
   new Function('module', 'exports', 'require', out.outputFiles[0].text)(mod, mod.exports, require);
   return mod.exports;
 };
-const { compareVersions, shouldShowWhatsNew, SLIDES, markOf, cameraFor, ringFor, WHATS_NEW_VERSION } = load('src/renderer/src/whatsNew.ts');
+const { compareVersions, shouldShowWhatsNew, ALL_SLIDES: SLIDES, TOURS, tourSlides, markOf, cameraFor, ringFor, WHATS_NEW_VERSION } = load('src/renderer/src/whatsNew.ts');
 const { SHOT_MARKS } = load('src/renderer/src/whatsNewMarks.ts');
 const { translations } = load('src/renderer/src/i18n.ts');
 const { sanitizeAppConfig } = require(path.join(root, 'dist/main/configHelper.js'));
@@ -31,6 +31,17 @@ describe('who sees the tour', () => {
     assert.equal(shouldShowWhatsNew('1.2.0'), false);
     assert.equal(shouldShowWhatsNew(undefined), false);
     assert.equal(shouldShowWhatsNew(null), false);
+  });
+  test('every tour not seen yet, newest first; one tour replayed from the history', () => {
+    const ids = (slides) => slides.map(s => s.id);
+    const of = (version) => TOURS.find(t => t.version === version).slides.map(s => s.id);
+    assert.equal(shouldShowWhatsNew('1.1.2'), WHATS_NEW_VERSION !== '1.1.0');
+    assert.deepEqual(ids(tourSlides('1.0.0')), TOURS.flatMap(t => t.slides.map(s => s.id)));
+    assert.deepEqual(ids(tourSlides('1.1.2')), of(WHATS_NEW_VERSION));
+    assert.deepEqual(ids(tourSlides(WHATS_NEW_VERSION)), of(WHATS_NEW_VERSION));
+    assert.deepEqual(ids(tourSlides(WHATS_NEW_VERSION, '1.1.0')), of('1.1.0'));
+    assert.equal(tourSlides('1.0.0').at(-1).version, '1.1.0');
+    assert.equal(new Set(SLIDES.map(s => s.id)).size, SLIDES.length, 'slide ids are unique');
   });
   test('the config keeps a valid seen version and drops anything else', () => {
     assert.equal(sanitizeAppConfig({ databases: [], whatsNewSeen: '1.0.0' }).whatsNewSeen, '1.0.0');

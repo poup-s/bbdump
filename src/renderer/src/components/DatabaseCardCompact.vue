@@ -59,6 +59,7 @@ const ICONS = {
   history: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z',
   sync: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15',
   puzzle: 'M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z',
+  mask: 'M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21',
   disconnect: 'M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25',
 };
 
@@ -85,6 +86,8 @@ const menuItems = computed<ActionMenuItem[]>(() => [
   ...(isOnThisComputer.value && !isRemoteOnly() && projectSiblings.value > 0 ? [{ key: 'sync', label: t('sync.menu'), icon: ICONS.sync }] : []),
   // Changes made by AI clients through MCP, and their undo
   { key: 'ai-journal', label: t('aiJournal.title'), icon: ICONS.history },
+  // Personal data masked in what AI clients read
+  { key: 'ai-masking', label: t('aiMasking.menu'), icon: ICONS.mask },
   // Proxy on in the project: route it to this database from here too
   ...(props.proxyEnabled && !props.isProxyTarget ? [{ key: 'proxy-target', label: t('proxy.setTarget'), icon: ICONS.plug }] : []),
   props.db.isLocalBbdump
@@ -98,6 +101,7 @@ const onMenu = (key: string) => {
   else if (key === 'edit') emit('edit', props.db);
   else if (key === 'addons') emit('addons', props.db);
   else if (key === 'ai-journal') store.aiJournalDb = props.db;
+  else if (key === 'ai-masking') store.aiMaskingDb = props.db;
   else if (key === 'sync') store.syncTargetDb = props.db;
   else if (key === 'proxy-target') emit('set-proxy-target');
   else if (key === 'delete') emit('delete', props.db);
@@ -156,6 +160,16 @@ const onDragStart = (event: DragEvent) => {
           <path stroke-linecap="round" stroke-linejoin="round" :d="ICONS.plug" />
         </svg>
         proxy
+      </span>
+      <span
+        v-if="store.aiMaskedIds.includes(db.id)"
+        class="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded-full bg-sky-100 dark:bg-sky-900/40 text-sky-700 dark:text-sky-300 font-medium shrink-0"
+        :title="t('aiMasking.badgeTitle')"
+      >
+        <svg class="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" :d="ICONS.mask" />
+        </svg>
+        {{ t('aiMasking.badge') }}
       </span>
       <span v-if="formatSize(size)" class="text-[10px] text-gray-400 dark:text-gray-500 shrink-0">
         {{ formatSize(size) }}

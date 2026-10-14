@@ -1,6 +1,6 @@
 {
   "name": "bbdump",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "Cross-platform PostgreSQL manager with automated scheduling, encryption, and modern UI",
   "main": "dist/main/main.js",
   "scripts": {
@@ -47,6 +47,7 @@
     "@tailwindcss/postcss": "^4.1.17",
     "@types/dagre": "^0.7.54",
     "@types/node": "^20.10.0",
+    "@types/pg-copy-streams": "^1.2.5",
     "@types/pg-format": "^1.0.5",
     "@vitejs/plugin-vue": "^6.0.2",
     "autoprefixer": "^10.4.22",
@@ -75,6 +76,7 @@
     "electron-updater": "^6.8.9",
     "node-cron": "^4.6.0",
     "pg": "^8.16.3",
+    "pg-copy-streams": "^7.0.0",
     "pg-format": "^1.0.4",
     "three": "^0.181.2",
     "vue": "^3.5.24"

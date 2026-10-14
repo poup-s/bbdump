@@ -7,7 +7,11 @@ import format from 'pg-format';
 import type { PoolClient } from 'pg';
 import type { CatalogTable } from './catalog';
 
-export type AnonymizeKind = 'email' | 'phone' | 'name' | 'address' | 'ip' | 'secret';
+/**
+ * `partial`: the value keeps its shape, part of it starred (****234@email.fr, *****tien poupi).
+ * `null`: the value is dropped (any nullable column, e.g. free notes or a JSON payload).
+ */
+export type AnonymizeKind = 'partial' | 'email' | 'phone' | 'name' | 'address' | 'ip' | 'secret' | 'null';
 
 export interface AnonymizeCandidate { table: string; column: string; kind: AnonymizeKind }
 
@@ -34,20 +38,46 @@ export function anonymizationCandidates(table: CatalogTable): AnonymizeCandidate
 
 /**
  * SQL expression replacing a column with a fake value. Deterministic (md5 of the real
- * value), so a unique column stays unique and equal values stay equal across tables.
+ * value), so equal values stay equal across tables. `wide` uses more of the hash, for
+ * columns that must stay unique; `maxLength` cuts the fake to a varchar(n) column.
  */
-export function anonymizedExpression(column: string, kind: AnonymizeKind, alias = 't'): string {
+export function anonymizedExpression(column: string, kind: AnonymizeKind, alias = 't', options: { wide?: boolean; maxLength?: number } = {}): string {
+  if (kind === 'null') return 'NULL';
   const c = `${alias}.${format('%I', column)}`;
   const h = `md5(${c}::text)`;
+  const wide = !!options.wide;
+  if (kind === 'partial') return `CASE WHEN ${c} IS NULL THEN NULL ELSE ${partialExpression(`${c}::text`, h, wide)} END`;
   const value = {
     email: `'user_' || left(${h}, 12) || '@example.com'`,
-    phone: `'+000' || lpad((('x' || left(${h}, 8))::bit(32)::bigint % 1000000000)::text, 9, '0')`,
-    name: `'Person ' || upper(left(${h}, 6))`,
-    address: `'1 Example Street ' || upper(left(${h}, 4))`,
+    phone: wide
+      ? `'+' || lpad((('x' || left(${h}, 12))::bit(48)::bigint % 100000000000000)::text, 14, '0')`
+      : `'+000' || lpad((('x' || left(${h}, 8))::bit(32)::bigint % 1000000000)::text, 9, '0')`,
+    name: `'Person ' || upper(left(${h}, ${wide ? 12 : 6}))`,
+    address: `'1 Example Street ' || upper(left(${h}, ${wide ? 12 : 4}))`,
     ip: `'10.' || (('x' || left(${h}, 2))::bit(8)::int) || '.' || (('x' || substr(${h}, 3, 2))::bit(8)::int) || '.' || (('x' || substr(${h}, 5, 2))::bit(8)::int)`,
-    secret: `'XXXX' || upper(left(${h}, 8))`,
+    secret: `'XXXX' || upper(left(${h}, ${wide ? 16 : 8}))`,
   }[kind];
-  return `CASE WHEN ${c} IS NULL THEN NULL ELSE ${value} END`;
+  const fitted = options.maxLength ? `left(${value}, ${Math.floor(options.maxLength)})` : value;
+  return `CASE WHEN ${c} IS NULL THEN NULL ELSE ${fitted} END`;
+}
+
+/**
+ * Part of a value starred, its shape kept (same length, @ and domain, phone separators):
+ * email: the end of the local part shown (****234@email.fr); phone: the last 2 digits;
+ * any other text: its first third hidden (*****tien poupi). `wide` (a unique column): the
+ * hidden part comes from the hash instead of stars, so two values cannot end up equal.
+ */
+function partialExpression(v: string, h: string, wide: boolean): string {
+  const cover = (n: string) => (wide ? `left(repeat(${h}, (${n}) / 32 + 1), ${n})` : `repeat('*', ${n})`);
+  const local = `split_part(${v}, '@', 1)`;
+  const hidden = `greatest(length(${local}) - 3, ceil(length(${local}) / 2.0)::int)`;
+  const email = `${cover(hidden)} || right(${local}, length(${local}) - ${hidden}) || substr(${v}, strpos(${v}, '@'))`;
+  const phone = wide
+    ? `'+' || lpad((('x' || left(${h}, 12))::bit(48)::bigint % 100000000000000)::text, 14, '0')`
+    : `regexp_replace(left(${v}, length(${v}) - 2), '[0-9]', '*', 'g') || right(${v}, 2)`;
+  const third = `greatest(1, ceil(length(${v}) / 3.0)::int)`;
+  const text = `${cover(third)} || substr(${v}, ${third} + 1)`;
+  return `CASE WHEN ${v} LIKE '_%@_%' THEN ${email} WHEN ${v} ~ '^[0-9 +().-]{6,}$' THEN ${phone} ELSE ${text} END`;
 }
 
 /** Tables ordered so that a table comes after the tables its foreign keys reference */

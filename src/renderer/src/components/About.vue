@@ -10,7 +10,7 @@ import { ipcRenderer } from '../electron';
 import { useToast } from '../composables/useToast';
 import { getErrorMessage } from '../utils';
 import { btnPrimary, btnSecondary } from './ui/classes';
-import { WHATS_NEW_VERSION } from '../whatsNew';
+import { TOURS, WHATS_NEW_VERSION } from '../whatsNew';
 
 const { t, currentLanguage } = useI18n();
 const { addToast } = useToast();
@@ -159,6 +159,14 @@ const rowLabel = 'text-[13px] text-gray-500 dark:text-zinc-400';
 const rowValue = 'font-mono text-[12.5px] text-gray-800 dark:text-zinc-200 text-right truncate';
 const sectionTitle = 'text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-3';
 const card = 'bg-white dark:bg-zinc-900 rounded-xl p-4 border border-gray-200 dark:border-zinc-800';
+
+/** Plays one tour again (the history below, or the link next to the version) */
+const replayTour = (version: string) => {
+  store.whatsNewTour = version;
+  store.showWhatsNew = true;
+};
+const shortVersion = (version: string) => version.replace(/\.0$/, '');
+const tourDate = (date?: string) => (date ? new Date(`${date}T12:00:00`).toLocaleDateString(store.language === 'fr' ? 'fr-FR' : 'en-US', { day: 'numeric', month: 'long', year: 'numeric' }) : '');
 </script>
 
 <template>
@@ -181,7 +189,7 @@ const card = 'bg-white dark:bg-zinc-900 rounded-xl p-4 border border-gray-200 da
                 <span v-if="info && !info.packaged" class="font-mono text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400">dev</span>
               </div>
               <p class="mt-0.5 text-[13px] text-gray-500 dark:text-zinc-400">{{ t('about.tagline') }}</p>
-              <button type="button" class="mt-1.5 inline-flex items-center gap-1.5 text-[12.5px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline" @click="store.showWhatsNew = true">
+              <button type="button" class="mt-1.5 inline-flex items-center gap-1.5 text-[12.5px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline" @click="replayTour(WHATS_NEW_VERSION)">
                 <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" /></svg>
                 {{ t('about.tour', { version: WHATS_NEW_VERSION.replace(/\.0$/, '') }) }}
               </button>
@@ -233,6 +241,29 @@ const card = 'bg-white dark:bg-zinc-900 rounded-xl p-4 border border-gray-200 da
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- What's new, version by version: each tour can be played again -->
+      <div :class="card">
+        <h3 :class="sectionTitle">{{ t('about.history') }}</h3>
+        <ol class="divide-y divide-gray-100 dark:divide-zinc-800">
+          <li v-for="tour in TOURS" :key="tour.version" class="flex items-start gap-4 py-3 first:pt-0 last:pb-0">
+            <div class="w-28 shrink-0">
+              <div class="font-mono text-[13px] font-semibold text-gray-900 dark:text-zinc-100">{{ shortVersion(tour.version) }}</div>
+              <div v-if="tour.date" class="text-[11px] text-gray-400 dark:text-zinc-500">{{ tourDate(tour.date) }}</div>
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="text-[13px] font-medium text-gray-900 dark:text-zinc-100">{{ t(`whatsNew.slides.${tour.slides[0].id}.title`) }}</div>
+              <ul v-if="tour.slides[0].points" class="mt-1 space-y-0.5">
+                <li v-for="n in tour.slides[0].points" :key="n" class="text-[12px] text-gray-500 dark:text-zinc-400">{{ t(`whatsNew.slides.${tour.slides[0].id}.p${n}`) }}</li>
+              </ul>
+            </div>
+            <button type="button" :class="btnSecondary" class="shrink-0" @click="replayTour(tour.version)">
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+              {{ t('about.replay') }}
+            </button>
+          </li>
+        </ol>
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">

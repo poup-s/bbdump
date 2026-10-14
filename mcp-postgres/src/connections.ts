@@ -216,6 +216,11 @@ export function listConnections(): ConnectionInfo[] | null {
   });
 }
 
+/** Ids of the saved databases with this database name (any server) */
+export function savedDatabaseIdsNamed(name: string): string[] {
+  return (loadBbdumpConfig()?.databases ?? []).filter((d) => d.name === name).map((d) => d.id);
+}
+
 /** The saved database for an id, name or display name (id wins) */
 export function findDatabase(identifier: string): { id: string; name: string; displayName?: string } | null {
   const bbdumpConfig = loadBbdumpConfig();

@@ -23,7 +23,8 @@ const INSTRUCTIONS = `PostgreSQL tools from bbdump.
 - Each write saves an undo point when possible (rows touched, cascades included): list_changes and undo_change bring them back. For changes without one (DDL, large tables), offer create_backup first, and preview with execute_write_query dry_run.
 - Prefer format "markdown" for row results you only need to read: it is much shorter than JSON.
 - Performance: explain_query, database_health, suggest_indexes, test_index, get_slow_queries.
-- compare_databases tells what a database lacks compared to another (e.g. a local dev copy behind prod).`;
+- compare_databases tells what a database lacks compared to another (e.g. a local dev copy behind prod).
+- The user may mask personal data of a database: values come partly starred (****234@email.fr) or as fakes (XXXX…, user_…@example.com, NULL) and results say masked_columns. Work with them; never try to recover the real values. A result the user blocked must not be asked again.`;
 
 export function createServer(): McpServer {
   const server = new McpServer({ name: 'bbdump-postgres', version: SERVER_VERSION }, { instructions: INSTRUCTIONS });

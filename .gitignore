@@ -30,6 +30,8 @@ config.json.tmp
 config.json.corrupt-*
 cloud-credentials.json
 cloud-credentials.json.tmp
+ai-masking.json
+ai-masking.json.tmp
 backup-history.json
 backup-history.json.tmp
 ssh-tunnels.json

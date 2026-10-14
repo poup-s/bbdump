@@ -4,6 +4,7 @@ import { z } from 'zod';
 import pgFormat from 'pg-format';
 import { withClient, executeReadOnly, resolveSchema } from '../db.js';
 import { jsonResult, errorResult, textResult } from '../types.js';
+import { rulesFor, fakeValue, maskingNote, type MaskKind } from '../masking.js';
 import { READ, databaseParam, schemaParam, tableParam } from './common.js';
 
 /** Tables written out in full by get_schema_overview; the rest are listed by name */
@@ -227,6 +228,16 @@ export function registerInsightTools(server: McpServer) {
       const stats = (await executeReadOnly(client, `SELECT count(*) AS total, ${aggregates.join(', ')} FROM ${sample}`, [], 60000)).rows[0];
       const total = Number(stats.total);
 
+      // Personal columns masked for the AI: their sample values are replaced (a view: every text column)
+      const rules = rulesFor(database);
+      const relkind = rules ? (await executeReadOnly(client, `SELECT c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2`, [nsp, table])).rows[0]?.relkind : null;
+      const maskKind = (c: any): MaskKind | undefined => {
+        if (!rules) return undefined;
+        if (relkind === 'r' || relkind === 'p') return rules.get(`${nsp}.${table}.${c.name}`);
+        return /char|text|json|inet|xml|bytea/.test(c.type) ? 'partial' : undefined;
+      };
+      const maskedColumns: string[] = [];
+
       const profile = [];
       for (let i = 0; i < wanted.length; i++) {
         const c = wanted[i];
@@ -240,17 +251,23 @@ export function registerInsightTools(server: McpServer) {
           ), [], 30000);
           top = freq.rows;
         }
+        const kind = maskKind(c);
+        const show = (value: unknown) => (kind ? fakeValue(value, kind) : value);
+        if (kind) {
+          maskedColumns.push(c.name);
+          top = top.map(t => ({ value: show(t.value) as string | null, count: t.count }));
+        }
         profile.push({
           column: c.name,
           type: c.type,
           null_percent: total ? Math.round(1000 * (total - nonNull) / total) / 10 : 0,
           distinct_values: distinct,
           ...(distinct === nonNull && nonNull > 0 ? { all_distinct: true } : {}),
-          ...(c.orderable ? { min: stats[`min${i}`], max: stats[`max${i}`] } : {}),
+          ...(c.orderable ? { min: show(stats[`min${i}`]), max: show(stats[`max${i}`]) } : {}),
           ...(top.length ? { most_frequent: top } : {}),
         });
       }
-      return jsonResult({ table: `${nsp}.${table}`, sampled_rows: total, columns: profile });
+      return jsonResult({ table: `${nsp}.${table}`, sampled_rows: total, columns: profile, ...maskingNote({ rows: [], masked: maskedColumns }) });
     })
   );
 }

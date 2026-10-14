@@ -84,7 +84,7 @@ function pair(targetId: string, sourceId: string, writable = true) {
 }
 
 /** Runs fn in a REPEATABLE READ READ ONLY transaction on the source: one consistent snapshot */
-async function onSource<T>(sourceId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
+export async function onSource<T>(sourceId: string, fn: (client: PoolClient) => Promise<T>): Promise<T> {
   return withConnection(await connectionParamsFor(sourceId), async (client) => {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
     await client.query(`SET LOCAL TimeZone = 'UTC'`);

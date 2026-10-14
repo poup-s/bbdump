@@ -1276,7 +1276,15 @@ apt-get install -y postgresql-client-${majorVersion}
     return { valid: true };
   }
 
-  async executeBackup(db: DatabaseConfig): Promise<BackupResult> {
+  /**
+   * The schema of a database (no rows), dumped into `directory`: for a copy whose rows are
+   * moved another way. Not a backup: no history, no retention, never encrypted.
+   */
+  async dumpSchema(db: DatabaseConfig, directory: string): Promise<BackupResult> {
+    return withTunnel(db, reached => this.executeBackup({ ...reached, output: directory, encryptBackups: false }, { schemaOnly: true }));
+  }
+
+  async executeBackup(db: DatabaseConfig, options: { schemaOnly?: boolean } = {}): Promise<BackupResult> {
     // A scheduled backup can fire right after launch, before pg_dump was located
     await this.ensureToolPaths();
     const timestamp = new Date().toISOString();
@@ -1412,6 +1420,7 @@ apt-get install -y postgresql-client-${majorVersion}
         '-v',
         '-f', timestampedPath,
       ];
+      if (options.schemaOnly) args.push('--schema-only');
 
       // If a connection string is provided, use it
       if (db.connectionString) {
@@ -1869,7 +1878,11 @@ apt-get install -y postgresql-client-${majorVersion}
   async restoreBackup(
     backupFile: string,
     target: { name: string; host: string; port: number; user: string; password: string; connectionString?: string; viaTunnel?: boolean } & SslSettings,
-    options: { replace?: boolean } = {},
+    options: {
+      replace?: boolean;
+      /** Loads the rows instead of the dump's data section (tables created, no constraints yet) */
+      loadData?: () => Promise<void>;
+    } = {},
   ): Promise<BackupResult> {
     await this.ensureToolPaths();
     const timestamp = new Date().toISOString();
@@ -2064,10 +2077,23 @@ apt-get install -y postgresql-client-${majorVersion}
 
       // STEP 3: Load data (with triggers disabled to bypass FK constraint triggers)
       logger.info(`[restore] Step 3/5: Loading data...`, target.name);
-      const dataArgs = [...baseArgs, '--disable-triggers'];
-      const dataResult = await this.runPgRestoreSection(
-        compatiblePgRestorePath, dataArgs, env, 'data', actualBackupPath, target.name,
-      );
+      let dataResult: { code: number; stdout: string; stderr: string };
+      if (options.loadData) {
+        try {
+          await options.loadData();
+          dataResult = { code: 0, stdout: '', stderr: '' };
+        } catch (loadError) {
+          cleanupTempFile();
+          const errorMsg = `Loading the rows failed: ${getErrorMessage(loadError)}`;
+          logger.error(errorMsg, target.name);
+          return { success: false, database: target.name, timestamp, error: errorMsg };
+        }
+      } else {
+        const dataArgs = [...baseArgs, '--disable-triggers'];
+        dataResult = await this.runPgRestoreSection(
+          compatiblePgRestorePath, dataArgs, env, 'data', actualBackupPath, target.name,
+        );
+      }
       allStdout += dataResult.stdout;
       allStderr += dataResult.stderr;
 

@@ -6,8 +6,11 @@ import { BrowserWindow } from 'electron';
 import { logger } from './logger';
 import { getConfig } from './ipc/configIpc';
 
+/** The user's answer; `mask`: for a disclosure, the result columns to mask */
+interface ConfirmAnswer { approved: boolean; mask?: string[] }
+
 interface PendingConfirmation {
-  resolve: (approved: boolean) => void;
+  resolve: (answer: ConfirmAnswer) => void;
   timeout: NodeJS.Timeout;
 }
 
@@ -131,7 +134,7 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
     return;
   }
 
-  if (req.method !== 'POST' || !['/confirm', '/backup', '/undo', '/compare', '/tunnel'].includes(pathname)) {
+  if (req.method !== 'POST' || !['/confirm', '/disclose', '/backup', '/undo', '/compare', '/tunnel'].includes(pathname)) {
     res.writeHead(404);
     res.end();
     return;
@@ -258,6 +261,17 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
       return reply(await journal.undoChange(changeId));
     }
 
+    // A result that may hold personal data, about to go to the AI: the user chooses what is masked
+    if (pathname === '/disclose') {
+      const answer = await showToUser({ ...data, kind: 'disclose' });
+      // Nobody answered: the MCP server keeps its safe default (personal and unknown columns masked)
+      const body = answer.reason ? { approved: true } : { approved: answer.approved, mask: answer.mask };
+      logger.info(`MCP disclosure: ${answer.reason ?? (answer.approved ? `sent, ${answer.mask?.length ?? 0} column(s) masked` : 'blocked')}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(body));
+      return;
+    }
+
     const answer = await askUser(data);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(answer));
@@ -273,7 +287,12 @@ async function askUser(data: ConfirmRequestData): Promise<{ approved: boolean; r
     logger.info('MCP mutation auto-approved (mcpSkipConfirmation enabled)');
     return { approved: true };
   }
+  const { approved, reason } = await showToUser(data);
+  return reason ? { approved, reason } : { approved };
+}
 
+/** Shows a request in the tray popup and waits for the answer (60 seconds at most) */
+async function showToUser(data: ConfirmRequestData): Promise<ConfirmAnswer & { reason?: 'timeout' | 'no_window' }> {
   const id = crypto.randomUUID();
   // Call the registered callback to show the UI and get the target window
   const callbackResult = showConfirmUI ? showConfirmUI({ id, ...data }) : null;
@@ -290,20 +309,21 @@ async function askUser(data: ConfirmRequestData): Promise<{ approved: boolean; r
     }, CONFIRMATION_TIMEOUT_MS);
 
     pendingConfirmations.set(id, {
-      resolve: (approved: boolean) => {
+      resolve: (answer: ConfirmAnswer) => {
         clearTimeout(timeout);
         pendingConfirmations.delete(id);
-        resolve({ approved });
+        resolve(answer);
       },
       timeout,
     });
   });
 }
 
-export function resolveConfirmation(id: string, approved: boolean) {
+export function resolveConfirmation(id: string, approved: boolean, mask?: unknown) {
   const pending = pendingConfirmations.get(id);
   if (pending) {
-    pending.resolve(approved);
+    const columns = Array.isArray(mask) ? mask.filter((m): m is string => typeof m === 'string') : undefined;
+    pending.resolve({ approved, mask: columns });
   }
 }
 
@@ -315,7 +335,7 @@ export function stopConfirmServer() {
   token = '';
   pendingConfirmations.forEach((p) => {
     clearTimeout(p.timeout);
-    p.resolve(false);
+    p.resolve({ approved: false });
   });
   pendingConfirmations.clear();
   port = 0;
