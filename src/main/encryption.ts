@@ -50,6 +50,11 @@ class EncryptionManager {
     }
   }
 
+  /** Reads the key file again (after an import): passwords are decrypted with it right away */
+  reloadKey(): void {
+    this.initializeKey();
+  }
+
   encrypt(text: string): string {
     if (!this.encryptionKey) {
       throw new Error('Encryption key not initialized');

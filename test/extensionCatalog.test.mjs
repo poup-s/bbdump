@@ -84,3 +84,11 @@ describe('extensions missing before a copy', () => {
     assert.deepEqual(catalog.missingExtensions(['plpgsql', 'postgis'], ['postgis'], brew), []);
   });
 });
+
+describe('Homebrew older than macOS', () => {
+  test("brew's 'unsupported macOS version' answer is recognised, other failures are not", async () => {
+    const { isOutdatedHomebrew } = catalog;
+    assert.equal(isOutdatedHomebrew('This is not recommended and will be removed in a later release. ✔︎ API Source postgis.rb Error: unknown or unsupported macOS version: :dunno'), true);
+    assert.equal(isOutdatedHomebrew('Error: No available formula with the name "postgis"'), false);
+  });
+});

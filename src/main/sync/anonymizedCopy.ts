@@ -10,7 +10,9 @@ import { Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import { from as copyFrom, to as copyTo } from 'pg-copy-streams';
 import type { Catalog, CatalogColumn, CatalogTable } from './catalog';
-import { anonymizationCandidates, anonymizedExpression, type AnonymizeKind } from './dataSync';
+import { anonymizationCandidates, anonymizedExpression, columnLength, distinctFakes, type AnonymizeKind } from './dataSync';
+
+export { columnLength, isUnique, distinctFakes } from './dataSync';
 
 const TEXT_KINDS: AnonymizeKind[] = ['partial', 'email', 'phone', 'name', 'address', 'ip', 'secret'];
 /** Tables whose rows are only secrets for a running app: left empty by default */
@@ -73,20 +75,6 @@ export function foreignKeyGroups(tables: CatalogTable[]): Map<string, Set<string
     }
   }
   return groups;
-}
-
-/** varchar(n) / char(n): n */
-export function columnLength(type: string): number | undefined {
-  const m = /^(character varying|varchar|character|char|bpchar)\((\d+)\)/i.exec(type);
-  return m ? Number(m[2]) : undefined;
-}
-
-/** Under a unique constraint or unique index: its fakes must stay distinct */
-export function isUnique(table: CatalogTable, column: string): boolean {
-  if (table.constraints.some(c => (c.type === 'u' || c.type === 'p') && c.columns.includes(column))) return true;
-  const escaped = column.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const inList = new RegExp(`[(,]\\s*"?${escaped}"?\\s*[,)]`);
-  return table.indexes.some(i => /CREATE UNIQUE INDEX/i.test(i.definition) && inList.test(i.definition));
 }
 
 function kindsFor(table: CatalogTable, column: CatalogColumn): AnonymizeKind[] {
@@ -235,7 +223,7 @@ export async function copyAnonymized(
     const select = columns.map(c => {
       const kind = anonymize.get(columnKey(table.key, c.name));
       if (!kind) return format('t.%I', c.name);
-      const options = { wide: isUnique(table, c.name), maxLength: columnLength(c.type) };
+      const options = { wide: distinctFakes(table, c.name), maxLength: columnLength(c.type) };
       return `${anonymizedExpression(c.name, kind, 't', options)} AS ${format('%I', c.name)}`;
     }).join(', ');
     // ONLY: the rows of an inheriting table go with that table (a partitioned parent has none of its own)

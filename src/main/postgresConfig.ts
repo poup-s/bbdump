@@ -2,7 +2,7 @@ import { Client, QueryConfig } from 'pg';
 import { getErrorMessage } from './utils';
 import { logger } from './logger';
 import { checkPostgresInstalled } from './postgresManager';
-import { catalogEntry, extensionPackage, linuxExtensionScript, parseLibraryList, preloadLiterals, withPreloadLibrary, type PackageManager } from './extensionCatalog';
+import { catalogEntry, extensionPackage, isOutdatedHomebrew, linuxExtensionScript, parseLibraryList, preloadLiterals, withPreloadLibrary, type PackageManager } from './extensionCatalog';
 
 /** pkexec on the PATH (graphical root prompt on Linux desktops) */
 async function findPkexec(): Promise<string | null> {
@@ -826,29 +826,34 @@ export async function installExtensionPackage(
   if (!brewPath) return { success: false, error: 'Homebrew not found' };
 
   const { execFile } = await import('child_process');
-  logger.info(`Installing Homebrew formula "${pkg}" for extension "${extensionName}"`);
-  return await new Promise(resolve => {
-    execFile(
-      brewPath,
-      ['install', pkg],
-      {
-        timeout: 20 * 60 * 1000,
-        maxBuffer: 16 * 1024 * 1024,
-        env: { ...process.env, HOMEBREW_NO_AUTO_UPDATE: '1', HOMEBREW_NO_ENV_HINTS: '1', NONINTERACTIVE: '1' },
-      },
-      (error, _stdout, stderr) => {
-        if (error) {
-          const detail = (stderr || '').trim().split('\n').filter(Boolean).slice(-3).join(' ') || getErrorMessage(error);
-          logger.error(`brew install ${pkg} failed: ${detail}`);
-          resolve({ success: false, error: detail });
-        } else {
-          logger.info(`Homebrew formula "${pkg}" installed`);
-          resolve({ success: true });
-        }
-      }
-    );
+  const env = { ...process.env, HOMEBREW_NO_AUTO_UPDATE: '1', HOMEBREW_NO_ENV_HINTS: '1', NONINTERACTIVE: '1' };
+  const brew = (args: string[], timeout: number) => new Promise<{ ok: boolean; detail: string }>(resolve => {
+    execFile(brewPath, args, { timeout, maxBuffer: 16 * 1024 * 1024, env }, (error, _stdout, stderr) => {
+      const detail = (stderr || '').trim().split('\n').filter(Boolean).slice(-3).join(' ') || (error ? getErrorMessage(error) : '');
+      resolve({ ok: !error, detail });
+    });
   });
+
+  logger.info(`Installing Homebrew formula "${pkg}" for extension "${extensionName}"`);
+  let result = await brew(['install', pkg], 20 * 60 * 1000);
+  // A Homebrew older than the macOS it runs on fails before installing anything: update it once, then retry
+  if (!result.ok && isOutdatedHomebrew(result.detail)) {
+    logger.warn(`Homebrew does not know this macOS version, running brew update: ${result.detail}`);
+    const update = await brew(['update'], 10 * 60 * 1000);
+    if (!update.ok) {
+      logger.error(`brew update failed: ${update.detail}`);
+      return { success: false, error: `Homebrew is too old for this version of macOS and could not update itself. Run "brew update" in a Terminal, then try again. (${update.detail})` };
+    }
+    result = await brew(['install', pkg], 20 * 60 * 1000);
+  }
+  if (!result.ok) {
+    logger.error(`brew install ${pkg} failed: ${result.detail}`);
+    return { success: false, error: result.detail };
+  }
+  logger.info(`Homebrew formula "${pkg}" installed`);
+  return { success: true };
 }
+
 
 /**
  * Retrieves performance statistics (pg_stat_statements)

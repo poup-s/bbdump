@@ -92,6 +92,8 @@ const installExtension = async (name: string) => {
   } finally {
     installingExt.value = null;
     await checkExtensions();
+    // Installed, yet the server still cannot create it: the package targets another PostgreSQL version
+    if (!extError.value && missingExt.value.some(e => e.name === name)) extError.value = t('databases.duplicateExtNotSeen', { name });
   }
 };
 

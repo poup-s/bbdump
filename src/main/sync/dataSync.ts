@@ -80,6 +80,28 @@ function partialExpression(v: string, h: string, wide: boolean): string {
   return `CASE WHEN ${v} LIKE '_%@_%' THEN ${email} WHEN ${v} ~ '^[0-9 +().-]{6,}$' THEN ${phone} ELSE ${text} END`;
 }
 
+/** varchar(n) / char(n): n */
+export function columnLength(type: string): number | undefined {
+  const m = /^(character varying|varchar|character|char|bpchar)\((\d+)\)/i.exec(type);
+  return m ? Number(m[2]) : undefined;
+}
+
+/** Under a unique constraint or unique index: its fakes must stay distinct */
+export function isUnique(table: CatalogTable, column: string): boolean {
+  if (table.constraints.some(c => (c.type === 'u' || c.type === 'p') && c.columns.includes(column))) return true;
+  const escaped = column.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const inList = new RegExp(`[(,]\\s*"?${escaped}"?\\s*[,)]`);
+  return table.indexes.some(i => /CREATE UNIQUE INDEX/i.test(i.definition) && inList.test(i.definition));
+}
+
+/**
+ * Fakes must stay distinct: a unique column, or a column of a foreign key (it points to a
+ * unique one, and both must get the same fake to stay linked).
+ */
+export function distinctFakes(table: CatalogTable, column: string): boolean {
+  return isUnique(table, column) || table.constraints.some(c => c.type === 'f' && c.columns.includes(column));
+}
+
 /** Tables ordered so that a table comes after the tables its foreign keys reference */
 export function dependencyOrder(tables: CatalogTable[]): CatalogTable[] {
   const byKey = new Map(tables.map(t => [t.key, t]));
@@ -134,7 +156,11 @@ export async function copyMissingRows(
   const writable = targetTable.columns.filter(c => !c.generated && sourceTable.columns.some(s => s.name === c.name)).map(c => c.name);
   const selectList = writable.map(c => {
     const kind = options.anonymize.get(c);
-    return kind ? `${anonymizedExpression(c, kind)} AS ${format('%I', c)}` : format('t.%I', c);
+    if (!kind) return format('t.%I', c);
+    // Same fakes as the anonymized duplicate: distinct where they must be, cut to the column's size
+    const target = targetTable.columns.find(col => col.name === c);
+    const fit = { wide: distinctFakes(sourceTable, c), maxLength: target ? columnLength(target.type) : undefined };
+    return `${anonymizedExpression(c, kind, 't', fit)} AS ${format('%I', c)}`;
   }).join(', ');
 
   // Rows whose parents are missing locally are left out (filtered parent table, cycle)

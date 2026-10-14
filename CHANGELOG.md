@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.2.2 — 2026-10-14
+
+### Fixed
+
+- **Installing an extension (e.g. PostGIS) failed with "unknown or unsupported macOS version"**
+  when Homebrew was older than the macOS it runs on (bbdump skips Homebrew's own update to go
+  faster). bbdump now updates Homebrew once and tries again, and says what to do if that is not
+  enough. When an installed extension is still not seen by the local server (a package built
+  for another PostgreSQL version), the duplicate dialog says so instead of offering Install again.
+- **Anonymized duplicates and "Update from…" kept values distinct only on unique columns.** A
+  column pointing to one (a foreign key on an email, say) got different fakes, so the link
+  could break when the copy was rebuilt, and "Update from…" could skip rows whose fakes
+  collided on a unique column. Linked and unique columns now get the same distinct fakes.
+- **Importing an encryption key** applied only after restarting bbdump: it applies at once.
+- **The install script's uninstaller** looked for bbdump's data in a folder that never existed,
+  so "bbdump data" could not be removed from it: it now finds the real data folder.
+
 ## 1.2.1 — 2026-10-14
 
 ### Fixed

@@ -15,6 +15,7 @@ import { withTunnel } from '../sshTunnel';
 import * as nodeCron from 'node-cron';
 import { nextRun, previousRun } from '../cronSchedule';
 import { resolveConfirmation } from '../mcpConfirmServer';
+import { encryptionManager } from '../encryption';
 import {
     McpClientId, getClientDefs, getClientStatus, listClientStatuses,
     installClient, uninstallClient, buildCustomSnippet,
@@ -386,6 +387,8 @@ export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null
 
             fs.copyFileSync(importPath, keyPath);
             try { fs.chmodSync(keyPath, 0o600); } catch (e) { logger.warn(`Unable to set permissions: ${e}`); }
+            // The key in memory is the one read at launch: without this, the import applied only after a restart
+            encryptionManager.reloadKey();
 
             logger.info('Encryption key imported successfully');
             return { success: true };

@@ -153,6 +153,11 @@ export function missingExtensions(
   });
 }
 
+/** brew's answer when it is older than the macOS it runs on ("unknown or unsupported macOS version: :dunno") */
+export function isOutdatedHomebrew(message: string): boolean {
+  return /unknown or unsupported macOS version|:dunno/i.test(message);
+}
+
 /** Package names come from the catalog only; this guards what reaches a root script anyway */
 const PACKAGE_RE = /^[a-z0-9][a-z0-9.+_-]*$/;
 

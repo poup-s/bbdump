@@ -24,7 +24,7 @@ On first launch, bbdump generates a random 256-bit key and saves it, hex-encoded
 | **Export Key** | Saves a copy of the key to a file you choose |
 | **Import Key** | Replaces the key with one from a file (64 hex characters). The previous key is kept next to it as `.encryption.key.backup-<timestamp>`. |
 
-Passwords saved with the old key can no longer be read once another key is imported: export the current one first if you may need it. Restart bbdump after an import.
+Passwords saved with the old key can no longer be read once another key is imported: export the current one first if you may need it. The imported key applies at once (before 1.2.2, after a restart).
 
 > **Keep an exported copy of your key somewhere safe** (password manager, encrypted drive). Without it, saved passwords and encrypted backups cannot be read on another computer, or after the key file is lost.
 

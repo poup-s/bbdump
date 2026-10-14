@@ -63,3 +63,13 @@ test('fakes fit the column and stay distinct on unique columns', () => {
   assert.match(anonymizedExpression('phone', 'phone', 't', { wide: true }), /bit\(48\)/);
   assert.equal(anonymizedExpression('notes', 'null'), 'NULL');
 });
+
+test('a unique column and the columns pointing to it get the same distinct fakes', async () => {
+  const { distinctFakes } = require(path.join(process.cwd(), 'dist/main/sync/anonymizedCopy.js'));
+  assert.equal(distinctFakes(users, 'email'), true);
+  assert.equal(distinctFakes(orders, 'contact_email'), true);
+  assert.equal(distinctFakes(users, 'notes'), false);
+  const a = anonymizedExpression('email', 'partial', 't', { wide: distinctFakes(users, 'email') });
+  const b = anonymizedExpression('contact_email', 'partial', 't', { wide: distinctFakes(orders, 'contact_email') });
+  assert.equal(a.replaceAll('email', 'X'), b.replaceAll('contact_email', 'X'));
+});
