@@ -118,7 +118,7 @@ try {
   expect((await call('list_backups')).includes('bbdump_mcp_ci'), 'the backup is not listed');
   const files = fs.readdirSync(backups, { recursive: true }).map(String);
   console.log(`backup folder: ${files.join(', ')}`);
-  expect(files.some(f => f.includes('bbdump_mcp_ci')), 'no backup file');
+  expect(files.some(f => f.startsWith('mcp-ci_') && f.endsWith('.backup')), 'no backup file');
   console.log('MCP on Windows: OK');
 } catch (error) {
   failed = true;
