@@ -137,7 +137,7 @@ Download the latest release from [GitHub Releases](https://github.com/poup-s/bbd
 xattr -cr /Applications/bbdump.app
 ```
 
-**Windows (beta):** remote databases and a PostgreSQL already running on the computer; bbdump does not install a local server there. The installer is not signed yet: on "Windows protected your PC", choose **More info → Run anyway**. Backups need the PostgreSQL client tools — see [installation](docs/installation.md#postgresql-client-tools).
+**Windows (beta):** remote databases, and a local PostgreSQL that bbdump installs with winget (or one already there). The installer is not signed yet: on "Windows protected your PC", choose **More info → Run anyway**. Backups need the PostgreSQL client tools — see [installation](docs/installation.md#postgresql-client-tools).
 
 Later versions install themselves from the app. The `.deb` package does not update itself: install the new one.
 
@@ -173,7 +173,7 @@ npm run dist:linux     # Linux: AppImage + deb
 
 ## Configuration
 
-User data lives in `~/Library/Application Support/bbdump/` (macOS) or `~/.config/bbdump/` (Linux):
+User data lives in `~/Library/Application Support/bbdump/` (macOS), `~/.config/bbdump/` (Linux) or `%APPDATA%\bbdump\` (Windows):
 
 | File | Contents |
 |------|----------|
@@ -183,6 +183,7 @@ User data lives in `~/Library/Application Support/bbdump/` (macOS) or `~/.config
 | `ai-masking.json` | Columns anonymized for AI assistants, per database |
 | `ai-journal/` | Changes made by AI assistants, with their undo data (encrypted) |
 | `cloud-credentials.json` | Neon API key (encrypted) |
+| `local-server.json` | Windows: password of the local server's `postgres` user (encrypted) |
 | `logs/app.log` | Application logs |
 
 Databases can be added from the UI or by pasting a connection URL:

@@ -77,14 +77,14 @@ sudo apt install ./bbdump-*.deb
 
 Download `bbdump-*-setup.exe` (one installer for x64 and ARM64) and run it: bbdump installs for your user, without administrator rights, with Start menu and desktop shortcuts. The app is not code-signed yet, so Windows shows "Windows protected your PC": choose **More info → Run anyway**.
 
-The Windows beta manages **remote databases** (and a PostgreSQL already running on the computer); it does not install or drive a local PostgreSQL server. Backups need the PostgreSQL client tools (below). The install script is for macOS and Linux only.
+Both usage modes work on Windows. In **local mode**, the first launch installs the PostgreSQL server with winget (the EDB installer, as a Windows service started with the computer; Windows asks once for administrator rights). bbdump generates the password of its `postgres` user and keeps it encrypted in its data folder (`local-server.json`). A PostgreSQL installed without bbdump is used too: type its `postgres` password once. Backups need the PostgreSQL client tools (below), which come with the server. The install script is for macOS and Linux only.
 
 ## First launch
 
 A short setup guides you through:
 
 1. **Usage mode**: *PostgreSQL on this computer* (bbdump installs or uses a local server to create and restore databases here; remote databases work too) or *Remote databases only* (client tools only, no server). You can switch later in **Settings → Usage mode**.
-2. **This machine**: checks the PostgreSQL client tools and, in local mode, the server. Missing pieces can be installed from there (Homebrew on macOS; your system password is asked once).
+2. **This machine**: checks the PostgreSQL client tools and, in local mode, the server. Missing pieces can be installed from there (Homebrew on macOS; your system password is asked once on Linux; winget and one administrator prompt on Windows).
 3. **Your data**: pick the local databases to manage or paste the URL of a first remote database, then the default backup folder.
 4. **AI**: optionally connect your AI assistants to bbdump's MCP server.
 
@@ -103,7 +103,7 @@ brew install postgresql@17    # server + client tools
 sudo apt install postgresql-client
 ```
 
-On Windows, bbdump looks in `Program Files\PostgreSQL\<version>\bin`, where the EDB installer puts them (it does not add them to `PATH`). The first launch installs them for you with winget (client tools only; Windows asks once for administrator rights), and so does the **Install PostgreSQL N** button of a backup that needs another version. By hand, in PowerShell:
+On Windows, bbdump looks in `Program Files\PostgreSQL\<version>\bin`, where the EDB installer puts them (it does not add them to `PATH`). In remote mode the first launch installs them for you with winget (client tools only; Windows asks once for administrator rights), and so does the **Install PostgreSQL N** button of a backup that needs another version. By hand, in PowerShell:
 
 ```powershell
 winget install -e --id PostgreSQL.PostgreSQL.17 --override "--mode unattended --enable-components commandlinetools --disable-components server,pgAdmin,stackbuilder"

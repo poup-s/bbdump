@@ -5,8 +5,11 @@
 ### Added
 
 - **Windows (beta).** An installer for Windows 10 and 11 (x64 and ARM64), updated in place
-  like the AppImage. The beta manages remote databases (and a PostgreSQL already running on the
-  computer); it does not install a local server. The PostgreSQL client tools are found where
+  like the AppImage. Both usage modes work: remote databases only, or PostgreSQL on this
+  computer. In local mode bbdump installs the PostgreSQL server with winget (a Windows service
+  started with the computer; bbdump generates the password of its "postgres" user and keeps it
+  encrypted), starts it when it is stopped, and asks once for the password of a server it did
+  not install. The PostgreSQL client tools are found where
   the EDB installer puts them, SSH goes through Windows' OpenSSH, and the AI assistants
   (Claude Desktop, including the Microsoft Store version, Claude Code…) can be connected as on
   macOS and Linux. Backups go to Documents\bbdump by default and can be on any drive.

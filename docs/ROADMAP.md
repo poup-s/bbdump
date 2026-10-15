@@ -32,7 +32,7 @@ What bbdump already does, what comes next, and ideas still being discussed. Plan
 
 ## Next: Windows (beta) in 1.3
 
-- **Remote databases and client tools only**: no installation or control of a local PostgreSQL server at first; a PostgreSQL already running on the machine can still be used.
+- **Both usage modes**: remote databases only, or a local PostgreSQL server that bbdump installs with winget (a Windows service) or that was already there.
 - Windows installer (x64 and ARM64) and automatic updates. The app will not be code-signed at first, so Windows may show a SmartScreen warning.
 - `pg_dump` and `psql` found in the usual PostgreSQL install folders; SSH through Windows' OpenSSH.
 - Notification area icon, and launch hidden at login.

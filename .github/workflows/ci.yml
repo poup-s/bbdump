@@ -117,6 +117,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           $opt = Join-Path $dir 'postgresql.opt'
           $env:BBDUMP_TEST_PW = 'ci-' + [guid]::NewGuid().ToString('N')
+          "BBDUMP_TEST_PW=$($env:BBDUMP_TEST_PW)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           node -e "require('fs').writeFileSync(process.argv[1], require('./dist/main/platform/windows.js').serverOptionFile(process.env.BBDUMP_TEST_PW, 5432))" $opt
           $wingetArgs = node -e "console.log(JSON.stringify(require('./dist/main/platform/windows.js').wingetServerArgs('18', process.argv[1])))" $opt | ConvertFrom-Json
           & winget @wingetArgs
@@ -130,6 +131,26 @@ jobs:
           $env:PGPASSWORD = $env:BBDUMP_TEST_PW
           & 'C:\Program Files\PostgreSQL\18\bin\psql.exe' -h localhost -p 5432 -U postgres -d postgres -tAc 'select version()'
           if ($LASTEXITCODE -ne 0) { throw 'cannot connect with the generated password' }
+
+      # Extensions as bbdump installs them on Windows: official builds downloaded, checked, copied
+      - name: Extensions on the local server (PostGIS bundle, TimescaleDB)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Program Files\PostgreSQL\18\data')) { Write-Host 'no local server: skipped'; exit 0 }
+          $env:PGPASSWORD = $env:BBDUMP_TEST_PW
+          $psql = 'C:\Program Files\PostgreSQL\18\bin\psql.exe'
+          foreach ($source in 'postgis', 'timescaledb') {
+            node -e "require('./dist/main/platform/windowsExtensions.js').installWindowsExtension(process.argv[1], 18, 'C:\\Program Files\\PostgreSQL\\18', l => console.log(l)).then(r => { console.log(JSON.stringify(r)); if (!r.success) process.exit(1) })" $source
+            if ($LASTEXITCODE -ne 0) { throw "$source not installed" }
+          }
+          & $psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION postgis' -c 'CREATE EXTENSION postgis_raster' -c 'CREATE EXTENSION postgis_topology' -c 'CREATE EXTENSION pgrouting' -c 'CREATE EXTENSION h3' -tAc 'select postgis_full_version()'
+          if ($LASTEXITCODE -ne 0) { throw 'PostGIS extensions cannot be created' }
+          & $psql -h localhost -U postgres -d postgres -c "ALTER SYSTEM SET shared_preload_libraries = 'timescaledb'"
+          Restart-Service -Force postgresql-x64-18
+          Start-Sleep -Seconds 5
+          & $psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION timescaledb' -tAc "select extversion from pg_extension where extname = 'timescaledb'"
+          if ($LASTEXITCODE -ne 0) { throw 'TimescaleDB cannot be created' }
 
       - name: The packaged app starts
         shell: pwsh

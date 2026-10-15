@@ -7,6 +7,7 @@
  *   apt: postgresql-<major>-<apt> (Debian / Ubuntu packages and PGDG use the same names)
  *   dnf: <dnf>_<major> (PGDG for RHEL-like)   fedora: Fedora's own package
  *   brew: formula (builds for @17 and @18)
+ *   windows: official Windows build bbdump downloads (PostGIS bundle from OSGeo, TimescaleDB release)
  *
  * The renderer gets this list through IPC; the main process only runs `brew install`
  * for a formula listed here.
@@ -30,6 +31,8 @@ export interface CatalogEntry {
   apt?: string;
   dnf?: string;
   fedora?: string;
+  /** Windows (EDB server): the official build that brings it */
+  windows?: 'postgis' | 'timescaledb';
   homepage?: string;
 }
 
@@ -42,11 +45,11 @@ export const EXTENSION_CATALOG: CatalogEntry[] = [
   { name: 'age', category: 'ai', apt: 'age', dnf: 'age', homepage: 'https://age.apache.org' },
 
   // --- Geography
-  { name: 'postgis', category: 'geo', brew: 'postgis', apt: 'postgis-3', dnf: 'postgis36', fedora: 'postgis', homepage: 'https://postgis.net' },
-  { name: 'postgis_raster', category: 'geo', requires: ['postgis'], brew: 'postgis', apt: 'postgis-3', dnf: 'postgis36', fedora: 'postgis', homepage: 'https://postgis.net' },
-  { name: 'postgis_topology', category: 'geo', requires: ['postgis'], brew: 'postgis', apt: 'postgis-3', dnf: 'postgis36', fedora: 'postgis', homepage: 'https://postgis.net' },
-  { name: 'pgrouting', category: 'geo', requires: ['postgis'], brew: 'pgrouting', apt: 'pgrouting', dnf: 'pgrouting', fedora: 'pgrouting', homepage: 'https://pgrouting.org' },
-  { name: 'h3', category: 'geo', apt: 'h3', dnf: 'h3-pg', homepage: 'https://github.com/zachasme/h3-pg' },
+  { name: 'postgis', category: 'geo', brew: 'postgis', apt: 'postgis-3', dnf: 'postgis36', fedora: 'postgis', windows: 'postgis', homepage: 'https://postgis.net' },
+  { name: 'postgis_raster', category: 'geo', requires: ['postgis'], brew: 'postgis', apt: 'postgis-3', dnf: 'postgis36', fedora: 'postgis', windows: 'postgis', homepage: 'https://postgis.net' },
+  { name: 'postgis_topology', category: 'geo', requires: ['postgis'], brew: 'postgis', apt: 'postgis-3', dnf: 'postgis36', fedora: 'postgis', windows: 'postgis', homepage: 'https://postgis.net' },
+  { name: 'pgrouting', category: 'geo', requires: ['postgis'], brew: 'pgrouting', apt: 'pgrouting', dnf: 'pgrouting', fedora: 'pgrouting', windows: 'postgis', homepage: 'https://pgrouting.org' },
+  { name: 'h3', category: 'geo', apt: 'h3', dnf: 'h3-pg', windows: 'postgis', homepage: 'https://github.com/zachasme/h3-pg' },
   ...contrib('geo', ['earthdistance'], { requires: ['cube'] }),
 
   // --- Search
@@ -64,7 +67,7 @@ export const EXTENSION_CATALOG: CatalogEntry[] = [
   { name: 'periods', category: 'types', apt: 'periods', dnf: 'periods', homepage: 'https://github.com/xocolatl/periods' },
 
   // --- Analytics, time series, scale-out
-  { name: 'timescaledb', category: 'analytics', preload: true, apt: 'timescaledb', dnf: 'timescaledb', fedora: 'timescaledb', homepage: 'https://www.timescale.com' },
+  { name: 'timescaledb', category: 'analytics', preload: true, apt: 'timescaledb', dnf: 'timescaledb', fedora: 'timescaledb', windows: 'timescaledb', homepage: 'https://www.timescale.com' },
   { name: 'citus', category: 'analytics', preload: true, brew: 'citus', dnf: 'citus', homepage: 'https://www.citusdata.com' },
   { name: 'hll', category: 'analytics', brew: 'postgresql-hll', apt: 'hll', dnf: 'hll', homepage: 'https://github.com/citusdata/postgresql-hll' },
   { name: 'tdigest', category: 'analytics', apt: 'tdigest', dnf: 'tdigest', homepage: 'https://github.com/tvondra/tdigest' },
@@ -107,7 +110,10 @@ export function catalogEntry(name: string): CatalogEntry | undefined {
   return BY_NAME.get(name);
 }
 
-export type PackageManager = 'brew' | 'apt' | 'dnf' | 'fedora';
+export type PackageManager = 'brew' | 'apt' | 'dnf' | 'fedora' | 'windows';
+
+/** What the Windows builds are called in the dialog */
+const WINDOWS_BUILDS = { postgis: 'PostGIS bundle (OSGeo)', timescaledb: 'TimescaleDB (Windows build)' } as const;
 
 /** Package providing the extension for this manager and server version, or null */
 export function extensionPackage(entry: CatalogEntry, manager: PackageManager, major: number): string | null {
@@ -116,13 +122,15 @@ export function extensionPackage(entry: CatalogEntry, manager: PackageManager, m
     case 'apt': return entry.apt ? `postgresql-${major}-${entry.apt}` : null;
     case 'dnf': return entry.dnf ? `${entry.dnf}_${major}` : null;
     case 'fedora': return entry.fedora ?? null;
+    case 'windows': return entry.windows ? WINDOWS_BUILDS[entry.windows] : null;
   }
 }
 
 /** Shell command installing the extension's package, or null when there is none for this manager */
 export function packageInstallCommand(entry: CatalogEntry, manager: PackageManager, major: number): string | null {
   const pkg = extensionPackage(entry, manager, major);
-  if (!pkg) return null;
+  // Windows: no command to give, bbdump downloads the official build itself
+  if (!pkg || manager === 'windows') return null;
   if (manager === 'brew') return `brew install ${pkg}`;
   return manager === 'apt' ? `sudo apt install ${pkg}` : `sudo dnf install ${pkg}`;
 }
@@ -165,7 +173,7 @@ const PACKAGE_RE = /^[a-z0-9][a-z0-9.+_-]*$/;
  * Root script installing an extension package on Linux (run through one pkexec prompt).
  * Prints "==> [NN%] message" steps like the setup scripts.
  */
-export function linuxExtensionScript(entry: CatalogEntry, manager: Exclude<PackageManager, 'brew'>, major: number): string {
+export function linuxExtensionScript(entry: CatalogEntry, manager: Exclude<PackageManager, 'brew' | 'windows'>, major: number): string {
   const pkg = extensionPackage(entry, manager, major);
   if (!pkg || !PACKAGE_RE.test(pkg)) throw new Error(`No ${manager} package for ${entry.name}`);
   const install = manager === 'apt'

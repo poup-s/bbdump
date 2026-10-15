@@ -19,7 +19,7 @@ import type { ModalSection } from './ui/AppModal.vue';
 import { btnGhost, inputClass } from './ui/classes';
 
 type Category = 'ai' | 'geo' | 'search' | 'types' | 'analytics' | 'jobs' | 'performance' | 'security' | 'integration' | 'dev' | 'other';
-type PackageManager = 'brew' | 'apt' | 'dnf' | 'fedora';
+type PackageManager = 'brew' | 'apt' | 'dnf' | 'fedora' | 'windows';
 
 interface CatalogEntry {
   name: string;
@@ -392,7 +392,7 @@ onMounted(load);
                     : t('postgresConfig.ext.noPackage') }}
                 </p>
               </template>
-              <p v-if="packageName === item.name" class="mt-1.5 text-[11px] text-emerald-700 dark:text-emerald-400" role="status">{{ server?.packageManager === 'brew' ? t('postgresConfig.ext.installing', { formula: item.installPackage ?? '' }) : t('postgresConfig.ext.installingLinux', { package: item.installPackage ?? '' }) }}</p>
+              <p v-if="packageName === item.name" class="mt-1.5 text-[11px] text-emerald-700 dark:text-emerald-400" role="status">{{ server?.packageManager === 'brew' ? t('postgresConfig.ext.installing', { formula: item.installPackage ?? '' }) : server?.packageManager === 'windows' ? t('postgresConfig.ext.installingWindows', { package: item.installPackage ?? '' }) : t('postgresConfig.ext.installingLinux', { package: item.installPackage ?? '' }) }}</p>
               <p
                 v-if="item.name === 'pg_stat_statements' && item.state === 'enabled'"
                 class="mt-2 px-2.5 py-1.5 rounded-lg border border-amber-200 dark:border-amber-900/60 bg-amber-50/60 dark:bg-amber-950/20 text-[11px] leading-relaxed text-amber-800 dark:text-amber-300"
