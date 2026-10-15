@@ -2,6 +2,7 @@ import { Client, QueryConfig } from 'pg';
 import { getErrorMessage } from './utils';
 import { logger } from './logger';
 import { checkPostgresInstalled } from './postgresManager';
+import { localPasswordCandidates } from './localServerCredential';
 import { catalogEntry, extensionPackage, isOutdatedHomebrew, linuxExtensionScript, parseLibraryList, preloadLiterals, withPreloadLibrary, type PackageManager } from './extensionCatalog';
 
 /** pkexec on the PATH (graphical root prompt on Linux desktops) */
@@ -109,8 +110,8 @@ async function createPostgresConnection(port: number = 5432, database: string = 
   for (const user of usersToTry) {
     if (!user) continue;
 
-    // No password (trust auth) only — never guess common passwords
-    const passwords = [''];
+    // No password (trust auth), or the saved one on Windows — never guess common passwords
+    const passwords = localPasswordCandidates(user);
 
     for (const pwd of passwords) {
       const client = new Client({
@@ -465,10 +466,10 @@ export async function testDatabaseConnection(
     }
   }
 
-  // Without a password (trust auth); never guess common passwords
-  const passwordsToTry = [''];
+  // Without a password (trust auth), or the saved one on Windows; never guess common passwords
   for (const user of usersToTry) {
     if (!user) continue;
+    const passwordsToTry = localPasswordCandidates(user);
 
     for (const pwd of passwordsToTry) {
       const client = new Client({

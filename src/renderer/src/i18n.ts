@@ -1722,7 +1722,6 @@ export const translations = {
                     desc: 'Client tools only (pg_dump, psql), no server. The lightest option to manage databases hosted elsewhere.'
                 },
                 recommended: 'Recommended',
-                windowsSoon: 'Not on Windows yet',
                 analyzing: 'Looking at this computer…',
                 changeLater: 'You can switch mode at any time in Settings.'
             },
@@ -1778,12 +1777,13 @@ export const translations = {
                 serverMissingTitle: 'No local server ready yet',
                 serverMissingDesc: 'Set it up above, or continue with remote databases only: you can add a local server later.',
                 switchToRemote: 'Use remote mode',
-                windowsTitle: 'Windows (beta): remote databases',
-                windowsDesc: 'On Windows, bbdump manages remote databases (and a PostgreSQL already running on this computer); it does not install a server. Backups need the PostgreSQL client tools.',
-                windowsNoTools: 'bbdump installs the PostgreSQL client tools (no server): Windows asks once for administrator rights, then it takes a few minutes.',
                 windowsInstallTools: 'Install the client tools',
-                windowsNoWinget: 'winget is not available on this computer: run the command below, or install the EDB installer from postgresql.org (command line tools only), then check again.',
-                windowsRemote: 'The client tools are here: remote databases will work.'
+                windowsNoWinget: 'winget is not available on this computer: run the command below, or the EDB installer from postgresql.org, then check again.',
+                adminOnce: 'Windows asks for administrator rights once',
+                localPasswordDesc: 'PostgreSQL runs on this computer but was not installed by bbdump: type the password of its "postgres" user, chosen when it was installed. bbdump checks it and keeps it encrypted.',
+                localPasswordPlaceholder: 'Password of the "postgres" user',
+                localPasswordSave: 'Use this password',
+                localPasswordWrong: 'This password does not open PostgreSQL'
             },
             databases: {
                 titleLocal: 'Your local databases',
@@ -3782,7 +3782,6 @@ export const translations = {
                     desc: 'Outils clients seulement (pg_dump, psql), sans serveur. L\'option la plus légère pour gérer des bases hébergées ailleurs.'
                 },
                 recommended: 'Recommandé',
-                windowsSoon: 'Pas encore sur Windows',
                 analyzing: 'Analyse de cet ordinateur…',
                 changeLater: 'Tu peux changer de mode à tout moment dans les Réglages.'
             },
@@ -3838,12 +3837,13 @@ export const translations = {
                 serverMissingTitle: 'Aucun serveur local prêt pour l\'instant',
                 serverMissingDesc: 'Configure-le ci-dessus, ou continue avec des bases distantes uniquement : tu pourras ajouter un serveur local plus tard.',
                 switchToRemote: 'Continuer en mode distant',
-                windowsTitle: 'Windows (bêta) : bases distantes',
-                windowsDesc: 'Sur Windows, bbdump gère les bases distantes (et un PostgreSQL déjà lancé sur cet ordinateur) ; il n\'installe pas de serveur. Les sauvegardes ont besoin des outils clients PostgreSQL.',
-                windowsNoTools: 'bbdump installe les outils clients PostgreSQL (sans serveur) : Windows demande une fois les droits administrateur, puis ça prend quelques minutes.',
                 windowsInstallTools: 'Installer les outils clients',
-                windowsNoWinget: "winget n'est pas disponible sur cet ordinateur : lance la commande ci-dessous, ou l'installeur EDB de postgresql.org (outils en ligne de commande seulement), puis revérifie.",
-                windowsRemote: 'Les outils clients sont présents : les bases distantes fonctionneront.'
+                windowsNoWinget: "winget n'est pas disponible sur cet ordinateur : lance la commande ci-dessous, ou l'installeur EDB de postgresql.org, puis revérifie.",
+                adminOnce: 'Windows demande une fois les droits administrateur',
+                localPasswordDesc: "PostgreSQL tourne sur cet ordinateur mais n'a pas été installé par bbdump : tape le mot de passe de son utilisateur « postgres », choisi à son installation. bbdump le vérifie et le garde chiffré.",
+                localPasswordPlaceholder: 'Mot de passe de l\'utilisateur « postgres »',
+                localPasswordSave: 'Utiliser ce mot de passe',
+                localPasswordWrong: "Ce mot de passe n'ouvre pas PostgreSQL"
             },
             databases: {
                 titleLocal: 'Tes bases locales',

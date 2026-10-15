@@ -44,6 +44,33 @@ export function windowsPgBinDirs(
   return dirs.sort((a, b) => b.version - a.version).map(d => d.dir);
 }
 
+/**
+ * PostgreSQL servers the EDB installer set up: <root>\PostgreSQL\<version>\data exists (the
+ * client tools alone have no data folder), newest first.
+ */
+export function windowsPgServers(
+  env: NodeJS.ProcessEnv = process.env,
+  readdir: ReadDir = dir => fs.readdirSync(dir),
+  exists: (p: string) => boolean = fs.existsSync,
+): Array<{ major: string; dataDir: string }> {
+  const servers: Array<{ major: string; dataDir: string; version: number }> = [];
+  for (const root of programFilesRoots(env)) {
+    const base = path.win32.join(root, 'PostgreSQL');
+    let entries: string[] = [];
+    try {
+      entries = readdir(base);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const dataDir = path.win32.join(base, entry, 'data');
+      const version = parseFloat(entry);
+      if (version && exists(dataDir)) servers.push({ major: String(Math.trunc(version)), dataDir, version });
+    }
+  }
+  return servers.sort((a, b) => b.version - a.version).map(({ major, dataDir }) => ({ major, dataDir }));
+}
+
 /** Every copy of a tool (e.g. "pg_dump") in those folders, newest version first */
 export function windowsPgTool(
   tool: string,

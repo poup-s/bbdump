@@ -41,7 +41,7 @@ function saveLocalCopy(name: string, port: number, user: string, password?: stri
         host: 'localhost',
         port,
         user,
-        password: password || '',
+        password: password ? encryptionManager.encrypt(password) : '',
         encrypted: !!password,
         encryptBackups: false,
         cron: '0 0 * * *',
@@ -88,7 +88,7 @@ async function duplicateAnonymized(
         }
         created = true;
         const user = createResult.database.user;
-        const target = { host: 'localhost', port: params.targetPort, user, password: params.targetPassword || '', database: params.targetName };
+        const target = { host: 'localhost', port: params.targetPort, user, password: createResult.database.password || '', database: params.targetName };
 
         sendProgress('copying', 'Creating the tables...', 25);
         let copyWarnings: string[] = [];
@@ -111,7 +111,7 @@ async function duplicateAnonymized(
         }
 
         sendProgress('complete', 'Adding database to configuration...', 97);
-        saveLocalCopy(params.targetName, params.targetPort, user, params.targetPassword);
+        saveLocalCopy(params.targetName, params.targetPort, user, createResult.database.password);
         created = false;
         const warnings = [...(restore.warnings ?? []), ...copyWarnings];
         logger.info(`Anonymized copy of "${sourceDb.name}" into "${params.targetName}": ${copiedRows} row(s), ${choices.columns.length} column(s) chosen, ${choices.emptyTables.length} table(s) left empty${warnings.length ? `, ${warnings.length} warning(s)` : ''}`);
@@ -350,7 +350,8 @@ export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWin
                 host: 'localhost',
                 port: params.targetPort,
                 user: newDbUser,
-                password: '', // Local DBs usually trust local connections or use ident/peer
+                // Trust / peer auth (empty), or the local server's saved password (Windows)
+                password: createResult.database.password || '',
                 connectionString: undefined
             });
 
@@ -367,7 +368,7 @@ export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWin
             sendProgress('complete', 'Adding database to configuration...', 95);
 
             // No lastBackup: the dump belongs to the source, the copy was never backed up
-            saveLocalCopy(params.targetName, params.targetPort, newDbUser, params.targetPassword);
+            saveLocalCopy(params.targetName, params.targetPort, newDbUser, createResult.database.password);
 
             // Duplication succeeded, backup file is kept as part of normal backups
             createdBackupFile = null;

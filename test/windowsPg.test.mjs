@@ -73,18 +73,41 @@ test('winget, an app execution alias that stat() cannot follow, is still found',
   assert.equal(isWindowsExecutable('missing.exe', { statSync: fail, lstatSync: fail }), false);
 });
 
-test('Windows: the client tools install with winget, nothing else', () => {
+test('Windows: the client tools and the server install with winget', () => {
   const { canRunInstall, planFor } = require(path.join(process.cwd(), 'dist/main/platform/install.js'));
-  const windows = { os: 'windows', osLabel: 'Windows', supported: false, arch: 'x64', packageManager: { id: 'winget', path: 'winget.exe' } };
-  const tools = planFor('client-tools', windows, 'me');
-  assert.equal(tools.automatic, true);
-  assert.equal(canRunInstall('client-tools', windows, tools), true);
-  const server = planFor('server', windows, 'me');
-  assert.equal(server.automatic, false);
-  assert.equal(canRunInstall('server', windows, server), false);
+  const windows = { os: 'windows', osLabel: 'Windows', supported: true, arch: 'x64', packageManager: { id: 'winget', path: 'winget.exe' } };
+  for (const component of ['client-tools', 'server']) {
+    const plan = planFor(component, windows, 'me');
+    assert.equal(plan.automatic, true);
+    assert.equal(canRunInstall(windows, plan), true);
+  }
   const noWinget = { ...windows, packageManager: null };
   const manual = planFor('client-tools', noWinget, 'me');
   assert.equal(manual.automatic, false);
   assert.match(manual.command, /^winget install/);
-  assert.equal(canRunInstall('client-tools', noWinget, manual), false);
+  assert.equal(canRunInstall(noWinget, manual), false);
+});
+
+test('servers: a data folder, newest first (the client tools alone have none)', () => {
+  const { windowsPgServers } = require(path.join(process.cwd(), 'dist/main/platform/windowsPg.js'));
+  const withData = p => files.has(p) || p === 'C:\\Program Files\\PostgreSQL\\16\\data' || p === 'C:\\Program Files (x86)\\PostgreSQL\\15\\data';
+  assert.deepEqual(windowsPgServers(env, readdir, withData), [
+    { major: '16', dataDir: 'C:\\Program Files\\PostgreSQL\\16\\data' },
+    { major: '15', dataDir: 'C:\\Program Files (x86)\\PostgreSQL\\15\\data' },
+  ]);
+  assert.deepEqual(windowsPgServers(env, readdir, exists), []);
+});
+
+test('server install: the password only in an option file, the service named by EDB', () => {
+  const windows = require(path.join(process.cwd(), 'dist/main/platform/windows.js'));
+  const file = windows.serverOptionFile('s3cret-Pw_', 5432);
+  assert.match(file, /^mode=unattended\r\n/);
+  assert.match(file, /\r\nsuperpassword=s3cret-Pw_\r\n/);
+  assert.match(file, /\r\nenable-components=server,commandlinetools\r\n/);
+  assert.match(file, /\r\ndisable-components=pgAdmin,stackbuilder\r\n/);
+  const args = windows.wingetServerArgs('18', 'C:\\Users\\Jo Doe\\AppData\\Local\\Temp\\bbdump-pg-1\\postgresql.opt');
+  assert.deepEqual(args.slice(0, 5), ['install', '-e', '--id', 'PostgreSQL.PostgreSQL.18', '--force']);
+  assert.equal(args.at(-1), '--optionfile "C:\\Users\\Jo Doe\\AppData\\Local\\Temp\\bbdump-pg-1\\postgresql.opt"');
+  assert.ok(!args.join(' ').includes('s3cret'));
+  assert.equal(windows.windowsServiceName('18'), 'postgresql-x64-18');
 });

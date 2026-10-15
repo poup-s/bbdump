@@ -6,6 +6,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as postgresManager from './postgresManager';
 import { tryPgConnect, getPgClient } from './postgresManager';
+import { localPasswordCandidates, localServerPassword } from './localServerCredential';
 
 interface CreateDatabaseParams {
   name: string;
@@ -61,13 +62,11 @@ async function checkPostgresServer(port: number, password?: string): Promise<{ a
       }
     }
 
-    // TCP: the provided password, then none (trust auth) — never guess common passwords
-    const passwords = password ? [password, ''] : [''];
-
+    // TCP: the provided password, the saved one (Windows), then none (trust auth) — never guess common passwords
     for (const user of usersToTry) {
       if (!user) continue;
 
-      for (const pwd of passwords) {
+      for (const pwd of localPasswordCandidates(user, password)) {
         const testClient = new Client({
           host: 'localhost',
           port: port,
@@ -152,13 +151,13 @@ async function detectPostgresUser(port: number, password?: string): Promise<stri
       }
     }
 
-    // TCP with provided password or empty (macOS trust auth)
+    // TCP with provided password, the saved one (Windows), or empty (macOS trust auth)
     try {
       const testClient = new Client({
         host: 'localhost',
         port: port,
         user: user,
-        password: password || (isLinux ? 'postgres' : ''),
+        password: password || localServerPassword(user) || (isLinux ? 'postgres' : ''),
         database: 'postgres',
         connectionTimeoutMillis: 3000
       });
@@ -201,10 +200,8 @@ async function connectToPostgresServer(port: number, password?: string): Promise
     }
   }
 
-  // The provided password, then none (trust auth) — never guess common passwords
-  const passwords = password ? [password, ''] : [''];
-
-  for (const pwd of passwords) {
+  // The provided password, the saved one (Windows), then none (trust auth) — never guess common passwords
+  for (const pwd of localPasswordCandidates(postgresUser, password)) {
     const client = new Client({
       host: 'localhost',
       port: port,
@@ -332,7 +329,8 @@ export async function createLocalDatabase(
         host: 'localhost',
         port: serverPort,
         user: postgresUser,
-        password: params.password || '' // Use the provided password or empty
+        // The provided password, else the local server's saved one (Windows), else none
+        password: params.password || localServerPassword(postgresUser)
       }
     };
   } catch (error) {

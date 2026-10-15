@@ -10,7 +10,7 @@ import { getErrorMessage } from '../utils';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
-import { ipcRenderer, isWindows } from '../electron';
+import { ipcRenderer } from '../electron';
 import { store, isRemoteOnly } from '../store';
 import PostgresConfig from './PostgresConfig.vue';
 import McpClientList from './McpClientList.vue';
@@ -112,9 +112,7 @@ const usageModeStatus = computed(() => {
   return { tone: 'ok', title, detail: t('settings.usageModeLocalRunning', { version, port: server.port }) };
 });
 
-// Not on Windows: bbdump does not install or drive a PostgreSQL server there (beta)
-const showAddLocalServer = computed(() => !isWindows
-  && (isRemoteOnly() || (localServerChecked.value && !(localServer.value?.installed && localServer.value.running))));
+const showAddLocalServer = computed(() => (isRemoteOnly() || (localServerChecked.value && !(localServer.value?.installed && localServer.value.running))));
 
 const addLocalServer = () => {
   store.onboardingEntry = 'add-local-server';

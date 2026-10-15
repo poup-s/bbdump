@@ -1,11 +1,12 @@
 /**
- * Windows adapter (beta). SetupEnvironment.supported stays false: bbdump does not set up a
- * local server on Windows. The client tools are installed with winget (EDB installer, its
- * command line tools only); this module describes the commands, install.ts runs them.
+ * Windows adapter (beta). winget runs the EDB installer: its command line tools only, or the
+ * server too (a Windows service started with the computer, "postgres" superuser with a
+ * password bbdump generates and keeps encrypted). This module describes the commands,
+ * install.ts runs them.
  */
 import type { SetupComponent } from '../../types/setup';
 
-export const WINDOWS_SUPPORTED = false;
+export const WINDOWS_SUPPORTED = true;
 
 /** winget package for the EDB installer (server + command line tools). */
 export const WINGET_POSTGRES_ID = 'PostgreSQL.PostgreSQL.17';
@@ -30,6 +31,7 @@ export function windowsCommand(component: SetupComponent): string {
       // pgAdmin or Stack Builder); bbdump finds them in Program Files\PostgreSQL\<v>\bin
       return `winget ${wingetClientToolsArgs(WINGET_CLIENT_MAJORS[WINGET_CLIENT_MAJORS.length - 1]).map(a => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`;
     case 'server':
+      // By hand, the EDB installer's own window asks for the password: bbdump asks for it after
       return `winget install -e --id ${WINGET_POSTGRES_ID} --accept-package-agreements --accept-source-agreements`;
   }
 }
@@ -58,4 +60,37 @@ export function wingetOutcome(code: number | null, output: string): 'installed' 
   // 1223 / 0x800704C7: the administrator prompt was refused
   if (code === 1223 || code === -2147023673 || /cancel|annul/.test(text)) return 'cancelled';
   return 'failed';
+}
+
+/** The Windows service the EDB installer creates for PostgreSQL <major> */
+export function windowsServiceName(major: string): string {
+  return `postgresql-x64-${major}`;
+}
+
+/**
+ * EDB installer option file for the server (one option=value per line), so the password
+ * never appears on a command line. The service starts with Windows.
+ */
+export function serverOptionFile(password: string, port = 5432): string {
+  return [
+    'mode=unattended',
+    'unattendedmodeui=minimal',
+    `superpassword=${password}`,
+    `serverport=${port}`,
+    'enable-components=server,commandlinetools',
+    'disable-components=pgAdmin,stackbuilder',
+    '',
+  ].join('\r\n');
+}
+
+/**
+ * winget arguments installing PostgreSQL <major>'s server with an option file. --force runs
+ * the installer again when winget already installed this version's client tools.
+ */
+export function wingetServerArgs(major: string, optionFile: string): string[] {
+  return [
+    'install', '-e', '--id', `PostgreSQL.PostgreSQL.${major}`, '--force',
+    '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity',
+    '--override', `--optionfile "${optionFile}"`,
+  ];
 }

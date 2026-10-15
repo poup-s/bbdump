@@ -13,6 +13,7 @@ import { listBackupFiles } from '../backupLocations';
 import { clearInheritedLastBackups } from '../inheritedBackupDate';
 import * as crypto from 'crypto';
 import { safeResolveLocalUser } from '../localPgUser';
+import { withLocalServerPassword } from '../localServerCredential';
 import { applyLaunchAtLogin } from '../loginItem';
 import { moveUriPasswordsOutOfConfig, splitUriPassword, toRuntimeDatabase } from '../dbSecrets';
 
@@ -276,16 +277,23 @@ export function registerConfigHandlers() {
             id: db.id || crypto.randomUUID(),
         });
 
-        const passwordValue = db.password || '';
+        let passwordValue = db.password || '';
         const detectedUser = await safeResolveLocalUser(sanitizedDb, passwordValue);
         if (detectedUser) {
             sanitizedDb.user = detectedUser;
             db = { ...db, user: detectedUser };
         }
+        // Windows: a database on the local server is saved with its password (the AI
+        // assistants read the saved databases), encrypted like any other
+        let encrypt = shouldEncrypt;
+        if (!passwordValue) {
+            passwordValue = withLocalServerPassword({ ...sanitizedDb, password: '' }).password || '';
+            if (passwordValue) encrypt = true;
+        }
         const dbToSave = {
             ...sanitizedDb,
-            encrypted: shouldEncrypt && passwordValue.length > 0,
-            password: (shouldEncrypt && passwordValue.length > 0) ? encryptionManager.encrypt(passwordValue) : passwordValue
+            encrypted: encrypt && passwordValue.length > 0,
+            password: (encrypt && passwordValue.length > 0) ? encryptionManager.encrypt(passwordValue) : passwordValue
         };
 
         config.databases.push(dbToSave);

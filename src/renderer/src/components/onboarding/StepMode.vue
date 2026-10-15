@@ -7,8 +7,6 @@ import StepHeader from './StepHeader.vue';
 const { t } = useI18n();
 const { state, recommendedMode } = useOnboarding();
 
-const windows = computed(() => state.env?.supported === false);
-
 interface ModeCard {
   id: SelectableMode;
   icon: string;
@@ -23,8 +21,8 @@ const cards = computed<ModeCard[]>(() => {
     {
       id: 'local',
       icon: 'M4 5h16v10H4zM8 19h8M12 15v4',
-      disabled: windows.value,
-      badges: windows.value ? [t('onboarding.mode.windowsSoon')] : badge('local'),
+      disabled: false,
+      badges: badge('local'),
     },
     {
       id: 'remote',
@@ -46,7 +44,6 @@ watch(
   () => state.envStatus,
   status => {
     if (status === 'ready' && !state.mode) state.mode = recommendedMode.value;
-    if (windows.value && state.mode === 'local') state.mode = 'remote';
   },
   { immediate: true },
 );

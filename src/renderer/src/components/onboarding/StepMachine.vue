@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import type { SetupComponent, SetupTool } from '../../../../types/setup';
 import { useI18n } from '../../composables/useI18n';
 import { useOnboarding } from './useOnboarding';
@@ -8,11 +8,14 @@ import SetupRow from './SetupRow.vue';
 import InstallAction from './InstallAction.vue';
 
 const { t } = useI18n();
-const { state, serverReady, loadEnvironment } = useOnboarding();
+const { state, serverReady, loadEnvironment, saveLocalPassword } = useOnboarding();
 
 const env = computed(() => state.env);
 const isMac = computed(() => env.value?.os === 'macos');
 const isLinux = computed(() => env.value?.os === 'linux');
+const isWindows = computed(() => env.value?.os === 'windows');
+/** Windows: a server installed without bbdump answers, but only with its own "postgres" password */
+const needsLocalPassword = computed(() => isWindows.value && !!env.value?.server.running && !env.value.server.canConnect);
 const local = computed(() => state.mode === 'local');
 // The server install brings the client tools on every platform (Debian postgresql ->
 // postgresql-client, Fedora/SUSE postgresql-server -> postgresql, Arch/Homebrew one package)
@@ -63,11 +66,28 @@ const serverStatus = computed(() => {
   return { status: 'ok' as const, detail: `${version} · ${t('onboarding.machine.serverRunning', { port: server.port })}${role}`, action: '' };
 });
 
-/** Linux: one graphical password prompt (pkexec). Say it on the button. */
-const withPasswordNote = (label: string) => (isLinux.value ? `${label} · ${t('onboarding.machine.passwordOnce')}` : label);
+/** Linux: one graphical password prompt (pkexec); Windows: one administrator prompt. Say it on the button. */
+const withPasswordNote = (label: string) => {
+  if (isLinux.value) return `${label} · ${t('onboarding.machine.passwordOnce')}`;
+  if (isWindows.value) return `${label} · ${t('onboarding.machine.adminOnce')}`;
+  return label;
+};
+
+const localPassword = ref('');
+const localPasswordError = ref('');
+const savingLocalPassword = ref(false);
+const submitLocalPassword = async () => {
+  if (!localPassword.value || savingLocalPassword.value) return;
+  savingLocalPassword.value = true;
+  localPasswordError.value = '';
+  const error = await saveLocalPassword(localPassword.value);
+  savingLocalPassword.value = false;
+  if (error) localPasswordError.value = error;
+  else localPassword.value = '';
+};
 
 const clientToolsLabel = computed(() =>
-  withPasswordNote(isMac.value ? t('onboarding.machine.installWithBrew') : t('onboarding.machine.install')));
+  withPasswordNote(isMac.value ? t('onboarding.machine.installWithBrew') : isWindows.value ? t('onboarding.machine.windowsInstallTools') : t('onboarding.machine.install')));
 
 /** Automatic install possible here (otherwise the command is the way forward). */
 const canAuto = (component: SetupComponent) => {
@@ -138,39 +158,7 @@ const skipCheck = () => {
       <p v-if="state.envSkipped" class="mt-3 text-xs text-zinc-500">{{ t('onboarding.machine.skipped') }}</p>
     </div>
 
-    <!-- Windows (not supported yet) -->
-    <div v-else-if="env && !env.supported" class="space-y-3">
-      <div class="rounded-xl border border-zinc-800 bg-zinc-900/40 p-4">
-        <div class="text-sm text-zinc-100">{{ t('onboarding.machine.windowsTitle') }}</div>
-        <p class="mt-1 text-xs leading-relaxed text-zinc-400">{{ t('onboarding.machine.windowsDesc') }}</p>
-      </div>
-      <div class="rounded-xl border border-zinc-800">
-        <SetupRow :title="t('onboarding.machine.clientTools')" :detail="toolsDetail" :status="env.clientTools.ready ? 'ok' : 'missing'">
-          <template v-if="!env.clientTools.ready">
-            <p class="text-xs text-zinc-400">{{ t('onboarding.machine.windowsNoTools') }}</p>
-            <!-- winget runs the PostgreSQL installer (client tools only); Windows asks once for administrator rights -->
-            <InstallAction
-              component="client-tools"
-              :label="t('onboarding.machine.windowsInstallTools')"
-              :automatic="env.packageManager?.id === 'winget'"
-              :manual-hint="env.packageManager?.id === 'winget' ? undefined : t('onboarding.machine.windowsNoWinget')"
-            />
-            <div class="mt-3 flex flex-wrap gap-2">
-              <button type="button" class="btn-secondary" @click="loadEnvironment">{{ t('onboarding.retry') }}</button>
-              <!-- The explorer and AI assistants work without them; backups need them -->
-              <button v-if="!state.envSkipped" type="button" class="btn-ghost !text-xs" @click="skipCheck">{{ t('onboarding.machine.skipCheck') }}</button>
-            </div>
-            <p v-if="state.envSkipped" class="mt-2 text-xs text-zinc-500">{{ t('onboarding.machine.skipped') }}</p>
-          </template>
-        </SetupRow>
-      </div>
-      <div v-if="env.clientTools.ready && state.mode !== 'remote'" class="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 p-4">
-        <p class="text-xs text-zinc-400">{{ t('onboarding.machine.windowsRemote') }}</p>
-        <button type="button" class="btn-secondary shrink-0" @click="switchToRemote">{{ t('onboarding.machine.switchToRemote') }}</button>
-      </div>
-    </div>
-
-    <!-- macOS / Linux -->
+    <!-- macOS / Linux / Windows -->
     <div v-else-if="env" class="space-y-3">
       <div class="rounded-xl border border-zinc-800 divide-y divide-zinc-800/80" :class="state.envStatus === 'loading' ? 'opacity-60' : ''">
         <!-- Homebrew first on a Mac without it -->
@@ -202,7 +190,7 @@ const skipCheck = () => {
             component="client-tools"
             :label="clientToolsLabel"
             :automatic="canAuto('client-tools')"
-            :manual-hint="needsHomebrew ? t('onboarding.machine.homebrewFirst') : t('onboarding.machine.runInTerminal')"
+            :manual-hint="needsHomebrew ? t('onboarding.machine.homebrewFirst') : isWindows ? t('onboarding.machine.windowsNoWinget') : t('onboarding.machine.runInTerminal')"
             :blocked="needsHomebrew"
           />
         </SetupRow>
@@ -217,12 +205,30 @@ const skipCheck = () => {
           <template #aside>
             <span v-if="env.server.serviceName" class="font-mono text-[10px] text-zinc-600 truncate">{{ env.server.serviceName }}</span>
           </template>
+          <!-- Windows: a server bbdump did not install; its password is checked, then kept encrypted -->
+          <form v-if="needsLocalPassword" class="space-y-2" @submit.prevent="submitLocalPassword">
+            <p class="text-xs text-zinc-400">{{ t('onboarding.machine.localPasswordDesc') }}</p>
+            <div class="flex gap-2">
+              <input
+                v-model="localPassword"
+                type="password"
+                autocomplete="off"
+                class="flex-1 min-w-0 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-100 placeholder:text-zinc-600 transition-colors focus:outline-none focus:border-zinc-600"
+                :placeholder="t('onboarding.machine.localPasswordPlaceholder')"
+                :aria-label="t('onboarding.machine.localPasswordPlaceholder')"
+              >
+              <button type="submit" class="btn-secondary shrink-0" :disabled="!localPassword || savingLocalPassword">
+                {{ t('onboarding.machine.localPasswordSave') }}
+              </button>
+            </div>
+            <p v-if="localPasswordError" class="text-xs text-red-400 break-words">{{ localPasswordError }}</p>
+          </form>
           <InstallAction
-            v-if="!serverReady"
+            v-else-if="!serverReady"
             component="server"
             :label="withPasswordNote(serverStatus.action)"
             :automatic="canAuto('server')"
-            :manual-hint="needsHomebrew ? t('onboarding.machine.homebrewFirst') : t('onboarding.machine.runInTerminal')"
+            :manual-hint="needsHomebrew ? t('onboarding.machine.homebrewFirst') : isWindows ? t('onboarding.machine.windowsNoWinget') : t('onboarding.machine.runInTerminal')"
             :blocked="needsHomebrew"
           />
         </SetupRow>

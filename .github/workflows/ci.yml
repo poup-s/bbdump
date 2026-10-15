@@ -106,6 +106,31 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'bbdump does not find pg_dump' }
           }
 
+      # The local server as bbdump installs it: over the client tools above (winget --force), the
+      # password only in an option file, a service started with Windows, reachable with that password
+      - name: Local server through winget (bbdump's own option file)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Write-Host 'winget is not on this runner: skipped'; exit 0 }
+          $dir = Join-Path $env:RUNNER_TEMP 'bbdump pg'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $opt = Join-Path $dir 'postgresql.opt'
+          $env:BBDUMP_TEST_PW = 'ci-' + [guid]::NewGuid().ToString('N')
+          node -e "require('fs').writeFileSync(process.argv[1], require('./dist/main/platform/windows.js').serverOptionFile(process.env.BBDUMP_TEST_PW, 5432))" $opt
+          $wingetArgs = node -e "console.log(JSON.stringify(require('./dist/main/platform/windows.js').wingetServerArgs('18', process.argv[1])))" $opt | ConvertFrom-Json
+          & winget @wingetArgs
+          $code = $LASTEXITCODE
+          Remove-Item -Recurse -Force $dir
+          Write-Host "winget exit code: $code"
+          node -e "console.log('outcome:', require('./dist/main/platform/windows.js').wingetOutcome($code, ''))"
+          Get-Service -Name 'postgresql-x64-18' | Format-List Name, Status, StartType
+          if (-not (Test-Path 'C:\Program Files\PostgreSQL\18\data')) { throw 'no data folder' }
+          node -e "console.log('servers:', JSON.stringify(require('./dist/main/platform/windowsPg.js').windowsPgServers()))"
+          $env:PGPASSWORD = $env:BBDUMP_TEST_PW
+          & 'C:\Program Files\PostgreSQL\18\bin\psql.exe' -h localhost -p 5432 -U postgres -d postgres -tAc 'select version()'
+          if ($LASTEXITCODE -ne 0) { throw 'cannot connect with the generated password' }
+
       - name: The packaged app starts
         shell: pwsh
         run: |

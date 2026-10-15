@@ -13,7 +13,8 @@ import {
   familyFromPackageManager, packageManagerBinary, packageManagersFor, parseDistro, readOsRelease,
   type LinuxDistro,
 } from './linux';
-import { WINDOWS_SUPPORTED, wingetCandidates } from './windows';
+import { WINDOWS_SUPPORTED, windowsServiceName, wingetCandidates } from './windows';
+import { windowsPgServers } from './windowsPg';
 import { defaultWhich, firstExisting, isPortOpen, parseVersion, run, withTimeout, type WhichFn } from './probe';
 
 export interface DetectOptions {
@@ -72,7 +73,7 @@ export function installFamily(env: Pick<SetupEnvironment, 'distro' | 'packageMan
 
 /**
  * macOS: Homebrew present. Linux: pkexec (graphical sudo) plus a package manager of a
- * known family. Windows: not yet.
+ * known family. Windows: winget (it asks Windows for administrator rights itself).
  */
 export function computeCanAutoInstall(
   setupOs: SetupOs,
@@ -82,7 +83,7 @@ export function computeCanAutoInstall(
 ): boolean {
   if (setupOs === 'macos') return packageManager?.id === 'brew';
   if (setupOs === 'linux') return hasPkexec && !!packageManager && family !== 'unknown';
-  return false;
+  return packageManager?.id === 'winget';
 }
 
 async function macosLabel(): Promise<string> {
@@ -123,6 +124,10 @@ async function detectServiceName(setupOs: SetupOs, brewPath: string | undefined,
     if (!systemctl) return undefined;
     const result = await run(systemctl, ['list-unit-files', '--type=service', '--no-legend', '--no-pager', 'postgresql*'], 3000);
     return parseSystemdUnits(result.stdout);
+  }
+  if (setupOs === 'windows') {
+    const major = windowsPgServers()[0]?.major;
+    return major ? windowsServiceName(major) : undefined;
   }
   return undefined;
 }
@@ -211,7 +216,10 @@ export async function detectEnvironment(options: DetectOptions = {}): Promise<Se
     })(), 8000, null)
     : null;
 
-  const serverInstalled = !!installedInfo.hasServer || postgresBinary.installed;
+  // Windows: postgres.exe comes with the client tools too; a server has a data folder
+  const serverInstalled = setupOs === 'windows'
+    ? windowsPgServers().length > 0 || running
+    : !!installedInfo.hasServer || postgresBinary.installed;
   const serviceName = serverInstalled || running
     ? await withTimeout(detectServiceName(setupOs, homebrew?.path, which), 9000, undefined)
     : undefined;
