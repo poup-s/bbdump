@@ -152,6 +152,22 @@ jobs:
           & $psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION timescaledb' -tAc "select extversion from pg_extension where extname = 'timescaledb'"
           if ($LASTEXITCODE -ne 0) { throw 'TimescaleDB cannot be created' }
 
+      # The MCP server as AI assistants launch it (bbdump.exe + ELECTRON_RUN_AS_NODE), the app running
+      - name: MCP server of the packaged app (reads, then a backup through the app)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Program Files\PostgreSQL\18\data')) { Write-Host 'no local server: skipped'; exit 0 }
+          $env:PGPASSWORD = $env:BBDUMP_TEST_PW
+          $psql = 'C:\Program Files\PostgreSQL\18\bin\psql.exe'
+          & $psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE bbdump_mcp_ci'
+          & $psql -h localhost -U postgres -d bbdump_mcp_ci -v ON_ERROR_STOP=1 -c "CREATE TABLE items (id serial PRIMARY KEY, name text NOT NULL); INSERT INTO items (name) VALUES ('a'), ('b'), ('c')"
+          node scripts/ci-mcp-smoke.mjs (Join-Path $PWD 'release\win-unpacked\bbdump.exe') (Join-Path $PWD 'release\win-unpacked\resources\mcp-postgres\index.js')
+          $code = $LASTEXITCODE
+          $log = Join-Path $env:APPDATA 'bbdump\logs\app.log'
+          if (Test-Path $log) { Get-Content $log -Tail 40 }
+          if ($code -ne 0) { throw 'MCP check failed' }
+
       - name: The packaged app starts
         shell: pwsh
         run: |

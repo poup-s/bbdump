@@ -9,7 +9,11 @@
   computer. In local mode bbdump installs the PostgreSQL server with winget (a Windows service
   started with the computer; bbdump generates the password of its "postgres" user and keeps it
   encrypted), starts it when it is stopped, and asks once for the password of a server it did
-  not install. The PostgreSQL client tools are found where
+  not install. Extensions install in one click there too: PostGIS (with raster, topology,
+  pgRouting and H3) and TimescaleDB come from their official Windows builds, downloaded and
+  checked by bbdump, then copied into PostgreSQL after one administrator prompt; restarting
+  PostgreSQL for an extension loaded at startup works the same way. pgvector has no official
+  Windows build and is not offered. The PostgreSQL client tools are found where
   the EDB installer puts them, SSH goes through Windows' OpenSSH, and the AI assistants
   (Claude Desktop, including the Microsoft Store version, Claude Code…) can be connected as on
   macOS and Linux. Backups go to Documents\bbdump by default and can be on any drive.

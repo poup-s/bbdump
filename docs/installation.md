@@ -77,7 +77,7 @@ sudo apt install ./bbdump-*.deb
 
 Download `bbdump-*-setup.exe` (one installer for x64 and ARM64) and run it: bbdump installs for your user, without administrator rights, with Start menu and desktop shortcuts. The app is not code-signed yet, so Windows shows "Windows protected your PC": choose **More info → Run anyway**.
 
-Both usage modes work on Windows. In **local mode**, the first launch installs the PostgreSQL server with winget (the EDB installer, as a Windows service started with the computer; Windows asks once for administrator rights). bbdump generates the password of its `postgres` user and keeps it encrypted in its data folder (`local-server.json`). A PostgreSQL installed without bbdump is used too: type its `postgres` password once. Backups need the PostgreSQL client tools (below), which come with the server. The install script is for macOS and Linux only.
+Both usage modes work on Windows. In **local mode**, the first launch installs the PostgreSQL server with winget (the EDB installer, as a Windows service started with the computer; Windows asks once for administrator rights). bbdump generates the password of its `postgres` user and keeps it encrypted in its data folder (`local-server.json`). A PostgreSQL installed without bbdump is used too: type its `postgres` password once. Backups need the PostgreSQL client tools (below), which come with the server. Extensions install from the explorer: PostGIS (with raster, topology, pgRouting, H3) and TimescaleDB from their official Windows builds, checked then copied into PostgreSQL after one administrator prompt; pgvector has no official Windows build. The install script is for macOS and Linux only.
 
 ## First launch
 
