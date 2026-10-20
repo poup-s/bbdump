@@ -4,6 +4,8 @@ bbdump includes a built-in [Model Context Protocol](https://modelcontextprotocol
 
 Reads are free; every write needs your approval in bbdump (see [Mutation Confirmation](#mutation-confirmation)).
 
+The same server, limited to one database and to reading, also powers the [database chat](database-chat.md) inside bbdump.
+
 ## Overview
 
 Once installed, your AI assistant can:

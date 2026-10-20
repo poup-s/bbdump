@@ -6,7 +6,8 @@
 
 <p align="center">
   A desktop app for your PostgreSQL databases, local or remote —<br>
-  verified backups, real restores, anonymized copies, a data explorer, and AI assistants that stay in your control.
+  verified backups, real restores, anonymized copies, a data explorer, a chat with your data, and AI assistants that stay in your control.<br>
+  macOS and Linux, Windows in beta.
 </p>
 
 <p align="center">
@@ -84,6 +85,8 @@ Ask a database a question in plain words: the **AI chat** button on its card ope
 - Columns anonymized for AI stay anonymized. A result that could hide personal data is shown to you in the chat first, column by column, with what the AI would see.
 - Conversations are kept per database, encrypted, for 30 days (pinned ones for good). The history can be turned off.
 
+More in [Database Chat](docs/database-chat.md).
+
 ![Chat with a database](captures/chat.webp)
 
 ### AI assistants (MCP)
@@ -91,7 +94,7 @@ Ask a database a question in plain words: the **AI chat** button on its card ope
 bbdump comes with a PostgreSQL MCP server and connects it in one click to Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Devin, VS Code or OpenCode (any other MCP client can use the configuration to copy). 45 tools and 4 prompts: the whole schema in one call, data profiling, query plans, health checks, index advice with hypothetical indexes, slow queries, comparisons between databases, and more.
 
 - **Every change asks you first**, in the menu bar. It is recorded in a journal, with the rows before and after, and can be undone in one click.
-- **Anonymize for AI**, per database: chosen columns reach the assistant anonymized. A result whose origin is unknown (a computed column, a view, free SQL) is shown to you first, with a few values: send it, anonymize more, or block it. The database itself is never changed.
+- **Anonymize for AI**, per database: chosen columns reach the assistant anonymized. A computed result that could come from an anonymized column (a computed column, a view, free SQL) is shown to you first, with a few values: send it, anonymize more, or block it. The database itself is never changed.
 
 ![AI assistants](captures/ai-clients.webp)
 
@@ -109,7 +112,7 @@ Live application logs, filtered by level and database: every backup, restore and
 
 ### Menu bar
 
-Your projects and databases from the menu bar: switch the proxy target, open a database in the explorer, see your backups at a glance. AI changes and anonymization choices are confirmed there too.
+Your projects and databases from the menu bar (the notification area on Windows): switch the proxy target, open a database in the explorer, see your backups at a glance. AI changes and anonymization choices are confirmed there too.
 
 <p>
   <img src="captures/tray.webp" alt="Menu bar" width="300">
@@ -117,11 +120,11 @@ Your projects and databases from the menu bar: switch the proxy target, open a d
 
 ### Updates
 
-bbdump updates itself on macOS (from 1.1.2) and as an AppImage on Linux. After an update, a short tour shows what is new; the About page keeps every tour.
+bbdump updates itself on macOS (from 1.1.2), on Windows, and as an AppImage on Linux. After an update, a short tour shows what is new; the About page keeps every tour.
 
 ## Installation
 
-### Quick install
+### Quick install (macOS and Linux)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/poup-s/bbdump/main/install.sh | bash
@@ -146,7 +149,7 @@ Download the latest release from [GitHub Releases](https://github.com/poup-s/bbd
 xattr -cr /Applications/bbdump.app
 ```
 
-**Windows (beta):** remote databases, and a local PostgreSQL that bbdump installs with winget (or one already there). The installer is not signed yet: on "Windows protected your PC", choose **More info → Run anyway**. Backups need the PostgreSQL client tools — see [installation](docs/installation.md#postgresql-client-tools).
+**Windows (beta):** remote databases, and a local PostgreSQL that bbdump installs with winget (or one already there), extensions included. The PostgreSQL client tools install in one click from the app — see [installation](docs/installation.md#windows-beta). The installer is not signed yet: on "Windows protected your PC", choose **More info → Run anyway**.
 
 Later versions install themselves from the app. The `.deb` package does not update itself: install the new one.
 
@@ -178,6 +181,7 @@ npm run build          # TypeScript + Vite
 npm test               # tests (no database or network needed)
 npm run dist:mac       # macOS: DMG + ZIP, Apple Silicon and Intel
 npm run dist:linux     # Linux: AppImage + deb
+npm run dist:win       # Windows: NSIS installer, x64 and ARM64 (on Windows, or the release workflow)
 ```
 
 ## Configuration
@@ -204,10 +208,11 @@ postgresql://user:password@host:port/database
 
 ## Security
 
-- Passwords, backups (optional), the Neon API key and the AI journal are encrypted with AES-256-GCM; the key is generated on first launch with restricted permissions and can be exported for another machine.
+- Passwords, backups (optional), the Neon API key, the AI journal and the chat history are encrypted with AES-256-GCM; the key is generated on first launch with restricted permissions and can be exported for another machine.
 - No telemetry: bbdump sends nothing about you or your databases.
 - The MCP server talks to the app through a local server (127.0.0.1) protected by a per-launch token; every change asks for your confirmation.
 - Anonymized copies never bring the real values to your machine, and anonymization for AI filters what assistants read without touching the data.
+- The database chat only reads, through bbdump's MCP server limited to that database; the AI tool gets none of its own shell, file or web tools.
 - Electron context isolation and a strict list of IPC channels.
 
 ## Contributing
