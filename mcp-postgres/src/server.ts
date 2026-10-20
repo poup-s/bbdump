@@ -12,6 +12,7 @@ import { registerHealthTools } from './tools/health.js';
 import { registerBackupTools } from './tools/backups.js';
 import { registerCompareTools } from './tools/compare.js';
 import { registerPrompts } from './prompts.js';
+import { chatScope, toolAllowed } from './chatScope.js';
 
 export const SERVER_VERSION = '1.1.0';
 
@@ -24,10 +25,20 @@ const INSTRUCTIONS = `PostgreSQL tools from bbdump.
 - Prefer format "markdown" for row results you only need to read: it is much shorter than JSON.
 - Performance: explain_query, database_health, suggest_indexes, test_index, get_slow_queries.
 - compare_databases tells what a database lacks compared to another (e.g. a local dev copy behind prod).
-- The user may mask personal data of a database: values come partly starred (****234@email.fr) or as fakes (XXXX…, user_…@example.com, NULL) and results say masked_columns. Work with them; never try to recover the real values. A result the user blocked must not be asked again.`;
+- The user may mask personal data of a database: values come partly starred (****234@email.fr) or as fakes (Camille Martin, camille.martin.3f2a@example.com, XXXX…, NULL; numbers and dates with noise or rounded) and results say masked_columns. Work with them; never try to recover the real values. A result the user blocked must not be asked again.`;
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: 'bbdump-postgres', version: SERVER_VERSION }, { instructions: INSTRUCTIONS });
+  const instructions = chatScope.databaseId
+    ? `${INSTRUCTIONS}\n- This session is a chat opened in bbdump on one database: it is already the active connection${chatScope.readOnly ? ', and only reading is possible' : ''}.`
+    : INSTRUCTIONS;
+  const server = new McpServer({ name: 'bbdump-postgres', version: SERVER_VERSION }, { instructions });
+
+  // A read-only chat: the tools that change something are not even offered
+  if (chatScope.readOnly) {
+    const register = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
+    (server as unknown as { registerTool: (...args: unknown[]) => unknown }).registerTool = (name: unknown, config: unknown, ...rest: unknown[]) =>
+      (toolAllowed(String(name), (config as { annotations?: { readOnlyHint?: boolean } })?.annotations) ? register(name, config, ...rest) : undefined);
+  }
 
   setClientNameSource(() => server.server.getClientVersion()?.name);
   registerConnectionTools(server);

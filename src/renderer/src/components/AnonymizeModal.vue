@@ -223,7 +223,7 @@ const confirm = () => {
               <span v-if="c.locked" class="shrink-0 text-[11px] text-gray-400 dark:text-zinc-500">{{ t(`anonymize.locked.${c.locked}`) }}</span>
               <select
                 v-else
-                class="shrink-0 w-44 rounded-lg border px-2 py-1 text-[12px] bg-white dark:bg-zinc-900 disabled:opacity-60"
+                class="shrink-0 w-56 rounded-lg border px-2 py-1 text-[12px] bg-white dark:bg-zinc-900 disabled:opacity-60"
                 :class="effective.has(key(tb.key, c.name)) ? 'border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300' : 'border-gray-200 dark:border-zinc-700 text-gray-700 dark:text-zinc-300'"
                 :value="effective.get(key(tb.key, c.name))?.kind ?? ''"
                 :disabled="!!effective.get(key(tb.key, c.name))?.via"

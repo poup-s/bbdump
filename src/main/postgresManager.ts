@@ -2,7 +2,9 @@ import { exec, spawn } from 'child_process';
 import { getErrorMessage, parsePgVersion } from './utils';
 import { promisify } from 'util';
 import * as os from 'os';
+import * as path from 'path';
 import { logger } from './logger';
+import { localServerPassword } from './localServerCredential';
 import { getOSType } from './os/osDetector';
 
 const execAsync = promisify(exec);
@@ -70,12 +72,12 @@ export async function tryPgConnect(port: number, user: string): Promise<void> {
     await client.connect();
     await client.end();
   } else {
-    // macOS: trust auth works with empty password over TCP
+    // macOS: trust auth works with empty password over TCP; Windows: the saved password
     const client = new Client({
       host: 'localhost',
       port: port,
       user: user,
-      password: '',
+      password: localServerPassword(user),
       database: 'postgres',
       connectionTimeoutMillis: 5000
     });
@@ -126,7 +128,7 @@ export async function getPgClient(port: number, user: string): Promise<import('p
       host: 'localhost',
       port: port,
       user: user,
-      password: '',
+      password: localServerPassword(user),
       database: 'postgres',
       connectionTimeoutMillis: 5000
     });
@@ -1549,6 +1551,28 @@ async function createLinuxUserRole(
 }
 
 /**
+ * Windows: the server bbdump installs from the onboarding or the settings (winget, Windows
+ * service). Here it is only started when stopped; installing it asks for administrator
+ * rights, so it is never done behind a database creation.
+ */
+async function ensureWindowsServer(
+  port: number,
+  onProgress: (progress: InstallationProgress) => void,
+): Promise<{ success: boolean; error?: string }> {
+  const { isPortOpen } = await import('./platform/probe');
+  onProgress({ step: 'checking', message: 'Checking the PostgreSQL service...', progress: 10 });
+  if (await isPortOpen(port, 'localhost', 1500)) return { success: true };
+  const { getEnvironment, runInstall } = await import('./platform/install');
+  const env = await getEnvironment();
+  if (!env.server.installed) {
+    return { success: false, error: 'No PostgreSQL server on this computer yet: add it from Settings → Usage mode → "Add a local server…".' };
+  }
+  onProgress({ step: 'starting', message: 'Starting the PostgreSQL service...', progress: 30 });
+  const started = await runInstall('server', () => {});
+  return started.success ? { success: true } : { success: false, error: started.error || 'PostgreSQL could not be started' };
+}
+
+/**
  * Checks and prepares PostgreSQL (installs and starts if needed)
  */
 export async function ensurePostgreSQL(
@@ -1556,6 +1580,8 @@ export async function ensurePostgreSQL(
   onProgress: (progress: InstallationProgress) => void
 ): Promise<{ success: boolean; error?: string; status?: PostgresStatus }> {
   try {
+    if (getOS() === 'windows') return await ensureWindowsServer(port, onProgress);
+
     // Check if installed
     onProgress({ step: 'checking', message: 'Checking PostgreSQL installation...', progress: 5 });
     const installed = await checkPostgresInstalled();
@@ -1878,17 +1904,28 @@ export async function restartPostgresService(): Promise<{ success: boolean; erro
       }
       return { success: false, error: 'Failed to restart PostgreSQL. Try: sudo systemctl restart postgresql' };
     } else if (osType === 'windows') {
-      try {
-        // Tenter de trouver le nom du service
-        const { stdout } = await execAsync('sc query type= service state= all | findstr /i "postgresql"');
-        const match = stdout.match(/SERVICE_NAME: (postgresql-x64-\d+)/i);
-        const serviceName = match ? match[1] : 'postgresql-x64-16'; // Fallback
-
-        await execAsync(`net stop ${serviceName} && net start ${serviceName}`);
-        return { success: true };
-      } catch (error) {
-        return { success: false, error: `Failed to restart on Windows: ${getErrorMessage(error)}` };
+      // The EDB service: restarting it needs administrator rights (one Windows prompt)
+      const { windowsPgServers } = await import('./platform/windowsPg');
+      const { windowsServiceName } = await import('./platform/windows');
+      const { run } = await import('./platform/probe');
+      const major = windowsPgServers()[0]?.major;
+      if (!major) return { success: false, error: 'No PostgreSQL server found in Program Files' };
+      const service = windowsServiceName(major);
+      const powershell = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      const result = await run(powershell, [
+        '-NoProfile', '-NonInteractive', '-Command',
+        `Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-Command','Restart-Service -Force ${service}' -Verb RunAs -WindowStyle Hidden -Wait`,
+      ], 120000);
+      if (!result.ok) {
+        const cancelled = /cancel|annul/i.test(result.stderr);
+        return { success: false, error: cancelled ? 'Cancelled' : `Failed to restart ${service}: ${result.stderr.trim().slice(-300)}` };
       }
+      const { isPortOpen } = await import('./platform/probe');
+      for (let i = 0; i < 30; i++) {
+        if (await isPortOpen(5432, 'localhost', 1000)) return { success: true };
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      return { success: false, error: `${service} did not come back after the restart` };
     }
 
     return { success: false, error: 'OS not supported for auto-restart' };

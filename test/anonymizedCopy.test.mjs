@@ -29,7 +29,8 @@ const column = (t, c) => plan.tables.find(x => x.key === `public.${t}`).columns.
 test('detected columns, and what each type can become', () => {
   assert.equal(column('users', 'email').detected, 'email');
   assert.deepEqual(column('users', 'notes').kinds, ['null']);
-  assert.deepEqual(column('users', 'age').kinds, []);
+  // Not null: no NULL; a number: noise only
+  assert.deepEqual(column('users', 'age').kinds, ['noise']);
   assert.deepEqual(column('users', 'last_ip').kinds, ['ip', 'null']);
   assert.equal(plan.tables.find(t => t.key === 'public.orders').rows, 3);
 });

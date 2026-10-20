@@ -101,8 +101,9 @@ function tryLaunchApp(): void {
   try {
     if (process.platform === 'darwin') {
       spawn('open', ['-a', appPath, '--args', '--mcp-confirm'], { detached: true, stdio: 'ignore', env }).unref();
-    } else if (process.platform === 'linux') {
-      spawn(appPath, ['--mcp-confirm'], { detached: true, stdio: 'ignore', env }).unref();
+    } else {
+      // Linux (AppImage or binary) and Windows (bbdump.exe)
+      spawn(appPath, ['--mcp-confirm'], { detached: true, stdio: 'ignore', env, windowsHide: true }).unref();
     }
   } catch {
     // Ignore launch errors

@@ -2,6 +2,7 @@ import { Client } from 'pg';
 import * as os from 'os';
 import { logger } from './logger';
 import { getErrorMessage } from './utils';
+import { localServerPassword } from './localServerCredential';
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
@@ -20,7 +21,8 @@ async function tryConnect(
     host: useSocket ? '/var/run/postgresql' : 'localhost',
     port,
     user,
-    password: password || undefined,
+    // Windows: the local server's saved password when none is given
+    password: password || localServerPassword(user) || undefined,
     database: 'postgres',
     connectionTimeoutMillis: 3000,
   });

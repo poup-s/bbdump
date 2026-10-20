@@ -10,11 +10,11 @@ import { Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import { from as copyFrom, to as copyTo } from 'pg-copy-streams';
 import type { Catalog, CatalogColumn, CatalogTable } from './catalog';
-import { anonymizationCandidates, anonymizedExpression, columnLength, distinctFakes, type AnonymizeKind } from './dataSync';
+import { anonymizationCandidates, anonymizedExpression, columnLength, distinctFakes, isUnique, valueClass, type AnonymizeKind } from './dataSync';
 
 export { columnLength, isUnique, distinctFakes } from './dataSync';
 
-const TEXT_KINDS: AnonymizeKind[] = ['partial', 'email', 'phone', 'name', 'address', 'ip', 'secret'];
+const TEXT_KINDS: AnonymizeKind[] = ['partial', 'first_name', 'last_name', 'name', 'email', 'phone', 'address', 'city', 'ip', 'secret'];
 /** Tables whose rows are only secrets for a running app: left empty by default */
 const EPHEMERAL_TABLE = /session|token|otp|password_reset|refresh|magic_link/i;
 
@@ -79,11 +79,15 @@ export function foreignKeyGroups(tables: CatalogTable[]): Map<string, Set<string
 
 function kindsFor(table: CatalogTable, column: CatalogColumn): AnonymizeKind[] {
   if (column.generated || table.primaryKey?.includes(column.name)) return [];
-  const type = column.type.toLowerCase();
   const nullable: AnonymizeKind[] = column.notNull ? [] : ['null'];
-  if (/^(inet|cidr)/.test(type)) return ['ip', ...nullable];
-  if (/char|text|citext/.test(type)) return [...TEXT_KINDS, ...nullable];
-  return nullable;
+  switch (valueClass(column.type)) {
+    case 'inet': return ['ip', ...nullable];
+    case 'text': return [...TEXT_KINDS, ...nullable];
+    // A unique column could end up with two equal values: no noise or rounding there
+    case 'int': case 'decimal': case 'float': return isUnique(table, column.name) ? nullable : ['noise', ...nullable];
+    case 'date': case 'timestamp': return isUnique(table, column.name) ? nullable : ['noise', 'month', 'year', ...nullable];
+    default: return nullable;
+  }
 }
 
 /** Everything the dialog shows: tables, their rows, and what each column can become */
@@ -223,7 +227,7 @@ export async function copyAnonymized(
     const select = columns.map(c => {
       const kind = anonymize.get(columnKey(table.key, c.name));
       if (!kind) return format('t.%I', c.name);
-      const options = { wide: distinctFakes(table, c.name), maxLength: columnLength(c.type) };
+      const options = { wide: distinctFakes(table, c.name), maxLength: columnLength(c.type), type: c.type };
       return `${anonymizedExpression(c.name, kind, 't', options)} AS ${format('%I', c.name)}`;
     }).join(', ');
     // ONLY: the rows of an inheriting table go with that table (a partitioned parent has none of its own)

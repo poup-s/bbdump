@@ -5,8 +5,14 @@ import { checkServerIdentity as tlsCheckServerIdentity } from 'tls';
 import { config, errorResult, MAX_TIMEOUT_MS, type ToolResult } from './types.js';
 import type { ConnectionParams } from './connections.js';
 import { reachThroughApp } from './tunnel.js';
+import { chatScope } from './chatScope.js';
 
 const { Pool } = pg;
+
+// Dates and timestamps without time zone stay as PostgreSQL writes them: turned into a JS Date,
+// they were read as local time and sent as UTC (a date became "22:00 the day before")
+pg.types.setTypeParser(1082, (value: string) => value);
+pg.types.setTypeParser(1114, (value: string) => value);
 type PoolClient = pg.PoolClient;
 
 const pools = new Map<string, pg.Pool>();
@@ -95,6 +101,10 @@ function newPool(database: string, ssl: tls.ConnectionOptions | undefined, key: 
 
 export function getPool(database?: string): pg.Pool {
   const db = database || activeConnection.database;
+  // A chat on one database cannot read the other databases of its server
+  if (chatScope.databaseId && db !== activeConnection.database) {
+    throw new Error(`This chat is limited to the database "${activeConnection.database}"`);
+  }
   const key = poolKey(db);
   let pool = pools.get(key);
   if (!pool) {

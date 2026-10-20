@@ -64,7 +64,7 @@ export function registerDataTools(server: McpServer) {
       // One extra row tells whether there are more
       const result = await executeReadOnly(client, sql, [...where.params, effectiveLimit + 1, offset]);
       const hasMore = result.rows.length > effectiveLimit;
-      const shown = await protectRows(client, { fields: result.fields, rows: hasMore ? result.rows.slice(0, effectiveLimit) : result.rows }, { tool: 'read_rows', database, sql });
+      const shown = await protectRows(client, { fields: result.fields, rows: hasMore ? result.rows.slice(0, effectiveLimit) : result.rows }, { tool: 'read_rows', database, sql, params: [...where.params, effectiveLimit + 1, offset] });
       if (shown.blocked) return errorResult(shown.blocked);
       const rows = shown.rows;
 
@@ -116,7 +116,7 @@ export function registerDataTools(server: McpServer) {
       const needle = search.toLowerCase();
       const matchedColumns = Array.from(new Set(result.rows.flatMap((row: any) =>
         Object.keys(row).filter(key => row[key] !== null && String(typeof row[key] === 'object' ? JSON.stringify(row[key]) : row[key]).toLowerCase().includes(needle)))));
-      const shown = await protectRows(client, result, { tool: 'search_table', database, sql });
+      const shown = await protectRows(client, result, { tool: 'search_table', database, sql, params: [pattern, limit] });
       if (shown.blocked) return errorResult(shown.blocked);
       return rowsResult(result.fields.map(f => f.name), shown.rows, format, {
         table: `${nsp}.${table}`,
@@ -167,7 +167,7 @@ export function registerDataTools(server: McpServer) {
       const sql = pgFormat('SELECT *, ts_rank(%s, %s) AS search_rank FROM %I.%I', tsvector, tsquery, nsp, table)
         + ` WHERE ${tsvector} @@ ${tsquery} ORDER BY search_rank DESC LIMIT $3`;
       const result = await executeReadOnly(client, sql, [language, query, limit]);
-      const shown = await protectRows(client, result, { tool: 'full_text_search', database, sql });
+      const shown = await protectRows(client, result, { tool: 'full_text_search', database, sql, params: [language, query, limit] });
       if (shown.blocked) return errorResult(shown.blocked);
       return rowsResult(result.fields.map(f => f.name), shown.rows, format, {
         table: `${nsp}.${table}`,

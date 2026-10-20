@@ -37,6 +37,8 @@ export const store = reactive({
     extensionsModalDb: null as Pick<Database, 'name' | 'port' | 'host' | 'user'> | null,
     /** Database whose AI journal (changes made through MCP) is open */
     aiJournalDb: null as Database | null,
+    /** Database whose AI chat panel is open */
+    aiChatDb: null as Database | null,
     /** Database whose masking of personal data for AI clients is being set */
     aiMaskingDb: null as Database | null,
     /** Databases whose personal data is masked for AI clients */

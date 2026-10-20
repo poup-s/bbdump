@@ -6,59 +6,137 @@
 import format from 'pg-format';
 import type { PoolClient } from 'pg';
 import type { CatalogTable } from './catalog';
+import { CITIES, FIRST_NAMES, LAST_NAMES, STREETS } from './fakeData';
 
 /**
  * `partial`: the value keeps its shape, part of it starred (****234@email.fr, *****tien poupi).
+ * Realistic fakes from word lists: `first_name`, `last_name`, `name`, `email`, `address`, `city`.
+ * Numbers and dates: `noise` (±10 %, dates ±30 days), `month` / `year` (rounded down).
  * `null`: the value is dropped (any nullable column, e.g. free notes or a JSON payload).
  */
-export type AnonymizeKind = 'partial' | 'email' | 'phone' | 'name' | 'address' | 'ip' | 'secret' | 'null';
+export type AnonymizeKind =
+  | 'partial' | 'email' | 'phone' | 'name' | 'first_name' | 'last_name' | 'address' | 'city' | 'ip' | 'secret'
+  | 'noise' | 'month' | 'year' | 'null';
 
 export interface AnonymizeCandidate { table: string; column: string; kind: AnonymizeKind }
 
 const PERSON_TABLE = /user|customer|client|member|person|people|contact|account|employee|patient|subscriber|profile|author/i;
 
+/** What a column type allows: text fakes, numeric noise, date noise and rounding */
+export type ValueClass = 'text' | 'inet' | 'int' | 'decimal' | 'float' | 'date' | 'timestamp' | 'other';
+
+export function valueClass(type: string): ValueClass {
+  const t = type.toLowerCase().trim();
+  if (t.endsWith('[]')) return 'other';
+  if (/^(inet|cidr)/.test(t)) return 'inet';
+  if (/char|text|citext/.test(t)) return 'text';
+  if (/^(smallint|integer|bigint|int[248]?)$/.test(t)) return 'int';
+  if (/^(numeric|decimal)/.test(t)) return 'decimal';
+  if (/^(real|double precision|float[48]?)$/.test(t)) return 'float';
+  if (t === 'date') return 'date';
+  if (/^timestamp/.test(t)) return 'timestamp';
+  return 'other';
+}
+
 /** Columns that look like personal data, by name */
 export function anonymizationCandidates(table: CatalogTable): AnonymizeCandidate[] {
   const out: AnonymizeCandidate[] = [];
-  const textual = (type: string) => /char|text|citext|inet|cidr/i.test(type);
   for (const col of table.columns) {
-    if (col.generated || table.primaryKey?.includes(col.name) || !textual(col.type)) continue;
+    if (col.generated || table.primaryKey?.includes(col.name)) continue;
     const n = col.name.toLowerCase();
+    const cls = valueClass(col.type);
     let kind: AnonymizeKind | null = null;
-    if (/(^|_)(e_?)?mail(_address)?$|email/.test(n)) kind = 'email';
-    else if (/phone|mobile|(^|_)tel(ephone)?($|_)|fax/.test(n)) kind = 'phone';
-    else if (/(first|last|full|middle|sur|family|given|maiden)_?name|^surname$/.test(n) || (n === 'name' && PERSON_TABLE.test(table.name))) kind = 'name';
-    else if (/address|street|(^|_)addr($|_)|postal_?code|zip_?code/.test(n) && !/ip_?address|mac_?address|email/.test(n)) kind = 'address';
-    else if (/ip_?address|(^|_)ip$|last_ip|remote_ip/.test(n)) kind = 'ip';
-    else if (/iban|card_?number|(^|_)ssn$|passport|tax_?id|national_?id|social_?security/.test(n)) kind = 'secret';
+    if (cls === 'text' || cls === 'inet') {
+      if (/(^|_)(e_?)?mail(_address)?$|email/.test(n)) kind = 'email';
+      else if (/phone|mobile|(^|_)tel(ephone)?($|_)|fax/.test(n)) kind = 'phone';
+      else if (/(first|given)_?name|prenom/.test(n)) kind = 'first_name';
+      else if (/(last|sur|family|maiden)_?name|^surname$|^nom$/.test(n)) kind = 'last_name';
+      else if (/(full|middle)_?name/.test(n) || (n === 'name' && PERSON_TABLE.test(table.name))) kind = 'name';
+      else if (/(^|_)(city|town|ville|commune)($|_)/.test(n)) kind = 'city';
+      else if (/address|street|(^|_)addr($|_)|postal_?code|zip_?code/.test(n) && !/ip_?address|mac_?address|email/.test(n)) kind = 'address';
+      else if (/ip_?address|(^|_)ip$|last_ip|remote_ip/.test(n)) kind = 'ip';
+      else if (/iban|card_?number|(^|_)ssn$|passport|tax_?id|national_?id|social_?security/.test(n)) kind = 'secret';
+    } else if (isUnique(table, col.name)) {
+      // Noise or rounding could make two values equal
+      continue;
+    } else if (cls === 'date' || cls === 'timestamp') {
+      // A birth date identifies a person: only its year is kept
+      if (/birth|(^|_)dob($|_)|(^|_)born|naissance/.test(n)) kind = 'year';
+    } else if (cls === 'int' || cls === 'decimal' || cls === 'float') {
+      if (/salary|income|wage|salaire|revenu/.test(n)) kind = 'noise';
+    }
     if (kind) out.push({ table: table.key, column: col.name, kind });
   }
   return out;
 }
 
+/** A positive number from 7 hex digits of the hash, from position `offset` (0-based) */
+const hashInt = (h: string, offset: number) => `('x' || substr(${h}, ${offset + 1}, 7))::bit(28)::int`;
+/** An item of a word list chosen by the hash */
+const pickSql = (list: readonly string[], h: string, offset: number) =>
+  `(ARRAY[${list.map(v => format('%L', v)).join(', ')}])[1 + ${hashInt(h, offset)} % ${list.length}]`;
+
+const INT_RANGE: Record<string, [string, string]> = {
+  smallint: ['-32768', '32767'], int2: ['-32768', '32767'],
+  integer: ['-2147483648', '2147483647'], int: ['-2147483648', '2147483647'], int4: ['-2147483648', '2147483647'],
+  bigint: ['-9223372036854775808', '9223372036854775807'], int8: ['-9223372036854775808', '9223372036854775807'],
+};
+
 /**
  * SQL expression replacing a column with a fake value. Deterministic (md5 of the real
  * value), so equal values stay equal across tables. `wide` uses more of the hash, for
- * columns that must stay unique; `maxLength` cuts the fake to a varchar(n) column.
+ * columns that must stay unique; `maxLength` cuts the fake to a varchar(n) column; `type`
+ * (the column type) is needed for noise and rounding.
  */
-export function anonymizedExpression(column: string, kind: AnonymizeKind, alias = 't', options: { wide?: boolean; maxLength?: number } = {}): string {
+export function anonymizedExpression(column: string, kind: AnonymizeKind, alias = 't', options: { wide?: boolean; maxLength?: number; type?: string } = {}): string {
   if (kind === 'null') return 'NULL';
   const c = `${alias}.${format('%I', column)}`;
   const h = `md5(${c}::text)`;
   const wide = !!options.wide;
   if (kind === 'partial') return `CASE WHEN ${c} IS NULL THEN NULL ELSE ${partialExpression(`${c}::text`, h, wide)} END`;
+  if (kind === 'noise' || kind === 'month' || kind === 'year') return `CASE WHEN ${c} IS NULL THEN NULL ELSE ${numericOrDateExpression(c, h, kind, options.type ?? '')} END`;
+  // Unique columns: a part of the hash keeps two fakes from colliding
+  const suffix = wide ? ` || ' ' || upper(substr(${h}, 21, 12))` : '';
+  const first = pickSql(FIRST_NAMES, h, 0);
+  const last = pickSql(LAST_NAMES, h, 7);
   const value = {
-    email: `'user_' || left(${h}, 12) || '@example.com'`,
+    email: `lower(${first}) || '.' || lower(${last}) || '.' || substr(${h}, 15, ${wide ? 12 : 4}) || '@example.com'`,
     phone: wide
       ? `'+' || lpad((('x' || left(${h}, 12))::bit(48)::bigint % 100000000000000)::text, 14, '0')`
       : `'+000' || lpad((('x' || left(${h}, 8))::bit(32)::bigint % 1000000000)::text, 9, '0')`,
-    name: `'Person ' || upper(left(${h}, ${wide ? 12 : 6}))`,
-    address: `'1 Example Street ' || upper(left(${h}, ${wide ? 12 : 4}))`,
+    first_name: `${first}${suffix}`,
+    last_name: `${last}${suffix}`,
+    name: `${first} || ' ' || ${last}${suffix}`,
+    address: `(1 + ${hashInt(h, 14)} % 199)::text || ' ' || ${pickSql(STREETS, h, 21)}${suffix}`,
+    city: `${pickSql(CITIES, h, 0)}${suffix}`,
     ip: `'10.' || (('x' || left(${h}, 2))::bit(8)::int) || '.' || (('x' || substr(${h}, 3, 2))::bit(8)::int) || '.' || (('x' || substr(${h}, 5, 2))::bit(8)::int)`,
     secret: `'XXXX' || upper(left(${h}, ${wide ? 16 : 8}))`,
   }[kind];
   const fitted = options.maxLength ? `left(${value}, ${Math.floor(options.maxLength)})` : value;
   return `CASE WHEN ${c} IS NULL THEN NULL ELSE ${fitted} END`;
+}
+
+/**
+ * Numbers: ±10 % (integers rounded and kept in their type's range, decimals at their own
+ * scale). Dates: ±30 days, or rounded down to the month / year. Same value, same result.
+ */
+function numericOrDateExpression(c: string, h: string, kind: 'noise' | 'month' | 'year', type: string): string {
+  const cls = valueClass(type);
+  if (cls === 'date' || cls === 'timestamp') {
+    if (kind !== 'noise') return `date_trunc('${kind}', ${c})${cls === 'date' ? '::date' : ''}`;
+    // The shift comes from the day only (YYYY-MM-DD), as the MCP server computes it
+    const days = `(${hashInt(`md5(to_char(${c}, 'YYYY-MM-DD'))`, 0)} % 61 - 30)`;
+    return cls === 'date' ? `${c} + ${days}` : `${c} + ${days} * interval '1 day'`;
+  }
+  if (kind !== 'noise') throw new Error(`${kind} only applies to dates`);
+  const factor = `(0.9 + ${hashInt(h, 0)} / 268435455.0 * 0.2)`;
+  if (cls === 'int') {
+    const [min, max] = INT_RANGE[type.toLowerCase().trim()] ?? INT_RANGE.bigint;
+    return `greatest(${min}, least(${max}, round(${c} * ${factor})))`;
+  }
+  if (cls === 'decimal') return `round(${c} * ${factor}, scale(${c}))`;
+  if (cls === 'float') return `${c} * ${factor}`;
+  throw new Error(`noise does not apply to ${type || 'this type'}`);
 }
 
 /**
@@ -159,7 +237,7 @@ export async function copyMissingRows(
     if (!kind) return format('t.%I', c);
     // Same fakes as the anonymized duplicate: distinct where they must be, cut to the column's size
     const target = targetTable.columns.find(col => col.name === c);
-    const fit = { wide: distinctFakes(sourceTable, c), maxLength: target ? columnLength(target.type) : undefined };
+    const fit = { wide: distinctFakes(sourceTable, c), maxLength: target ? columnLength(target.type) : undefined, type: target?.type };
     return `${anonymizedExpression(c, kind, 't', fit)} AS ${format('%I', c)}`;
   }).join(', ');
 

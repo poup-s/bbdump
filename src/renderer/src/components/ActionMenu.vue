@@ -111,7 +111,8 @@ onBeforeUnmount(close);
         <button
           type="button"
           role="menuitem"
-          class="w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-xs transition-colors focus:outline-none"
+          class="action-item w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-xs transition-colors focus:outline-none"
+          :data-action="item.key"
           :class="item.tone === 'danger'
             ? 'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 focus:bg-red-50 dark:focus:bg-red-500/10'
             : item.tone === 'warning'
@@ -119,7 +120,7 @@ onBeforeUnmount(close);
               : 'text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-zinc-800 focus:bg-gray-100 dark:focus:bg-zinc-800'"
           @click.stop="choose(item.key)"
         >
-          <svg class="w-3.5 h-3.5 shrink-0 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <svg class="action-icon w-3.5 h-3.5 shrink-0 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" :d="item.icon" />
           </svg>
           {{ item.label }}
@@ -128,3 +129,39 @@ onBeforeUnmount(close);
     </div>
   </Teleport>
 </template>
+
+<style scoped>
+/* One short, meaningful animation per action, while the pointer is on it (as the sidebar icons) */
+/* The icon is a 14px box: it turns around its own center */
+.action-icon {
+  transform-origin: 50% 50%;
+  transition: opacity 0.15s;
+}
+.action-item:hover .action-icon { opacity: 1; animation: action-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.action-item[data-action='copy-url']:hover .action-icon { animation: action-copy 0.9s ease-in-out infinite; }
+.action-item[data-action='duplicate']:hover .action-icon { animation: action-duplicate 0.9s ease-in-out infinite; }
+.action-item[data-action='edit']:hover .action-icon { transform-origin: 25% 75%; animation: action-write 0.7s ease-in-out infinite; }
+.action-item[data-action='addons']:hover .action-icon { animation: action-snap 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) infinite; }
+.action-item[data-action='sync']:hover .action-icon { animation: action-spin 1s cubic-bezier(0.45, 0, 0.2, 1) infinite; }
+.action-item[data-action='ai-journal']:hover .action-icon { animation: action-rewind 1.2s cubic-bezier(0.45, 0, 0.2, 1) infinite; }
+.action-item[data-action='ai-masking']:hover .action-icon { animation: action-blink 1.6s ease-in-out infinite; }
+.action-item[data-action='proxy-target']:hover .action-icon { animation: action-plug 0.9s ease-in-out infinite; }
+.action-item[data-action='delete']:hover .action-icon { animation: action-shake 0.5s ease-in-out; }
+.action-item[data-action='disconnect']:hover .action-icon { animation: action-leave 0.9s ease-in-out infinite; }
+
+@keyframes action-pop { 45% { transform: scale(1.2) rotate(-6deg); } }
+@keyframes action-copy { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(1.5px, 1.5px); } }
+@keyframes action-duplicate { 0%, 100% { transform: scale(1); } 40% { transform: scale(1.15); } 60% { transform: scale(0.95); } }
+@keyframes action-write { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-10deg); } 75% { transform: rotate(6deg); } }
+@keyframes action-snap { 0% { transform: rotate(0); } 40%, 100% { transform: rotate(90deg); } }
+@keyframes action-spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+@keyframes action-rewind { from { transform: rotate(0); } to { transform: rotate(-360deg); } }
+@keyframes action-blink { 0%, 40%, 52%, 100% { transform: scaleY(1); } 46% { transform: scaleY(0.15); } }
+@keyframes action-plug { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(2px); } }
+@keyframes action-shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-2px) rotate(-6deg); } 40%, 80% { transform: translateX(2px) rotate(6deg); } }
+@keyframes action-leave { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(2px, -2px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .action-item:hover .action-icon { animation: none !important; }
+}
+</style>

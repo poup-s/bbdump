@@ -21,7 +21,7 @@ interface AiMaskingFile {
   databases: Record<string, AiMaskingSettings>;
 }
 
-const KINDS: AnonymizeKind[] = ['partial', 'email', 'phone', 'name', 'address', 'ip', 'secret', 'null'];
+const KINDS: AnonymizeKind[] = ['partial', 'email', 'phone', 'name', 'first_name', 'last_name', 'address', 'city', 'ip', 'secret', 'noise', 'month', 'year', 'null'];
 
 const filePath = () => path.join(pathManager.appDataPath, 'ai-masking.json');
 

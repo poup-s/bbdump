@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [dev, main]
+    branches: [dev, main, windows-beta]
   pull_request:
     branches: [dev, main]
 
@@ -12,6 +12,11 @@ permissions:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+# A dependency (OpenUI) reports installs unless told not to
+env:
+  DO_NOT_TRACK: "1"
+  OPENUI_TELEMETRY_DISABLED: "1"
 
 jobs:
   build:
@@ -45,3 +50,146 @@ jobs:
 
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
+
+  # Windows (beta): build, tests, the installer, and a start of the packaged app
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mcp-postgres/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (tsc + vue-tsc + vite)
+        run: npm run build
+
+      - name: Build and bundle the MCP server
+        run: npm run bundle:mcp
+
+      - name: Tests
+        run: npm test
+
+      - name: Windows installer (not published)
+        run: npx electron-builder --win --publish never
+
+      # The winget command bbdump runs from its onboarding: PostgreSQL 18's client tools only
+      - name: Client tools through winget (bbdump's own command)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Write-Host 'winget is not on this runner: skipped'; exit 0 }
+          $wingetArgs = node -e "console.log(JSON.stringify(require('./dist/main/platform/windows.js').wingetClientToolsArgs('18')))" | ConvertFrom-Json
+          & winget @wingetArgs
+          Write-Host "winget exit code: $LASTEXITCODE"
+          node -e "const w=require('./dist/main/platform/windows.js'); console.log('outcome:', w.wingetOutcome($LASTEXITCODE, ''))"
+          $dump = 'C:\Program Files\PostgreSQL\18\bin\pg_dump.exe'
+          if (Test-Path $dump) { & $dump --version } else { throw "no $dump" }
+          # Client tools only: no PostgreSQL 18 service and no data folder must have been created
+          $service = Get-Service -Name 'postgresql*18*' -ErrorAction SilentlyContinue
+          if ($service) { Write-Host "SERVICE CREATED: $($service.Name) ($($service.Status))" } else { Write-Host 'No PostgreSQL 18 service: client tools only' }
+          if (Test-Path 'C:\Program Files\PostgreSQL\18\data') { Write-Host 'DATA FOLDER CREATED' } else { Write-Host 'No data folder' }
+          Get-ChildItem 'C:\Program Files\PostgreSQL\18' | Select-Object -ExpandProperty Name
+          Get-ChildItem 'C:\Program Files\PostgreSQL\18\bin' -Filter '*.exe' | Select-Object -ExpandProperty Name
+
+      # Not allowed to fail: bbdump's own detection, which decides whether the install button shows
+      - name: bbdump finds winget and the installed client tools
+        shell: pwsh
+        run: |
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Write-Host 'winget is not on this runner: skipped'; exit 0 }
+          node -e "require('./dist/main/platform/environment.js').detectPackageManager('windows', 'unknown').then(p => { console.log('package manager:', JSON.stringify(p)); if (!p || p.id !== 'winget') process.exit(1) })"
+          if ($LASTEXITCODE -ne 0) { throw 'bbdump does not find winget' }
+          if (Test-Path 'C:\Program Files\PostgreSQL\18\bin\pg_dump.exe') {
+            node -e "const t = require('./dist/main/platform/windowsPg.js').windowsPgTool('pg_dump'); console.log('pg_dump:', t); if (!t.length) process.exit(1)"
+            if ($LASTEXITCODE -ne 0) { throw 'bbdump does not find pg_dump' }
+          }
+
+      # The local server as bbdump installs it: over the client tools above (winget --force), the
+      # password only in an option file, a service started with Windows, reachable with that password
+      - name: Local server through winget (bbdump's own option file)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Write-Host 'winget is not on this runner: skipped'; exit 0 }
+          $dir = Join-Path $env:RUNNER_TEMP 'bbdump pg'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $opt = Join-Path $dir 'postgresql.opt'
+          $env:BBDUMP_TEST_PW = 'ci-' + [guid]::NewGuid().ToString('N')
+          "BBDUMP_TEST_PW=$($env:BBDUMP_TEST_PW)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          node -e "require('fs').writeFileSync(process.argv[1], require('./dist/main/platform/windows.js').serverOptionFile(process.env.BBDUMP_TEST_PW, 5432))" $opt
+          $wingetArgs = node -e "console.log(JSON.stringify(require('./dist/main/platform/windows.js').wingetServerArgs('18', process.argv[1])))" $opt | ConvertFrom-Json
+          & winget @wingetArgs
+          $code = $LASTEXITCODE
+          Remove-Item -Recurse -Force $dir
+          Write-Host "winget exit code: $code"
+          node -e "console.log('outcome:', require('./dist/main/platform/windows.js').wingetOutcome($code, ''))"
+          Get-Service -Name 'postgresql-x64-18' | Format-List Name, Status, StartType
+          if (-not (Test-Path 'C:\Program Files\PostgreSQL\18\data')) { throw 'no data folder' }
+          node -e "console.log('servers:', JSON.stringify(require('./dist/main/platform/windowsPg.js').windowsPgServers()))"
+          $env:PGPASSWORD = $env:BBDUMP_TEST_PW
+          & 'C:\Program Files\PostgreSQL\18\bin\psql.exe' -h localhost -p 5432 -U postgres -d postgres -tAc 'select version()'
+          if ($LASTEXITCODE -ne 0) { throw 'cannot connect with the generated password' }
+
+      # Extensions as bbdump installs them on Windows: official builds downloaded, checked, copied
+      - name: Extensions on the local server (PostGIS bundle, TimescaleDB)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Program Files\PostgreSQL\18\data')) { Write-Host 'no local server: skipped'; exit 0 }
+          $env:PGPASSWORD = $env:BBDUMP_TEST_PW
+          $psql = 'C:\Program Files\PostgreSQL\18\bin\psql.exe'
+          foreach ($source in 'postgis', 'timescaledb') {
+            node -e "require('./dist/main/platform/windowsExtensions.js').installWindowsExtension(process.argv[1], 18, 'C:\\Program Files\\PostgreSQL\\18', l => console.log(l)).then(r => { console.log(JSON.stringify(r)); if (!r.success) process.exit(1) })" $source
+            if ($LASTEXITCODE -ne 0) { throw "$source not installed" }
+          }
+          & $psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION postgis' -c 'CREATE EXTENSION postgis_raster' -c 'CREATE EXTENSION postgis_topology' -c 'CREATE EXTENSION pgrouting' -c 'CREATE EXTENSION h3' -tAc 'select postgis_full_version()'
+          if ($LASTEXITCODE -ne 0) { throw 'PostGIS extensions cannot be created' }
+          & $psql -h localhost -U postgres -d postgres -c "ALTER SYSTEM SET shared_preload_libraries = 'timescaledb'"
+          Restart-Service -Force postgresql-x64-18
+          Start-Sleep -Seconds 5
+          & $psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION timescaledb' -tAc "select extversion from pg_extension where extname = 'timescaledb'"
+          if ($LASTEXITCODE -ne 0) { throw 'TimescaleDB cannot be created' }
+
+      # The MCP server as AI assistants launch it (bbdump.exe + ELECTRON_RUN_AS_NODE), the app running
+      - name: MCP server of the packaged app (reads, then a backup through the app)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'C:\Program Files\PostgreSQL\18\data')) { Write-Host 'no local server: skipped'; exit 0 }
+          $env:PGPASSWORD = $env:BBDUMP_TEST_PW
+          $psql = 'C:\Program Files\PostgreSQL\18\bin\psql.exe'
+          & $psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE bbdump_mcp_ci'
+          & $psql -h localhost -U postgres -d bbdump_mcp_ci -v ON_ERROR_STOP=1 -c "CREATE TABLE items (id serial PRIMARY KEY, name text NOT NULL); INSERT INTO items (name) VALUES ('a'), ('b'), ('c')"
+          node scripts/ci-mcp-smoke.mjs (Join-Path $PWD 'release\win-unpacked\bbdump.exe') (Join-Path $PWD 'release\win-unpacked\resources\mcp-postgres\index.js')
+          $code = $LASTEXITCODE
+          $log = Join-Path $env:APPDATA 'bbdump\logs\app.log'
+          if (Test-Path $log) { Get-Content $log -Tail 40 }
+          if ($code -ne 0) { throw 'MCP check failed' }
+
+      - name: The packaged app starts
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD 'release\win-unpacked\bbdump.exe'
+          $app = Start-Process $exe -ArgumentList '--hidden' -PassThru
+          Start-Sleep -Seconds 30
+          $log = Join-Path $env:APPDATA 'bbdump\logs\app.log'
+          if (Test-Path $log) { Get-Content $log -Tail 60 } else { Write-Host "No log at $log" }
+          if ($app.HasExited) { throw "bbdump exited early (code $($app.ExitCode))" }
+          if (-not (Test-Path $log)) { throw 'bbdump started but wrote no log' }
+          Stop-Process -Id $app.Id -Force
+
+      - name: Keep the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: bbdump-windows-installer
+          path: |
+            release/*-setup.exe
+            release/latest.yml
+          retention-days: 14

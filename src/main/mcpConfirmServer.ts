@@ -28,6 +28,16 @@ let token: string = '';
 export const TOKEN_HEADER = 'x-bbdump-token';
 const MAX_BODY_BYTES = 64 * 1024;
 let showConfirmUI: ShowConfirmCallback | null = null;
+/** A database chat that can take the question itself (it returns false when that chat is not open) */
+type ChatConfirmCallback = (data: ConfirmRequestData & { id: string; chatId: string }) => boolean;
+let showInChat: ChatConfirmCallback | null = null;
+let onChatTimeout: ((chatId: string, id: string) => void) | null = null;
+
+/** The database chat asks the user itself the questions its own MCP server raises */
+export function onChatConfirmRequest(show: ChatConfirmCallback, timedOut: (chatId: string, id: string) => void) {
+  showInChat = show;
+  onChatTimeout = timedOut;
+}
 const pendingConfirmations = new Map<string, PendingConfirmation>();
 
 const CONFIRMATION_TIMEOUT_MS = 60000;
@@ -294,17 +304,28 @@ async function askUser(data: ConfirmRequestData): Promise<{ approved: boolean; r
 /** Shows a request in the tray popup and waits for the answer (60 seconds at most) */
 async function showToUser(data: ConfirmRequestData): Promise<ConfirmAnswer & { reason?: 'timeout' | 'no_window' }> {
   const id = crypto.randomUUID();
+  // From a database chat that is open: asked in that chat, not in the tray
+  const chatId = typeof data.chatId === 'string' ? data.chatId : '';
+  if (chatId && showInChat?.({ id, ...data, chatId })) {
+    return waitForAnswer(id, () => onChatTimeout?.(chatId, id));
+  }
   // Call the registered callback to show the UI and get the target window
   const callbackResult = showConfirmUI ? showConfirmUI({ id, ...data }) : null;
   const targetWindow = callbackResult instanceof Promise ? await callbackResult : callbackResult;
   if (!targetWindow || targetWindow.isDestroyed()) return { approved: false, reason: 'no_window' };
 
   targetWindow.webContents.send('mcp-confirm-request', { id, ...data });
+  return waitForAnswer(id, () => {
+    if (!targetWindow.isDestroyed()) targetWindow.webContents.send('mcp-confirm-timeout', id);
+  });
+}
 
+/** The answer to a request shown somewhere (tray or chat), or none after 60 seconds */
+function waitForAnswer(id: string, onTimeout: () => void): Promise<ConfirmAnswer & { reason?: 'timeout' }> {
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
       pendingConfirmations.delete(id);
-      if (!targetWindow.isDestroyed()) targetWindow.webContents.send('mcp-confirm-timeout', id);
+      onTimeout();
       resolve({ approved: false, reason: 'timeout' });
     }, CONFIRMATION_TIMEOUT_MS);
 

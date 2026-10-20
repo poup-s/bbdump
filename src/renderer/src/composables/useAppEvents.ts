@@ -2,7 +2,7 @@ import { onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
 import { useI18n } from './useI18n';
 import { useToast } from './useToast';
-import { ipcRenderer } from '../electron';
+import { ipcRenderer, isWindows } from '../electron';
 import { getErrorMessage } from '../utils';
 import type { BackupCompleteEvent, BackupProgress } from '../types';
 import { shouldShowWhatsNew } from '../whatsNew';
@@ -78,7 +78,22 @@ export function useAppEvents() {
                 if (db) db.lastBackup = result.timestamp;
             } else {
                 const db = store.databases.find(d => d.id === result.databaseId);
-                addToast(t('backup.error', { db: db?.displayName || db?.name || result.database }), 'error', { detail: result.error });
+                // Windows: no pg_dump for this server's version; the error gives the winget command: one click instead
+                const major = isWindows ? /PostgreSQL\.PostgreSQL\.(\d+)/.exec(result.error || '')?.[1] : undefined;
+                addToast(t('backup.error', { db: db?.displayName || db?.name || result.database }), 'error', {
+                    detail: result.error,
+                    ...(major ? {
+                        action: {
+                            label: t('backup.installPgClient', { major }),
+                            run: async () => {
+                                addToast(t('backup.installingPgClient', { major }), 'info', { detail: t('backup.installingPgClientDetail') });
+                                const install = await ipcRenderer.invoke('setup-install-pg-client', major);
+                                if (install?.success) addToast(t('backup.installedPgClient', { major }), 'success');
+                                else addToast(t('backup.installPgClientError'), 'error', { detail: install?.error });
+                            },
+                        },
+                    } : {}),
+                });
             }
             store.backupProgress = null;
         });

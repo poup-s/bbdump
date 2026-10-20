@@ -83,7 +83,7 @@ export async function installPostgreSQL(
   } else {
     return {
       success: false,
-      error: 'L\'installation de PostgreSQL sur Windows n\'est pas encore supportée. Installe-le toi-même depuis https://www.postgresql.org/download/windows/'
+      error: 'bbdump does not install PostgreSQL on Windows yet: install the client tools from https://www.postgresql.org/download/windows/ (bbdump finds them in Program Files)'
     };
   }
 }

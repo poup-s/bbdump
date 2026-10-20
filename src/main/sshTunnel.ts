@@ -31,7 +31,14 @@ export class SshError extends Error {
   }
 }
 
-const binary = (name: string) => (process.platform !== 'win32' && fs.existsSync(`/usr/bin/${name}`) ? `/usr/bin/${name}` : name);
+/** ssh, ssh-keyscan…: /usr/bin on Unix; Windows' own OpenSSH (System32\\OpenSSH) when not on PATH */
+const binary = (name: string) => {
+  if (process.platform === 'win32') {
+    const builtIn = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'OpenSSH', `${name}.exe`);
+    return fs.existsSync(builtIn) ? builtIn : name;
+  }
+  return fs.existsSync(`/usr/bin/${name}`) ? `/usr/bin/${name}` : name;
+};
 
 /** The dev app can use another ssh config (tests against a container) */
 function runOptions(extra: SshRunOptions = {}): SshRunOptions {
@@ -102,7 +109,7 @@ export function listSshHosts(): string[] {
     for (const include of parseSshConfigIncludes(text)) {
       const expanded = include.replace(/^~(?=\/)/, os.homedir());
       const full = path.isAbsolute(expanded) ? expanded : path.join(os.homedir(), '.ssh', expanded);
-      if (full.endsWith('/*')) {
+      if (full.endsWith('/*') || full.endsWith('\\*')) {
         const dir = full.slice(0, -2);
         try { for (const name of fs.readdirSync(dir).sort()) readFile(path.join(dir, name), depth + 1); } catch { /* missing */ }
       } else {
@@ -141,7 +148,17 @@ export async function hostFingerprints(ssh: SshSettings): Promise<string[]> {
   if (!isSafeSshValue(hostname)) return [];
   const scan = await run(binary('ssh-keyscan'), ['-T', '5', '-p', String(port), hostname], undefined, 10000);
   if (!scan.stdout.trim()) return [];
-  const keygen = await run(binary('ssh-keygen'), ['-l', '-f', '-'], scan.stdout, 5000);
+  let keygen = await run(binary('ssh-keygen'), ['-l', '-f', '-'], scan.stdout, 5000);
+  // Some builds (Windows' OpenSSH) may not read the keys from stdin: through a temporary file then
+  if (!keygen.stdout.trim()) {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'bbdump-keys-')), 'keys');
+    try {
+      fs.writeFileSync(file, scan.stdout);
+      keygen = await run(binary('ssh-keygen'), ['-l', '-f', file], undefined, 5000);
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
+  }
   // "256 SHA256:abc… host (ED25519)" → "ED25519 SHA256:abc…"
   return keygen.stdout.split('\n').filter(Boolean).map(line => {
     const parts = line.trim().split(/\s+/);
@@ -197,12 +214,15 @@ const notePid = (pid: number | undefined, add: boolean) => {
 /** Stops the tunnels a previous session left running */
 export async function cleanUpOrphanTunnels(): Promise<void> {
   const pids = readPids();
-  if (!pids.length || process.platform === 'win32') {
+  if (!pids.length) {
     writePids([]);
     return;
   }
   for (const pid of pids) {
-    const ps = await run('/bin/ps', ['-p', String(pid), '-o', 'command='], undefined, 3000);
+    // Only a tunnel of ours is stopped (the pid may belong to another program by now)
+    const ps = process.platform === 'win32'
+      ? await run('powershell', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter 'ProcessId=${Number(pid)}').CommandLine`], undefined, 8000)
+      : await run('/bin/ps', ['-p', String(pid), '-o', 'command='], undefined, 3000);
     const command = ps.stdout.trim();
     if (command.includes('ssh') && command.includes('ExitOnForwardFailure=yes') && command.includes('-L 127.0.0.1:')) {
       try {

@@ -1,6 +1,7 @@
 import { AppConfig, DatabaseConfig } from '../types/config';
 import { encryptionManager } from './encryption';
 import { logger } from './logger';
+import { withLocalServerPassword } from './localServerCredential';
 
 /**
  * Connection strings are stored WITHOUT their password: the password lives in the
@@ -79,11 +80,12 @@ export function credentialsForConnectionTest(
  */
 export function toRuntimeDatabase<T extends DatabaseConfig>(db: T): T {
   const password = db.encrypted && db.password ? encryptionManager.decrypt(db.password) : (db.password || '');
-  return {
+  // Windows: a database on the local server bbdump set up uses its saved password
+  return withLocalServerPassword({
     ...db,
     password,
     connectionString: injectUriPassword(db.connectionString, password),
-  };
+  });
 }
 
 /**

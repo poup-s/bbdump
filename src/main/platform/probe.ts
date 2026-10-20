@@ -30,10 +30,9 @@ const EXTRA_DIRS = [
 ];
 
 function isExecutable(file: string): boolean {
+  if (process.platform === 'win32') return isWindowsExecutable(file);
   try {
-    const stat = fs.statSync(file);
-    if (!stat.isFile()) return false;
-    if (process.platform === 'win32') return true;
+    if (!fs.statSync(file).isFile()) return false;
     fs.accessSync(file, fs.constants.X_OK);
     return true;
   } catch {
@@ -41,11 +40,28 @@ function isExecutable(file: string): boolean {
   }
 }
 
+/**
+ * Windows: winget (and other Store apps) is an app execution alias in WindowsApps, a link
+ * that stat() cannot follow; lstat() sees it, and Windows runs it like any .exe.
+ */
+export function isWindowsExecutable(file: string, fsApi: Pick<typeof fs, 'statSync' | 'lstatSync'> = fs): boolean {
+  try {
+    return fsApi.statSync(file).isFile();
+  } catch {
+    try {
+      const link = fsApi.lstatSync(file);
+      return !link.isDirectory() && (link.isFile() || link.isSymbolicLink());
+    } catch {
+      return false;
+    }
+  }
+}
+
 /** Default which(): PATH plus the usual system and Homebrew directories. No shell. */
 export const defaultWhich: WhichFn = async (name) => {
   if (path.isAbsolute(name)) return isExecutable(name) ? name : null;
   const dirs = [...(process.env.PATH || '').split(path.delimiter), ...EXTRA_DIRS].filter(Boolean);
-  const exts = process.platform === 'win32' ? ['.exe', '.cmd', ''] : [''];
+  const exts = process.platform === 'win32' ? ['.exe', ''] : [''];
   for (const dir of [...new Set(dirs)]) {
     for (const ext of exts) {
       const candidate = path.join(dir, name + ext);
@@ -67,7 +83,7 @@ export function firstExisting(candidates: string[]): string | null {
 export function run(file: string, args: string[], timeoutMs = 5000, env?: NodeJS.ProcessEnv): Promise<CommandResult> {
   return new Promise((resolve) => {
     try {
-      execFile(file, args, { timeout: timeoutMs, env: env || process.env, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+      execFile(file, args, { timeout: timeoutMs, env: env || process.env, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
         // Non-zero exit: error.code is the exit code; spawn failure: a string like ENOENT
         const rawCode: unknown = error ? (error as { code?: unknown }).code : 0;
         const code = typeof rawCode === 'number' ? rawCode : null;

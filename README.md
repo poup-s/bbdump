@@ -35,7 +35,7 @@ Any database can be duplicated into a new local one in one click.
 
 ### Anonymized copies
 
-Duplicate a database with its personal data anonymized. Columns that look personal (email, phone, name, address, IP…) are chosen for you and partly starred by default, keeping their shape (`bob1234@email.fr` → `****234@email.fr`). Each column can become a fake value, a masked one or NULL, and a table can be copied without its rows (sessions and tokens are empty by default). A column linked by a foreign key follows the one it points to, and unique columns stay unique.
+Duplicate a database with its personal data anonymized. Columns that look personal (email, phone, name, address, IP…) are chosen for you and partly starred by default, keeping their shape (`bob1234@email.fr` → `****234@email.fr`). Each column can become a realistic fake (first and last names, emails, cities and addresses picked from word lists: `Camille Martin`, `camille.martin.3f2a@example.com`), a masked value or NULL. Numbers and dates can get noise (±10 %, dates ±30 days) or dates be rounded to the month or year; a birth date keeps only its year by default. A table can be copied without its rows (sessions and tokens are empty by default). A column linked by a foreign key follows the one it points to, and unique columns stay unique.
 
 The rows are streamed with the chosen columns already replaced: the real values never reach your machine, and no backup of the source is kept.
 
@@ -76,6 +76,15 @@ Browse tables in tabs, search, open a row to edit it, follow the relations, and 
 ![SQL builder](captures/viewer-sql.webp)
 
 ![Extensions](captures/extensions.webp)
+
+### Chat with a database
+
+Ask a database a question in plain words: the **AI chat** button on its card opens a conversation with the AI tool already on your computer (Claude Code, Codex or OpenCode, with your own account) or a local model (Ollama, LM Studio). The AI only reads, through bbdump's MCP server limited to that database. Answers come as key figures, charts and tables with the SQL behind them, and each step the AI took can be unfolded.
+
+- Columns anonymized for AI stay anonymized. A result that could hide personal data is shown to you in the chat first, column by column, with what the AI would see.
+- Conversations are kept per database, encrypted, for 30 days (pinned ones for good). The history can be turned off.
+
+![Chat with a database](captures/chat.webp)
 
 ### AI assistants (MCP)
 
@@ -129,12 +138,15 @@ Download the latest release from [GitHub Releases](https://github.com/poup-s/bbd
 | macOS 13+ (Apple Silicon) | `bbdump-*-arm64.dmg` |
 | macOS 13+ (Intel) | `bbdump-*.dmg` |
 | Linux (beta) | `bbdump-*.AppImage` or `bbdump-*.deb` |
+| Windows 10/11 (beta) | `bbdump-*-setup.exe` (x64 and ARM64) |
 
 **macOS:** the app is not code-signed yet. On first launch, right-click it and choose **Open**, then confirm, or run:
 
 ```bash
 xattr -cr /Applications/bbdump.app
 ```
+
+**Windows (beta):** remote databases, and a local PostgreSQL that bbdump installs with winget (or one already there). The installer is not signed yet: on "Windows protected your PC", choose **More info → Run anyway**. Backups need the PostgreSQL client tools — see [installation](docs/installation.md#postgresql-client-tools).
 
 Later versions install themselves from the app. The `.deb` package does not update itself: install the new one.
 
@@ -170,7 +182,7 @@ npm run dist:linux     # Linux: AppImage + deb
 
 ## Configuration
 
-User data lives in `~/Library/Application Support/bbdump/` (macOS) or `~/.config/bbdump/` (Linux):
+User data lives in `~/Library/Application Support/bbdump/` (macOS), `~/.config/bbdump/` (Linux) or `%APPDATA%\bbdump\` (Windows):
 
 | File | Contents |
 |------|----------|
@@ -179,7 +191,9 @@ User data lives in `~/Library/Application Support/bbdump/` (macOS) or `~/.config
 | `backup-history.json` | Backup runs, successes and failures |
 | `ai-masking.json` | Columns anonymized for AI assistants, per database |
 | `ai-journal/` | Changes made by AI assistants, with their undo data (encrypted) |
+| `ai-chat-history/` | Database chat conversations (encrypted, 30 days unless pinned) |
 | `cloud-credentials.json` | Neon API key (encrypted) |
+| `local-server.json` | Windows: password of the local server's `postgres` user (encrypted) |
 | `logs/app.log` | Application logs |
 
 Databases can be added from the UI or by pasting a connection URL:

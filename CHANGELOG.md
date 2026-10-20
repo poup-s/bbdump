@@ -1,5 +1,71 @@
 # Changelog
 
+## 1.3.0 — 2026-10-20
+
+### Added
+
+- **Chat with a database.** The **AI chat** button on each database card opens a chat about
+  it with the AI tool already on your computer: Claude Code, Codex or OpenCode, with your own
+  account. The tool reads the database through bbdump's MCP server, limited to that database
+  and to reading (the tools that change data are not even offered), without its own shell,
+  file or web tools (Claude Code also runs without your settings, hooks or memory). Answers
+  show their data as tables, key figures and bar or line charts (OpenUI), with the SQL behind
+  them; each step the AI took can be unfolded. Columns anonymized for AI stay anonymized. A
+  follow-up question keeps the conversation. The AI settings (✦ in the chat) choose the tool
+  and its model (Claude Code's sonnet, opus or haiku, OpenCode's configured models, any Codex
+  model). A local model works too, with Ollama or LM Studio running on the computer: bbdump
+  then runs the conversation itself, giving the model a few reading tools of its MCP server
+  and running the ones it asks for.
+  The chat shows what the AI sees and where it goes: a badge with the columns anonymized for
+  AI (click it to change them; the same rules for every tool, local models included), where
+  the data is sent (the model's provider, or "stays on this computer"), and on each step the
+  columns anonymized in that result. The SQL behind an answer is folded. When a result could
+  hide personal data (a computed column, a view), bbdump asks in the chat itself, with a few
+  values and what the AI would see of each once anonymized: send it, anonymize the checked
+  columns, or block it.
+  Conversations are kept in a history per database, encrypted on the computer, 30 days after
+  their last message; a pinned conversation is kept for good. One can be reopened and
+  continued (the AI keeps its context), pinned, or deleted; the history can be turned off in
+  the AI settings. The panel can be widened by its edge or in one click.
+
+### Changed
+
+- **Anonymization for AI asks less often.** A computed column whose values are all written in
+  the query itself (`select 'events' as t, count(*)…`) holds nothing from the database: it now
+  reaches the AI without asking. The same goes for a computed column of a query that reads no
+  table holding an anonymized column (views included), such as months written as text from
+  sales: before, it was asked about and, without an answer, starred.
+
+- **More realistic anonymization, without any extension on the server.** Anonymized copies,
+  "Update from…" and anonymization for AI can now give realistic fakes: first names, last
+  names, full names, emails (`camille.martin.3f2a@example.com`), cities and street addresses
+  picked from word lists, instead of `Person 3F2A1C` or `user_…@example.com`. Numbers can get
+  ±10 % noise and dates ±30 days, or dates be rounded down to the month or the year; birth
+  dates keep only their year and salaries get noise by default. As before, the same value
+  always gives the same fake, so links between tables hold, and unique columns never get noise.
+
+- **Windows (beta).** An installer for Windows 10 and 11 (x64 and ARM64), updated in place
+  like the AppImage. Both usage modes work: remote databases only, or PostgreSQL on this
+  computer. In local mode bbdump installs the PostgreSQL server with winget (a Windows service
+  started with the computer; bbdump generates the password of its "postgres" user and keeps it
+  encrypted), starts it when it is stopped, and asks once for the password of a server it did
+  not install. Extensions install in one click there too: PostGIS (with raster, topology,
+  pgRouting and H3) and TimescaleDB come from their official Windows builds, downloaded and
+  checked by bbdump, then copied into PostgreSQL after one administrator prompt; restarting
+  PostgreSQL for an extension loaded at startup works the same way. pgvector has no official
+  Windows build and is not offered. The PostgreSQL client tools are found where
+  the EDB installer puts them, SSH goes through Windows' OpenSSH, and the AI assistants
+  (Claude Desktop, including the Microsoft Store version, Claude Code…) can be connected as on
+  macOS and Linux. Backups go to Documents\bbdump by default and can be on any drive.
+  The PostgreSQL client tools install in one click with winget (Windows asks once for
+  administrator rights), from the first launch or from a backup that needs another version.
+
+### Fixed
+
+- **AI assistants read dates one day early.** Through MCP, a `date` column (and a timestamp
+  without time zone) was sent as UTC: 2026-09-01 became "2026-08-31T22:00Z" in France. They
+  now come exactly as stored.
+
 ## 1.2.2 — 2026-10-14
 
 ### Fixed

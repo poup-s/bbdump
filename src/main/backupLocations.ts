@@ -14,10 +14,18 @@ import { pathManager } from './paths';
 type BackupConfig = Pick<AppConfig, 'defaultBackupPath' | 'databases'>;
 
 /**
- * Suggested folder when the user picked none. Linux: ~/Documents/bbdump (the XDG documents
- * folder), easy to find and back up. macOS / Windows keep the internal folder.
+ * Suggested folder when the user picked none: Documents\bbdump on Windows and
+ * ~/Documents/bbdump on Linux (the XDG documents folder), easy to find and back up. macOS
+ * keeps the internal folder.
  */
 export function platformDefaultBackupDir(): string {
+  if (process.platform === 'win32') {
+    try {
+      return path.join(app.getPath('documents'), 'bbdump');
+    } catch {
+      return path.join(os.homedir(), 'Documents', 'bbdump');
+    }
+  }
   if (process.platform === 'linux') {
     const home = os.homedir();
     let documents = path.join(home, 'Documents');
@@ -75,7 +83,9 @@ export function resolveBackupReference(reference: string, dirs: string[], intern
   const file = path.isAbsolute(reference) ? path.resolve(reference) : path.resolve(internalDir, reference);
   if (!file.endsWith('.backup')) return null;
   const parent = path.dirname(file);
-  return dirs.some((dir) => path.resolve(dir) === parent) ? file : null;
+  // Windows paths are case-insensitive (C:\ and c:\ are the same folder)
+  const same = (a: string, b: string) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+  return dirs.some((dir) => same(path.resolve(dir), parent)) ? file : null;
 }
 
 export function resolveBackupFile(config: BackupConfig, reference: string): string | null {

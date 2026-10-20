@@ -75,9 +75,9 @@ describe('schema diff', () => {
 describe('data copy helpers', () => {
   test('personal data detected by column name; a product name is not a person', () => {
     const users = table('public', 'users', [col('id', 'integer'), col('email', 'citext'), col('first_name', 'text'), col('phone_number', 'varchar(20)'), col('name', 'text'), col('last_ip', 'inet'), col('age', 'integer')], { primaryKey: ['id'] });
-    assert.deepEqual(anonymizationCandidates(users).map(c => `${c.column}:${c.kind}`), ['email:email', 'first_name:name', 'phone_number:phone', 'name:name', 'last_ip:ip']);
+    assert.deepEqual(anonymizationCandidates(users).map(c => `${c.column}:${c.kind}`), ['email:email', 'first_name:first_name', 'phone_number:phone', 'name:name', 'last_ip:ip']);
     assert.deepEqual(anonymizationCandidates(table('public', 'products', [col('sku', 'text'), col('name', 'text')], { primaryKey: ['sku'] })), []);
-    assert.match(anonymizedExpression('email', 'email'), /^CASE WHEN t\.email IS NULL THEN NULL ELSE 'user_' \|\| left\(md5\(t\.email::text\), 12\) \|\| '@example\.com' END$/);
+    assert.match(anonymizedExpression('email', 'email'), /^CASE WHEN t\.email IS NULL THEN NULL ELSE lower\(\(ARRAY\['Camille', .*\|\| substr\(md5\(t\.email::text\), 15, 4\) \|\| '@example\.com' END$/);
   });
 
   test('parents before children, cycles do not loop', () => {

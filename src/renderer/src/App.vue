@@ -35,6 +35,7 @@ import ExtensionsModal from './components/ExtensionsModal.vue';
 import AiJournalModal from './components/AiJournalModal.vue';
 import AnonymizeModal from './components/AnonymizeModal.vue';
 import SyncFromSourceModal from './components/SyncFromSourceModal.vue';
+import AiChatPanel from './components/chat/AiChatPanel.vue';
 
 const { t } = useI18n();
 const isDark = useDark();
@@ -195,6 +196,9 @@ const handleLoaderComplete = () => {
         @close="store.aiMaskingDb = null"
       />
       <SyncFromSourceModal v-if="store.syncTargetDb" />
+    </Transition>
+    <Transition name="chat" :duration="{ enter: 320, leave: 220 }">
+      <AiChatPanel v-if="store.aiChatDb" :key="store.aiChatDb.id" />
     </Transition>
     <DbViewer
       v-if="store.showDbViewer"

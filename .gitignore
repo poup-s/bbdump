@@ -122,3 +122,8 @@ electron-builder.yml
 
 # MCP server staged for packaging (scripts/bundle-mcp.mjs)
 mcp-postgres/bundle/
+
+# Dev app: working folder of the database chat
+ai-chat/
+# Dev app: chat history
+ai-chat-history/

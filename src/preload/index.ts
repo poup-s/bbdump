@@ -36,7 +36,7 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
     'get-postgres-performance-stats', 'reset-postgres-performance-stats',
     'restart-postgres', 'check-postgres-config', 'fix-postgres-config', 'get-database-size',
     // Database creation
-    'create-local-database', 'duplicate-external-to-local', 'duplicate-anonymize-plan', 'duplicate-check-extensions', 'ai-masking-get', 'ai-masking-set', 'ai-masking-list',
+    'create-local-database', 'duplicate-external-to-local', 'duplicate-anonymize-plan', 'duplicate-check-extensions', 'setup-install-pg-client', 'setup-local-password', 'ai-chat-providers', 'ai-chat-models', 'ai-chat-send', 'ai-chat-stop', 'ai-chat-history-list', 'ai-chat-history-get', 'ai-chat-history-save', 'ai-chat-history-pin', 'ai-chat-history-delete', 'ai-chat-history-clear', 'ai-masking-get', 'ai-masking-set', 'ai-masking-list',
     // Proxy
     'proxy-start', 'proxy-stop', 'proxy-switch-target', 'proxy-status', 'proxy-status-all',
     'proxy-check-port', 'proxy-get-logs', 'proxy-clear-logs',
@@ -49,7 +49,7 @@ const ALLOWED_SEND_CHANNELS = new Set([
 const ALLOWED_RECEIVE_CHANNELS = new Set([
     'backup-started', 'backup-complete', 'backup-progress', 'sync-progress',
     'scheduled-backup-started', 'scheduled-backup-completed',
-    'install-progress', 'setup-progress',
+    'install-progress', 'setup-progress', 'ai-chat-event',
     'create-database-progress', 'duplicate-progress',
     'tray-refresh', 'open-dbviewer', 'edit-db',
     'update-available', 'update-downloaded', 'update-error',

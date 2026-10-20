@@ -8,7 +8,7 @@
  */
 import { ref, computed, onMounted, watch } from 'vue';
 import { useI18n } from '../composables/useI18n';
-import { ipcRenderer } from '../electron';
+import { ipcRenderer, isWindows } from '../electron';
 import { parsePgUrl } from '../pgUrl';
 import type { Database } from '../types';
 import FormField from './ui/FormField.vue';
@@ -151,9 +151,10 @@ watch(() => [ssh.value.host, ssh.value.user, ssh.value.port, ssh.value.remoteHos
 
 const sshErrorText = (failure: SshFailure) => {
   const known = ['auth', 'unknown-host', 'host-changed', 'dns', 'timeout', 'unreachable', 'not-found', 'not-url'];
-  return known.includes(failure.code)
-    ? t(`ssh.errors.${failure.code}`, { host: ssh.value.host, file: ssh.value.envFile ?? '', variable: ssh.value.envVar || 'DATABASE_URL' })
-    : t('ssh.errors.other');
+  if (!known.includes(failure.code)) return t('ssh.errors.other');
+  const text = t(`ssh.errors.${failure.code}`, { host: ssh.value.host, file: ssh.value.envFile ?? '', variable: ssh.value.envVar || 'DATABASE_URL' });
+  // Windows: a key with a passphrase needs the ssh-agent service, off by default
+  return failure.code === 'auth' && isWindows ? `${text} ${t('ssh.errors.authWindows')}` : text;
 };
 
 const runTest = async () => {

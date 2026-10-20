@@ -192,7 +192,7 @@ function createOnboarding() {
 
   /** A local server is already here: local mode is the natural choice. */
   const recommendedMode = computed<SelectableMode>(() =>
-    state.env?.supported !== false && state.env?.server.installed ? 'local' : 'remote'
+    state.env?.server.installed ? 'local' : 'remote'
   );
 
   const clientToolsReady = computed(() => state.envSkipped || !!state.env?.clientTools.ready);
@@ -207,7 +207,6 @@ function createOnboarding() {
       case 'mode':
         return !!state.mode;
       case 'machine':
-        if (state.env?.supported === false) return clientToolsReady.value && state.mode === 'remote';
         return clientToolsReady.value && !state.installing;
       case 'databases':
         return !(remoteActive.value && remoteInvalid.value) && state.remote.test !== 'testing';
@@ -276,6 +275,21 @@ function createOnboarding() {
     } finally {
       state.installing = null;
       state.progress = null;
+    }
+  };
+
+  /**
+   * Windows: a PostgreSQL server installed without bbdump has a "postgres" password only its
+   * owner knows. Checked against the server, then kept encrypted by the main process.
+   */
+  const saveLocalPassword = async (password: string): Promise<string | null> => {
+    try {
+      const result: { success: boolean; error?: string; code?: string; environment?: SetupEnvironment } = await ipcRenderer.invoke('setup-local-password', password);
+      if (result?.environment) state.env = result.environment;
+      if (result?.success) return null;
+      return result?.code === 'wrong-password' || !result?.error ? t('onboarding.machine.localPasswordWrong') : result.error;
+    } catch (error) {
+      return describeError(error);
     }
   };
 
@@ -467,6 +481,7 @@ function createOnboarding() {
     state,
     step,
     serverReady,
+    saveLocalPassword,
     recommendedMode,
     clientToolsReady,
     remoteParsed,

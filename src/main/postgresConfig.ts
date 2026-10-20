@@ -2,6 +2,7 @@ import { Client, QueryConfig } from 'pg';
 import { getErrorMessage } from './utils';
 import { logger } from './logger';
 import { checkPostgresInstalled } from './postgresManager';
+import { localPasswordCandidates } from './localServerCredential';
 import { catalogEntry, extensionPackage, isOutdatedHomebrew, linuxExtensionScript, parseLibraryList, preloadLiterals, withPreloadLibrary, type PackageManager } from './extensionCatalog';
 
 /** pkexec on the PATH (graphical root prompt on Linux desktops) */
@@ -109,8 +110,8 @@ async function createPostgresConnection(port: number = 5432, database: string = 
   for (const user of usersToTry) {
     if (!user) continue;
 
-    // No password (trust auth) only — never guess common passwords
-    const passwords = [''];
+    // No password (trust auth), or the saved one on Windows — never guess common passwords
+    const passwords = localPasswordCandidates(user);
 
     for (const pwd of passwords) {
       const client = new Client({
@@ -465,10 +466,10 @@ export async function testDatabaseConnection(
     }
   }
 
-  // Without a password (trust auth); never guess common passwords
-  const passwordsToTry = [''];
+  // Without a password (trust auth), or the saved one on Windows; never guess common passwords
   for (const user of usersToTry) {
     if (!user) continue;
+    const passwordsToTry = localPasswordCandidates(user);
 
     for (const pwd of passwordsToTry) {
       const client = new Client({
@@ -654,6 +655,19 @@ async function readPreloadLibraries(client: Client): Promise<{ loaded: string[];
   }
 }
 
+/** The server's SHAREDIR (superuser only; '' when it cannot be read) */
+async function readSharedir(dbName: string, port: number): Promise<string> {
+  const client = await createPostgresConnection(port, dbName);
+  try {
+    const result = await client.query<{ setting: string }>("SELECT setting FROM pg_config WHERE name = 'SHAREDIR'");
+    return result.rows[0]?.setting || '';
+  } catch {
+    return '';
+  } finally {
+    await client.end();
+  }
+}
+
 export interface ExtensionServerInfo {
   /** Major version of the server (17, 18…) */
   major: number;
@@ -691,6 +705,13 @@ export async function getExtensionServerInfo(dbName: string, port: number = 5432
       const { findBrewPath } = await import('./postgresManager');
       packageManager = 'brew';
       autoInstall = !!(await findBrewPath());
+    } else if (os.platform() === 'win32') {
+      // The EDB server (Program Files\PostgreSQL\<v>): official Windows builds, one administrator prompt
+      const { pgRootFromSharedir } = await import('./platform/windowsExtensions');
+      if (pgRootFromSharedir(sharedir)) {
+        packageManager = 'windows';
+        autoInstall = true;
+      }
     } else if (os.platform() === 'linux') {
       // Debian / Ubuntu (distro or PGDG), PGDG for RHEL-like, Fedora's own packages
       if (sharedir.startsWith('/usr/share/postgresql/')) packageManager = 'apt';
@@ -803,6 +824,17 @@ export async function installExtensionPackage(
   const pkg = manager ? extensionPackage(entry, manager, server.major) : null;
   if (!manager || !server.autoInstall || !pkg) {
     return { success: false, error: `No package bbdump can install for ${extensionName} on this server` };
+  }
+
+  if (manager === 'windows') {
+    const { installWindowsExtension, pgRootFromSharedir } = await import('./platform/windowsExtensions');
+    const pgRoot = pgRootFromSharedir(await readSharedir(dbName, port));
+    if (!pgRoot || !entry.windows) return { success: false, error: `No Windows build bbdump can install for ${extensionName}` };
+    logger.info(`Installing ${pkg} for extension "${extensionName}" into ${pgRoot}`);
+    const result = await installWindowsExtension(entry.windows, server.major, pgRoot, line => logger.info(`[${entry.windows}] ${line}`));
+    if (result.success) logger.info(`${pkg} installed`);
+    else if (!result.cancelled) logger.error(`Installing ${pkg} failed: ${result.error}`);
+    return result;
   }
 
   if (manager !== 'brew') {

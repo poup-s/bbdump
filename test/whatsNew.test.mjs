@@ -28,7 +28,7 @@ describe('who sees the tour', () => {
   test('shown after updating from 1.0.x, not on configurations made by 1.1', () => {
     assert.equal(shouldShowWhatsNew('1.0.0'), true);
     assert.equal(shouldShowWhatsNew(WHATS_NEW_VERSION), false);
-    assert.equal(shouldShowWhatsNew('1.2.0'), false);
+    assert.equal(shouldShowWhatsNew('1.2.0'), compareVersions('1.2.0', WHATS_NEW_VERSION) < 0);
     assert.equal(shouldShowWhatsNew(undefined), false);
     assert.equal(shouldShowWhatsNew(null), false);
   });
@@ -37,7 +37,9 @@ describe('who sees the tour', () => {
     const of = (version) => TOURS.find(t => t.version === version).slides.map(s => s.id);
     assert.equal(shouldShowWhatsNew('1.1.2'), WHATS_NEW_VERSION !== '1.1.0');
     assert.deepEqual(ids(tourSlides('1.0.0')), TOURS.flatMap(t => t.slides.map(s => s.id)));
-    assert.deepEqual(ids(tourSlides('1.1.2')), of(WHATS_NEW_VERSION));
+    // From 1.1.2: every newer tour, the newest first
+    assert.deepEqual(ids(tourSlides('1.1.2')), TOURS.filter(t => compareVersions('1.1.2', t.version) < 0).flatMap(t => of(t.version)));
+    assert.deepEqual(ids(tourSlides('1.2.2')), of(WHATS_NEW_VERSION));
     assert.deepEqual(ids(tourSlides(WHATS_NEW_VERSION)), of(WHATS_NEW_VERSION));
     assert.deepEqual(ids(tourSlides(WHATS_NEW_VERSION, '1.1.0')), of('1.1.0'));
     assert.equal(tourSlides('1.0.0').at(-1).version, '1.1.0');

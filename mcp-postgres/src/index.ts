@@ -2,9 +2,26 @@
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createServer } from './server.js';
-import { closeAll } from './db.js';
+import { closeAll, setActiveConnection } from './db.js';
+import { chatScope } from './chatScope.js';
+import { findDatabase, getConnectionParams } from './connections.js';
+import { reachThroughApp } from './tunnel.js';
+
+/** A chat on one database: connected to it before the first call */
+async function connectChatDatabase(): Promise<void> {
+  if (!chatScope.databaseId) return;
+  try {
+    const params = getConnectionParams(chatScope.databaseId);
+    if (!params) throw new Error('saved database not found');
+    const saved = findDatabase(chatScope.databaseId);
+    setActiveConnection(await reachThroughApp(params), saved?.displayName || saved?.name || chatScope.databaseId);
+  } catch (err) {
+    console.error(`Chat database not connected: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 
 async function main() {
+  await connectChatDatabase();
   const server = createServer();
   const transport = new StdioServerTransport();
 

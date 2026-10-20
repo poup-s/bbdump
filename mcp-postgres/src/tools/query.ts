@@ -104,7 +104,7 @@ export function registerQueryTools(server: McpServer) {
         // EXPLAIN / SHOW output holds plans and settings, not rows
         const shown = /^\s*(explain|show)\b/i.test(sql)
           ? { rows: truncated ? result.rows.slice(0, limit) : result.rows }
-          : await protectRows(client, { fields: result.fields ?? [], rows: truncated ? result.rows.slice(0, limit) : result.rows }, { tool: 'execute_query', database, sql });
+          : await protectRows(client, { fields: result.fields ?? [], rows: truncated ? result.rows.slice(0, limit) : result.rows }, { tool: 'execute_query', database, sql, params });
         if ('blocked' in shown && shown.blocked) return errorResult(shown.blocked);
         const rows = shown.rows;
         const fields = result.fields?.map(f => f.name) || [];

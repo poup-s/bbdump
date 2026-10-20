@@ -57,7 +57,7 @@ describe('MCP server', () => {
 
   test('fakes are stable, NULL stays NULL, "null" empties', () => {
     assert.equal(mcp.fakeValue('alice@real.com', 'email'), mcp.fakeValue('alice@real.com', 'email'));
-    assert.match(mcp.fakeValue('alice@real.com', 'email'), /^user_[0-9a-f]{12}@example\.com$/);
+    assert.match(mcp.fakeValue('alice@real.com', 'email'), /^[a-z]+\.[a-z]+\.[0-9a-f]{4}@example\.com$/);
     assert.match(mcp.fakeValue('Alice', 'secret'), /^XXXX[0-9A-F]{8}$/);
     assert.match(mcp.fakeValue('+33612345678', 'phone'), /^\+000\d{9}$/);
     assert.equal(mcp.fakeValue(null, 'email'), null);

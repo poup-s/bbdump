@@ -191,26 +191,77 @@ const onDragStart = (event: DragEvent) => {
     <div class="flex items-center gap-0.5 shrink-0">
       <button
         @click.stop="handleBackupClick"
-        class="px-1.5 py-1 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-400 hover:text-foreground transition-colors flex items-center gap-1"
+        class="card-backup px-1.5 py-1 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-400 hover:text-foreground transition-colors flex items-center gap-1"
         :title="t('cardAction.backup')"
       >
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+        <svg class="card-backup-icon w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3" />
+          <!-- The arrow drops into the tray on hover -->
+          <path class="card-backup-arrow" stroke-linecap="round" stroke-linejoin="round" d="M15 11l-3 3m0 0l-3-3m3 3V4" />
         </svg>
         <span class="text-[9px] font-medium">{{ t('cardAction.backup') }}</span>
       </button>
       <button
         @click.stop="emit('view', db)"
-        class="px-1.5 py-1 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-400 hover:text-foreground transition-colors flex items-center gap-1"
+        class="card-view px-1.5 py-1 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-400 hover:text-foreground transition-colors flex items-center gap-1"
         :title="t('cardAction.view')"
       >
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+        <!-- The eye blinks on hover -->
+        <svg class="card-view-icon w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <g class="card-view-eye">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+          </g>
         </svg>
         <span class="text-[9px] font-medium">{{ t('cardAction.view') }}</span>
+      </button>
+      <!-- Ask the AI about this database (read only) -->
+      <button
+        @click.stop="store.aiChatDb = db"
+        class="card-ai px-1.5 py-1 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors flex items-center gap-1"
+        :title="t('chat.menu')"
+      >
+        <svg class="card-ai-icon w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <!-- A messenger bubble with its three dots -->
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 20.25c4.97 0 9-3.694 9-8.25s-4.03-8.25-9-8.25S3 7.444 3 12c0 2.104.859 4.023 2.273 5.48.432.447.74 1.04.586 1.641a4.483 4.483 0 01-.923 1.785A5.969 5.969 0 006 21c1.282 0 2.47-.402 3.445-1.087.81.22 1.668.337 2.555.337z" />
+          <path class="card-ai-dots" stroke-linecap="round" stroke-width="2.6" d="M8.25 12h.01M12 12h.01M15.75 12h.01" />
+        </svg>
+        <span class="text-[9px] font-medium">{{ t('cardAction.ai') }}</span>
       </button>
       <ActionMenu :items="menuItems" :label="t('cardAction.more')" @select="onMenu" />
     </div>
   </div>
 </template>
+
+<style scoped>
+.card-ai-icon { transform-origin: 30% 90%; transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.card-ai:hover .card-ai-icon { transform: rotate(-10deg) scale(1.15); }
+.card-ai:hover .card-ai-dots { animation: card-ai-typing 0.9s ease-in-out infinite; }
+@keyframes card-ai-typing { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+/* Backup: the icon lifts, its arrow keeps dropping into the tray */
+.card-backup-icon { transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.card-backup:hover .card-backup-icon { transform: scale(1.15); }
+.card-backup:hover .card-backup-arrow { animation: card-backup-drop 1s cubic-bezier(0.45, 0, 0.2, 1) infinite; }
+@keyframes card-backup-drop {
+  0% { transform: translateY(-3px); opacity: 0; }
+  25% { opacity: 1; }
+  60% { transform: translateY(1.5px); }
+  80%, 100% { transform: translateY(0); opacity: 1; }
+}
+
+/* View: the icon leans in, the eye blinks */
+.card-view-icon { transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.card-view:hover .card-view-icon { transform: scale(1.15); }
+.card-view-eye { transform-box: view-box; transform-origin: 12px 12px; }
+.card-view:hover .card-view-eye { animation: card-view-blink 1.8s ease-in-out infinite; }
+@keyframes card-view-blink {
+  0%, 40%, 52%, 100% { transform: scaleY(1); }
+  46% { transform: scaleY(0.1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-ai:hover .card-ai-icon, .card-backup:hover .card-backup-icon, .card-view:hover .card-view-icon { transform: none; }
+  .card-ai:hover .card-ai-dots, .card-backup:hover .card-backup-arrow, .card-view:hover .card-view-eye { animation: none; }
+}
+</style>

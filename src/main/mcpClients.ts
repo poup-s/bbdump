@@ -357,12 +357,30 @@ function stdioEntry(spec: McpLaunchSpec, withType: boolean): Json {
     return entry;
 }
 
+/**
+ * Claude Desktop from the Microsoft Store (MSIX) keeps its files in its package folder:
+ * %LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude. Null for the regular install.
+ */
+function claudeStoreDir(ctx: McpClientContext): string | null {
+    const packages = path.join(ctx.home, 'AppData', 'Local', 'Packages');
+    try {
+        for (const name of fs.readdirSync(packages)) {
+            if (!/^Claude_/i.test(name)) continue;
+            const dir = path.join(packages, name, 'LocalCache', 'Roaming', 'Claude');
+            if (exists(dir)) return dir;
+        }
+    } catch {
+        // No Packages folder
+    }
+    return null;
+}
+
 function claudeDesktopConfigPath(ctx: McpClientContext): string {
     switch (ctx.platform) {
         case 'darwin':
             return path.join(ctx.home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
         case 'win32':
-            return path.join(appDataDir(ctx), 'Claude', 'claude_desktop_config.json');
+            return path.join(claudeStoreDir(ctx) ?? path.join(appDataDir(ctx), 'Claude'), 'claude_desktop_config.json');
         default:
             return path.join(xdgConfig(ctx), 'Claude', 'claude_desktop_config.json');
     }
@@ -398,7 +416,7 @@ const CLIENTS: ClientDef[] = [
             if (ctx.platform === 'win32') {
                 const local = path.join(ctx.home, 'AppData', 'Local');
                 return exists(path.join(local, 'AnthropicClaude')) || exists(path.join(local, 'Programs', 'claude-desktop'))
-                    || exists(path.dirname(claudeDesktopConfigPath(ctx)));
+                    || claudeStoreDir(ctx) !== null || exists(path.dirname(claudeDesktopConfigPath(ctx)));
             }
             return exists(path.dirname(claudeDesktopConfigPath(ctx)));
         },
@@ -550,9 +568,11 @@ export function listClientStatuses(ctx: McpClientContext, spec: McpLaunchSpec): 
 
 function runClaudeCli(ctx: McpClientContext, args: string[]): void {
     execFileSync(ctx.claudeCli as string, args, {
-        env: { ...process.env, HOME: ctx.home },
+        // Windows reads the profile from USERPROFILE, not HOME
+        env: { ...process.env, HOME: ctx.home, ...(ctx.platform === 'win32' ? { USERPROFILE: ctx.home } : {}) },
         stdio: 'pipe',
         timeout: 30000,
+        windowsHide: true,
     });
 }
 
@@ -620,7 +640,11 @@ export function buildCustomSnippet(spec: McpLaunchSpec): string {
 
 /** Locate the Claude Code CLI without relying on the GUI app's PATH. */
 export function findClaudeCli(home: string, platform: NodeJS.Platform): string | null {
-    if (platform === 'win32') return null;
+    // Windows: the native installer's claude.exe (an npm .cmd shim cannot run without a shell)
+    if (platform === 'win32') {
+        const exe = path.join(home, '.local', 'bin', 'claude.exe');
+        return exists(exe) ? exe : null;
+    }
     const candidates = [
         path.join(home, '.local', 'bin', 'claude'),
         path.join(home, '.claude', 'local', 'claude'),

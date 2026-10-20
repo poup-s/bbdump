@@ -1,4 +1,5 @@
 import * as crypto from 'crypto';
+import { databaseAllowed } from './chatScope.js';
 import * as fs from 'fs';
 
 const ALGORITHM = 'aes-256-gcm';
@@ -175,7 +176,9 @@ function loadBbdumpConfig(): BbdumpConfig | null {
   if (!configPath) return null;
   try {
     const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8')) as BbdumpConfig;
-    return Array.isArray(parsed.databases) ? parsed : { ...parsed, databases: [] };
+    // A chat on one database sees that database only
+    const databases = Array.isArray(parsed.databases) ? parsed.databases.filter((d) => databaseAllowed(d.id)) : [];
+    return { ...parsed, databases };
   } catch (err: any) {
     console.error(`Failed to read bbdump config: ${err.message}`);
     return null;

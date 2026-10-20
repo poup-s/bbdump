@@ -280,7 +280,8 @@ describe('package manager and auto install', () => {
     assert.equal(environment.computeCanAutoInstall('linux', apt, 'unknown', true), false);
     assert.equal(environment.computeCanAutoInstall('macos', { id: 'brew', path: '/opt/homebrew/bin/brew' }, 'unknown', false), true);
     assert.equal(environment.computeCanAutoInstall('macos', null, 'unknown', false), false);
-    assert.equal(environment.computeCanAutoInstall('windows', { id: 'winget' }, 'unknown', false), false);
+    assert.equal(environment.computeCanAutoInstall('windows', { id: 'winget' }, 'unknown', false), true);
+    assert.equal(environment.computeCanAutoInstall('windows', null, 'unknown', false), false);
   });
   test('install family falls back to the package manager', () => {
     assert.equal(environment.installFamily({ distro: { id: 'x', name: 'X', family: 'unknown' }, packageManager: { id: 'pacman' } }), 'arch');
@@ -371,12 +372,14 @@ describe('install plans', () => {
     assert.equal(install.planFor('homebrew', env).automatic, true);
   });
 
-  test('Windows: plans only, winget', () => {
-    const env = { ...base, os: 'windows', osLabel: 'Windows 10.0', supported: false, packageManager: { id: 'winget' }, canAutoInstall: false };
+  test('Windows: the server and the client tools through winget', () => {
+    const env = { ...base, os: 'windows', osLabel: 'Windows 10.0', supported: true, packageManager: { id: 'winget' }, canAutoInstall: true };
     const plan = install.planFor('server', env);
-    assert.equal(plan.automatic, false);
+    assert.equal(plan.automatic, true);
     assert.match(plan.command, /^winget install -e --id PostgreSQL\.PostgreSQL\.17/);
-    assert.equal(windows.WINDOWS_SUPPORTED, false);
+    assert.equal(install.planFor('homebrew', env).automatic, false);
+    assert.equal(install.planFor('server', { ...env, packageManager: null }).automatic, false);
+    assert.equal(windows.WINDOWS_SUPPORTED, true);
   });
 
   test('component validation', () => {

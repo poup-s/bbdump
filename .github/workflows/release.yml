@@ -1,7 +1,8 @@
 # Builds the release artifacts WITHOUT publishing them.
 # Run it by hand (Actions > Build release artifacts > Run workflow), download the
 # artifacts, test them, then create the GitHub release manually with these files
-# (including latest-mac.yml / latest-linux*.yml, which existing installs poll).
+# (including latest-mac.yml / latest-linux*.yml / latest.yml for Windows, which existing
+# installs poll).
 name: Build release artifacts
 
 on:
@@ -9,6 +10,11 @@ on:
 
 permissions:
   contents: read
+
+# A dependency (OpenUI) reports installs unless told not to
+env:
+  DO_NOT_TRACK: "1"
+  OPENUI_TELEMETRY_DISABLED: "1"
 
 jobs:
   mac:
@@ -76,3 +82,33 @@ jobs:
             release/*.AppImage
             release/*.deb
             release/latest-linux*.yml
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mcp-postgres/package-lock.json
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm run bundle:mcp
+
+      # One installer for x64 and arm64 (unsigned: Windows shows a SmartScreen warning)
+      - name: Package (NSIS installer, x64 + arm64)
+        run: npx electron-builder --win --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bbdump-windows
+          if-no-files-found: error
+          path: |
+            release/*-setup.exe
+            release/*-setup.exe.blockmap
+            release/latest.yml
