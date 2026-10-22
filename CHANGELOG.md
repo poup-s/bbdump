@@ -1,5 +1,63 @@
 # Changelog
 
+## 1.4.0 — 2026-10-22
+
+### Added
+
+- **Dashboards.** A new **Dashboards** page keeps live dashboards of your databases, made
+  with the AI. Describe what you want to follow (orders per day, revenue by city, latest
+  sign-ups…), or start from a template (overview, activity over time, search and details, track a
+  figure, rankings, data quality): the AI tool of the database chat reads the schema, checks each
+  query (without seeing any value), then builds the dashboard. A dashboard holds no data, only read-only
+  queries: bbdump runs them when it opens, on **Refresh** (the data on screen stays until the
+  new results arrive), automatically every minute to every hour, and when a filter changes.
+  - **Blocks**: key figures (change against the previous period, goal, small trend line, money,
+    percent, duration…), progress toward a goal, tables you can search, sort and page, bars,
+    lines, areas, donut, several series on one chart (lines, columns side by side or stacked),
+    activity calendar, formatted text. Dates and numbers follow the app's language.
+  - **Filters**: a period (7 days to 12 months, this year, all time, custom dates), values to
+    filter on (a city, a status…; a field that suggests them when there are many) and a search
+    field, bound to the queries as parameters and remembered.
+  - **Linked blocks**: a click on a table row (a user…) filters the whole dashboard on it: a
+    detail card shows that record and the related blocks follow (their sessions, orders…); the
+    selection shows as a chip, cleared in one click. Bars and donut slices can filter the
+    dashboard the same way.
+  - **Layout by hand**: drag a block by its grip to move it before or after another one (also
+    from one row to another), resize it from its corner (the width snaps to the grid, the height
+    is free; double-click for the automatic size; down to ⅙ of the width). Blocks without a chosen
+    width share their row evenly. A block of key figures splits into one card per figure, each
+    moved and sized on its own (new dashboards get one card per figure). Tables keep a margin
+    around their rows, so the wheel there scrolls the page.
+  - **By hand, from each block's menu**: show it as another chart or as a table, width (⅓ to
+    full), order, title, its SQL (tried before it is saved), export to Excel or CSV, copy for a
+    spreadsheet (paste in Excel or Google Sheets), duplicate, hide, delete. Every change can be
+    undone.
+  - **Explain this figure** (? on a block): the AI says in plain words, without SQL, where the
+    figures come from, what is counted and what is left out, and over which period.
+  - **With the AI**, from the **Edit with AI** panel or a block's ✦ button (the request is then
+    about that block only): the AI sends only what changes, and offers its next steps (or the
+    choices of its question) as buttons. After a change, blocks that fail to load go back to
+    the AI once to be fixed; a **Fix with AI** button stays there otherwise.
+  - **Around it**: colours and density per dashboard, pin to the home page, PDF export, the
+    whole dashboard to Excel (one sheet per block, real numbers and dates), a
+    dashboard file to share and import (no data, no conversation), the same dashboard on
+    another database (a local copy of production…), last results kept on request so the
+    dashboard shows at once. Slow blocks show their time.
+  Dashboards, their conversation with the AI and kept results are encrypted on the computer,
+  apart from the configuration; a database removed from bbdump takes its dashboards with it.
+  Also from a database card: **⋯ → New dashboard**.
+- **What's new in 1.4**: after updating, a short tour shows dashboards (creating, filters and
+  linked blocks, layout by hand, exports); it stays on the Info page.
+- **MCP server**: `check_query` runs a SELECT and returns only its shape (columns and types,
+  number of rows, time), no values; dashboard filter placeholders are accepted.
+
+### Fixed
+
+- Database chat: the bars of a bar chart are measured on the same scale (the length of each
+  value no longer changed the width of its bar).
+- Database chat: answers stay in the language of the question when the data looks like another
+  language (French names, for instance).
+
 ## 1.3.0 — 2026-10-20
 
 ### Added

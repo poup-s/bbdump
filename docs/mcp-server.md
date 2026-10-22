@@ -86,7 +86,7 @@ On macOS, move bbdump to `/Applications` before installing: an app opened from D
 
 ## Available Tools
 
-The MCP server exposes 45 tools and 4 prompts. Tools are annotated (read-only or destructive), so clients can approve reads automatically. Tools marked ✱ change something and need your confirmation in bbdump.
+The MCP server exposes 46 tools and 4 prompts. Tools are annotated (read-only or destructive), so clients can approve reads automatically. Tools marked ✱ change something and need your confirmation in bbdump.
 
 ### Connections
 
@@ -138,6 +138,7 @@ The MCP server exposes 45 tools and 4 prompts. Tools are annotated (read-only or
 |------|-------------|
 | `execute_query` | Read-only SQL in a READ ONLY transaction, rows limited on the server, `$1` parameters, markdown / CSV output |
 | `explain_query` | Execution plan with a summary: sequential scans, slowest nodes, bad estimates |
+| `check_query` | Runs a SELECT and returns only its shape (columns, types, row count, time), no values: used to test dashboard queries |
 | `query_history` | Queries and changes run in this MCP session |
 
 ### Health and performance

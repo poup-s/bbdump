@@ -60,6 +60,7 @@ const ICONS = {
   sync: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15',
   puzzle: 'M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z',
   mask: 'M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21',
+  chart: 'M4 20h16M7 16v-5m5 5V6m5 10V8',
   disconnect: 'M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25',
 };
 
@@ -84,6 +85,8 @@ const menuItems = computed<ActionMenuItem[]>(() => [
   // A local database can catch up with another database of its project (e.g. prod)
   // Never for a remote database: local server flag AND an address on this computer
   ...(isOnThisComputer.value && !isRemoteOnly() && projectSiblings.value > 0 ? [{ key: 'sync', label: t('sync.menu'), icon: ICONS.sync }] : []),
+  // A dashboard of this database, made with the AI
+  { key: 'dashboard', label: t('dashboards.fromDatabase'), icon: ICONS.chart },
   // Changes made by AI clients through MCP, and their undo
   { key: 'ai-journal', label: t('aiJournal.title'), icon: ICONS.history },
   // Personal data masked in what AI clients read
@@ -101,6 +104,11 @@ const onMenu = (key: string) => {
   else if (key === 'edit') emit('edit', props.db);
   else if (key === 'addons') emit('addons', props.db);
   else if (key === 'ai-journal') store.aiJournalDb = props.db;
+  else if (key === 'dashboard') {
+    store.openDashboard = null;
+    store.newDashboardDb = props.db;
+    store.activeTab = 'boards';
+  }
   else if (key === 'ai-masking') store.aiMaskingDb = props.db;
   else if (key === 'sync') store.syncTargetDb = props.db;
   else if (key === 'proxy-target') emit('set-proxy-target');

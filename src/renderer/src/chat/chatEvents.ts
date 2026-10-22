@@ -20,7 +20,8 @@ export type AssistantBlock = TextBlock | ToolBlock | DiscloseBlock;
 
 export type ChatMessage =
   | { role: 'user'; text: string }
-  | { role: 'assistant'; blocks: AssistantBlock[]; error?: string; done: boolean };
+  /** dashboard: in a dashboard's conversation, what became of the answer's patch */
+  | { role: 'assistant'; blocks: AssistantBlock[]; error?: string; done: boolean; dashboard?: 'updated' | 'invalid' };
 
 export interface DatabaseChat {
   chatId: string;

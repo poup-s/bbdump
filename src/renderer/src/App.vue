@@ -36,6 +36,7 @@ import AiJournalModal from './components/AiJournalModal.vue';
 import AnonymizeModal from './components/AnonymizeModal.vue';
 import SyncFromSourceModal from './components/SyncFromSourceModal.vue';
 import AiChatPanel from './components/chat/AiChatPanel.vue';
+import DashboardsPage from './components/dashboards/DashboardsPage.vue';
 
 const { t } = useI18n();
 const isDark = useDark();
@@ -50,6 +51,7 @@ const activeTab = computed({
 const tabs = [
   { id: 'dashboard', label: 'nav.dashboard', short: 'navShort.dashboard', icon: 'M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z' },
   { id: 'databases', label: 'nav.databases', short: 'navShort.databases', icon: 'M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4' },
+  { id: 'boards', label: 'nav.boards', short: 'navShort.boards', icon: ['M4 20h16', 'M7 16v-5', 'M12 16V6', 'M17 16v-8'] },
   { id: 'backups', label: 'nav.backups', short: 'navShort.backups', icon: 'M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4' },
   { id: 'logs', label: 'nav.logs', short: 'navShort.logs', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9h6m-6 4h6' },
   // Clock split in two paths (face, then hands) so the hands can spin on hover
@@ -144,7 +146,8 @@ const handleLoaderComplete = () => {
 
     <!-- Main Content -->
     <main class="flex-1 mr-4 mb-4 mt-12 ml-0 bg-surface/50 backdrop-blur-md border border-white/10 rounded-3xl shadow-2xl overflow-hidden relative z-10">
-      <div class="h-full p-8" :class="{ 'overflow-y-auto scrollbar-hide': activeTab !== 'logs' }">
+      <!-- An open dashboard scrolls inside its own panes -->
+      <div class="h-full p-8" :class="{ 'overflow-y-auto scrollbar-hide': activeTab !== 'logs' && !(activeTab === 'boards' && store.openDashboard) }">
         <Transition
           enter-active-class="transition duration-300 ease-out"
           enter-from-class="transform opacity-0 translate-y-4"
@@ -157,6 +160,7 @@ const handleLoaderComplete = () => {
           <component :is="{
             dashboard: Dashboard,
             databases: DatabaseList,
+            boards: DashboardsPage,
             backups: BackupList,
             logs: LogViewer,
             tasks: ScheduledTasks,

@@ -840,6 +840,8 @@ export async function executeQuery(params: ConnectionParams & {
   sql: string;
   maxRows?: number;
   timeoutMs?: number;
+  /** Values for $1, $2… (dashboard filters) */
+  values?: Array<string | number | boolean | null>;
 }) {
   const client = await getClient(params);
   const maxRows = params.maxRows || 5000;
@@ -852,7 +854,7 @@ export async function executeQuery(params: ConnectionParams & {
     const startTime = Date.now();
     // Extended protocol = single statement only, so "...; COMMIT; <write>" cannot
     // escape the READ ONLY transaction.
-    const result = await client.query({ text: params.sql, values: [], queryMode: 'extended' } as QueryConfig);
+    const result = await client.query({ text: params.sql, values: params.values ?? [], queryMode: 'extended' } as QueryConfig);
     const duration = Date.now() - startTime;
 
     await client.query('COMMIT');
@@ -860,10 +862,13 @@ export async function executeQuery(params: ConnectionParams & {
     const truncated = result.rows.length > maxRows;
     const rows = truncated ? result.rows.slice(0, maxRows) : result.rows;
     const fields = result.fields?.map(f => f.name) || [];
+    // Type of each column (OIDs): bigint and numeric come as text, dashboards turn them into numbers
+    const types = result.fields?.map(f => f.dataTypeID) || [];
 
     return {
       rows,
       fields,
+      types,
       rowCount: result.rowCount,
       truncated,
       duration

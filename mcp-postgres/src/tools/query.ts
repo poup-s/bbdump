@@ -57,7 +57,61 @@ export function summarizePlan(root: { Plan: PlanNode; 'Execution Time'?: number;
   };
 }
 
+/** Readable names of the usual column types (OIDs) */
+const TYPE_NAMES: Record<number, string> = {
+  16: 'boolean', 20: 'bigint', 21: 'smallint', 23: 'integer', 25: 'text', 114: 'json', 700: 'real', 701: 'double',
+  1043: 'varchar', 1082: 'date', 1083: 'time', 1114: 'timestamp', 1184: 'timestamptz', 1186: 'interval', 1700: 'numeric',
+  2950: 'uuid', 3802: 'jsonb', 1009: 'text[]', 1007: 'integer[]',
+};
+
+/**
+ * Dashboard filter placeholders (bbdump binds them when a dashboard runs): {{from}} and {{to}}
+ * as the last 30 days, any other {{name}} as NULL (the filter set to "all")
+ */
+export function withPlaceholderDefaults(sql: string): string {
+  return sql
+    .replace(/\{\{\s*from\s*\}\}/g, "(now() - interval '30 days')")
+    .replace(/\{\{\s*to\s*\}\}/g, 'now()')
+    .replace(/\{\{\s*\w+\s*\}\}/g, 'NULL::text');
+}
+
 export function registerQueryTools(server: McpServer) {
+  server.registerTool(
+    'check_query',
+    {
+      title: 'Check a query',
+      description: 'Runs a SELECT (read-only) and returns only its shape: column names and types, the number of rows and the time it took. No values: use it to test the queries of a dashboard. Dashboard filter placeholders ({{from}}, {{to}}, {{name}}) are accepted.',
+      inputSchema: {
+        sql: z.string().describe('One SELECT statement'),
+        database: databaseParam,
+        timeout_ms: z.number().int().min(1000).max(MAX_TIMEOUT_MS).default(30000).describe('Timeout in milliseconds'),
+      },
+      annotations: READ,
+    },
+    async ({ sql, database, timeout_ms }) => {
+      const keyword = findWriteKeyword(sql);
+      if (keyword) return errorResult(`${keyword} changes the database: only read queries can be checked here.`);
+      return withClient(database, async (client) => {
+        const startTime = Date.now();
+        try {
+          const result = await executeReadOnly(client, trimStatement(withPlaceholderDefaults(sql)), [], timeout_ms);
+          const duration_ms = Date.now() - startTime;
+          recordQuery({ tool: 'check_query', database: database || getActiveConnectionInfo().database, sql, duration_ms });
+          return jsonResult({
+            ok: true,
+            columns: (result.fields ?? []).map(f => ({ name: f.name, type: TYPE_NAMES[f.dataTypeID] ?? `oid ${f.dataTypeID}` })),
+            row_count: result.rows?.length ?? 0,
+            duration_ms,
+            ...(duration_ms > 3000 ? { warning: 'Slow: a dashboard runs it on every refresh. Simplify it or narrow it (dates, LIMIT).' } : {}),
+          });
+        } catch (err) {
+          return errorResult(`The query fails: ${(err as Error).message}`);
+        }
+      });
+    }
+  );
+
+
   server.registerTool(
     'execute_query',
     {

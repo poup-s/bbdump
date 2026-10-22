@@ -49,3 +49,13 @@ export function saveChatSettings(next: ChatSettings): void {
     // only a convenience
   }
 }
+
+/** The AI tools a conversation can use, with their site.
+ * local: a model server bbdump talks to itself (it counts as available when it runs) */
+export const CHAT_TOOLS: Array<{ id: ChatProviderId; label: string; url: string; local?: boolean }> = [
+  { id: 'claude', label: 'Claude Code', url: 'https://docs.anthropic.com/en/docs/claude-code/overview' },
+  { id: 'codex', label: 'Codex', url: 'https://github.com/openai/codex' },
+  { id: 'opencode', label: 'OpenCode', url: 'https://opencode.ai' },
+  { id: 'ollama', label: 'Ollama', url: 'https://ollama.com', local: true },
+  { id: 'lmstudio', label: 'LM Studio', url: 'https://lmstudio.ai', local: true },
+];

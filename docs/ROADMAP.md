@@ -13,7 +13,7 @@ What bbdump already does, what comes next, and ideas still being discussed. Plan
 - **Scheduling that survives restarts**: launch at login (hidden), catch-up of missed backups, a notification when one fails.
 - **Update from…**: bring a local copy up to date with another database of its project (schema and missing rows, optionally anonymized).
 - **Explorer**: tables in tabs, every schema, row duplication, extension catalog with package install on the local server.
-- **AI assistants**: one-click setup for Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Devin, VS Code and OpenCode; 45 tools and 4 prompts; **AI journal** with undo of every change.
+- **AI assistants**: one-click setup for Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Devin, VS Code and OpenCode; 46 tools and 4 prompts; **AI journal** with undo of every change.
 - New onboarding, and pages redone (home, tasks, backups, logs, settings).
 
 ### 1.1.2
@@ -30,12 +30,15 @@ What bbdump already does, what comes next, and ideas still being discussed. Plan
 
 - Duplicating a database **checks its extensions first**: a missing one (e.g. PostGIS) is named, with an install button when possible, and the tables not copied are listed.
 
-## Next: Windows (beta) in 1.3
+### 1.3
 
-- **Both usage modes**: remote databases only, or a local PostgreSQL server that bbdump installs with winget (a Windows service) or that was already there.
-- Windows installer (x64 and ARM64) and automatic updates. The app will not be code-signed at first, so Windows may show a SmartScreen warning.
-- `pg_dump` and `psql` found in the usual PostgreSQL install folders; SSH through Windows' OpenSSH.
-- Notification area icon, and launch hidden at login.
+- **Chat with a database**: ask in plain words, with Claude Code, Codex, OpenCode or a local model (Ollama, LM Studio); read only, with the anonymized columns kept anonymized.
+- **Realistic anonymization**: fake names, emails, cities and addresses, numbers and dates with noise, nothing to install on the server.
+- **Windows (beta)**: installer (x64 and ARM64) that updates itself, remote databases or a local PostgreSQL installed with winget, SSH through Windows' OpenSSH, notification area icon. Not code-signed yet, so Windows may show a SmartScreen warning.
+
+### 1.4
+
+- **Dashboards**: live dashboards made with AI, from a sentence or a template; filters, search and linked blocks; automatic refresh; blocks moved and resized by hand; PDF, Excel and CSV exports, a file to share, pinned to the home page.
 
 ## Later
 

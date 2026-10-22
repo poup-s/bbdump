@@ -127,3 +127,5 @@ mcp-postgres/bundle/
 ai-chat/
 # Dev app: chat history
 ai-chat-history/
+# Dev app: dashboards
+/dashboards/

@@ -268,15 +268,21 @@ export function registerDbViewerHandlers() {
         sql: string;
         maxRows?: number;
         timeoutMs?: number;
+        params?: unknown[];
     }) => {
         try {
             logger.info(`Executing SQL query on ${params.db.id} (maxRows: ${params.maxRows || 500})`);
             const dbConfig = await getDbConfig(params.db.id);
+            // Bound values (dashboard filters): plain values only, never SQL
+            const values = Array.isArray(params.params)
+                ? params.params.slice(0, 50).map(v => (v === null || ['string', 'number', 'boolean'].includes(typeof v) ? v as string | number | boolean | null : null))
+                : undefined;
             return await dbViewer.executeQuery({
                 ...dbConfig,
                 sql: params.sql,
                 maxRows: params.maxRows,
-                timeoutMs: params.timeoutMs
+                timeoutMs: params.timeoutMs,
+                values,
             });
         } catch (error) {
             logger.error(`Error executing SQL query: ${getErrorMessage(error) || error}`);

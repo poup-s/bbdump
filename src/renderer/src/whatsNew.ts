@@ -32,7 +32,8 @@ export interface Beat {
 }
 
 export type SlideId = 'intro' | 'actions' | 'remote' | 'backups' | 'sync' | 'ai' | 'explore' | 'intro12' | 'anonCopy' | 'aiAnon'
-  | 'intro13' | 'chat' | 'chatPrivacy' | 'chatHistory' | 'realAnon' | 'windows';
+  | 'intro13' | 'chat' | 'chatPrivacy' | 'chatHistory' | 'realAnon' | 'windows'
+  | 'intro14' | 'dashCreate' | 'dashLive' | 'dashLayout' | 'dashShare';
 
 export interface Slide {
   id: SlideId;
@@ -48,6 +49,47 @@ export interface Tour {
   date?: string;
   slides: Slide[];
 }
+
+const TOUR_1_4: Slide[] = [
+  { id: 'intro14', beats: 'scene', points: 3 },
+  {
+    id: 'dashCreate',
+    beats: [
+      { shot: 'dash-new', mark: 'templates' },
+      { shot: 'dash-new', mark: 'request' },
+      { shot: 'dash-built', mark: 'steps' },
+      { shot: 'dash-built', mark: 'canvas', hold: 3400 },
+      { shot: 'dash-done', mark: 'suggestions' },
+    ],
+  },
+  {
+    id: 'dashLive',
+    beats: [
+      { shot: 'dash-filters', mark: 'filters' },
+      { shot: 'dash-filters', mark: 'kpis' },
+      { shot: 'dash-filters', mark: 'chart' },
+      { shot: 'dash-linked', mark: 'row' },
+      { shot: 'dash-linked', mark: 'record', hold: 3200 },
+    ],
+  },
+  {
+    id: 'dashLayout',
+    beats: [
+      { shot: 'dash-drag', mark: 'dragged' },
+      { shot: 'dash-drag', mark: 'drop' },
+      { shot: 'dash-resize', mark: 'resize' },
+      { shot: 'dash-menu', mark: 'tools' },
+      { shot: 'dash-menu', mark: 'menu', hold: 3400 },
+    ],
+  },
+  {
+    id: 'dashShare',
+    beats: [
+      { shot: 'dash-export', mark: 'exports', hold: 3400 },
+      { shot: 'dash-export', mark: 'pin' },
+    ],
+  },
+];
 
 const TOUR_1_3: Slide[] = [
   { id: 'intro13', beats: 'scene', points: 3 },
@@ -176,6 +218,7 @@ const TOUR_1_1: Slide[] = [
 
 /** Newest first. A new tour goes on top, with its slides, texts and screenshots. */
 export const TOURS: Tour[] = [
+  { version: '1.4.0', date: '2026-10-22', slides: TOUR_1_4 },
   { version: '1.3.0', date: '2026-10-20', slides: TOUR_1_3 },
   { version: '1.2.0', date: '2026-10-14', slides: TOUR_1_2 },
   { version: '1.1.0', date: '2026-10-02', slides: TOUR_1_1 },

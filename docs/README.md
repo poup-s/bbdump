@@ -14,6 +14,7 @@
 - [Database Explorer](database-viewer.md) — Tables in tabs, row editing, schema graph, SQL builder, extensions
 - [Proxy per Project](proxy-server.md) — One fixed local address, routed to the database you choose
 - [Database Chat](database-chat.md) — Ask a database a question, with Claude Code, Codex, OpenCode or a local model
+- [Dashboards](dashboards.md) — Live dashboards made with AI: filters, linked blocks, refresh, layout by hand, exports
 - [MCP Server](mcp-server.md) — AI assistants, change confirmation, AI journal, anonymization for AI
 - [Menu Bar](system-tray.md) — Quick access, proxy switch, AI confirmations
 

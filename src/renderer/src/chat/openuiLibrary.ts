@@ -10,27 +10,27 @@ import { createLibrary, defineComponent as defineUi, type ComponentRenderProps }
 import { useI18n } from '../composables/useI18n';
 
 type Cell = string | number | boolean | null;
-type Render<P> = (p: ComponentRenderProps<P>) => VNode;
+export type Render<P> = (p: ComponentRenderProps<P>) => VNode;
 
-const fmt = (value: unknown): string => {
+export const fmt = (value: unknown): string => {
   if (value === null || value === undefined) return 'NULL';
   if (typeof value === 'number') return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
   return String(value);
 };
 
-const muted = 'text-gray-500 dark:text-zinc-400';
-const card = 'rounded-xl border border-gray-200 dark:border-zinc-800 bg-white dark:bg-zinc-900';
+export const muted = 'text-gray-500 dark:text-zinc-400';
+export const card = 'rounded-xl border border-gray-200 dark:border-zinc-800 bg-white dark:bg-zinc-900';
 
 const renderStack: Render<{ children: unknown[] }> = ({ props, renderNode }) =>
   h('div', { class: 'space-y-3' }, (props.children ?? []).map(child => renderNode(child)) as VNode[]);
 
-const renderHeading: Render<{ text: string }> = ({ props }) =>
+export const renderHeading: Render<{ text: string }> = ({ props }) =>
   h('h3', { class: 'text-[13px] font-semibold text-gray-900 dark:text-zinc-100' }, props.text);
 
-const renderText: Render<{ text: string }> = ({ props }) =>
+export const renderText: Render<{ text: string }> = ({ props }) =>
   h('p', { class: 'text-[13px] leading-relaxed text-gray-700 dark:text-zinc-300 whitespace-pre-wrap' }, props.text);
 
-const renderStats: Render<{ items: Array<{ label: string; value: string | number; hint?: string }> }> = ({ props }) =>
+export const renderStats: Render<{ items: Array<{ label: string; value: string | number; hint?: string }> }> = ({ props }) =>
   h('div', { class: 'grid gap-2', style: { gridTemplateColumns: `repeat(${Math.min(4, Math.max(1, props.items?.length ?? 1))}, minmax(0, 1fr))` } },
     (props.items ?? []).map(item => h('div', { class: `chat-stat ${card} px-3 py-2.5 min-w-0` }, [
       h('div', { class: `text-[11px] truncate ${muted}` }, item.label),
@@ -38,15 +38,20 @@ const renderStats: Render<{ items: Array<{ label: string; value: string | number
       item.hint ? h('div', { class: `text-[11px] truncate ${muted}` }, item.hint) : null,
     ])));
 
-const renderTable: Render<{ columns: string[]; rows: Cell[][]; caption?: string }> = ({ props }) => {
-  const rows = props.rows ?? [];
-  const numeric = (props.columns ?? []).map((_, i) => rows.length > 0 && rows.every(r => r[i] === null || typeof r[i] === 'number'));
+/**
+ * Rows as arrays (the chat) or as objects keyed by column (a dashboard's live query);
+ * labels, when given, are shown instead of the column names
+ */
+export const renderTable: Render<{ columns: string[]; rows: Array<Cell[] | Record<string, unknown>>; caption?: string; labels?: string[] }> = ({ props }) => {
+  const columns = props.columns ?? [];
+  const rows = (props.rows ?? []).map(row => (Array.isArray(row) ? row : columns.map(c => (row as Record<string, unknown> | null)?.[c] as Cell)));
+  const numeric = columns.map((_, i) => rows.length > 0 && rows.every(r => r[i] === null || r[i] === undefined || typeof r[i] === 'number'));
   return h('div', { class: `${card} overflow-hidden` }, [
     props.caption ? h('div', { class: `px-3 py-2 text-[11px] border-b border-gray-100 dark:border-zinc-800 ${muted}` }, props.caption) : null,
     h('div', { class: 'max-h-80 overflow-auto' }, h('table', { class: 'w-full text-[12px] border-collapse' }, [
-      h('thead', { class: 'sticky top-0 bg-gray-50 dark:bg-zinc-800/80' }, h('tr', (props.columns ?? []).map((c, i) =>
-        h('th', { class: `px-3 py-1.5 font-medium whitespace-nowrap ${numeric[i] ? 'text-right' : 'text-left'} ${muted}` }, c)))),
-      h('tbody', rows.map(row => h('tr', { class: 'border-t border-gray-100 dark:border-zinc-800' }, (props.columns ?? []).map((_, i) =>
+      h('thead', { class: 'sticky top-0 bg-gray-50 dark:bg-zinc-800/80' }, h('tr', columns.map((c, i) =>
+        h('th', { class: `px-3 py-1.5 font-medium whitespace-nowrap ${numeric[i] ? 'text-right' : 'text-left'} ${muted}` }, props.labels?.[i] || c)))),
+      h('tbody', rows.map(row => h('tr', { class: 'border-t border-gray-100 dark:border-zinc-800' }, columns.map((_, i) =>
         h('td', {
           class: `px-3 py-1.5 align-top ${numeric[i] ? 'text-right tabular-nums' : ''} ${row[i] === null || row[i] === undefined ? 'text-gray-300 dark:text-zinc-600 italic' : 'text-gray-800 dark:text-zinc-200'}`,
         }, fmt(row[i])))))),
@@ -54,22 +59,22 @@ const renderTable: Render<{ columns: string[]; rows: Cell[][]; caption?: string 
   ]);
 };
 
-const chartFrame = (title: string | undefined, body: VNode | VNode[]) =>
+export const chartFrame = (title: string | undefined, body: VNode | VNode[]) =>
   h('div', { class: `${card} px-3 py-2.5` }, [title ? h('div', { class: 'mb-2 text-[12px] font-medium text-gray-800 dark:text-zinc-200' }, title) : null, body]);
 
-const renderBarChart: Render<{ labels: string[]; values: number[]; title?: string; unit?: string }> = ({ props }) => {
+export const renderBarChart: Render<{ labels: string[]; values: number[]; title?: string; unit?: string }> = ({ props }) => {
   const values = (props.values ?? []).map(v => Number(v) || 0);
   const max = Math.max(1, ...values.map(Math.abs));
-  return chartFrame(props.title, h('div', { class: 'space-y-1.5' }, (props.labels ?? []).map((label, i) =>
-    h('div', { class: 'grid items-center gap-2', style: { gridTemplateColumns: 'minmax(0, 9rem) minmax(0, 1fr) auto' } }, [
-      h('div', { class: `text-[11px] truncate ${muted}`, title: label }, label),
-      h('div', { class: 'h-3.5 rounded bg-gray-100 dark:bg-zinc-800 overflow-hidden' },
-        h('div', { class: 'chat-bar h-full rounded bg-emerald-500/80', style: { width: `${(Math.abs(values[i] ?? 0) / max) * 100}%`, animationDelay: `${i * 50}ms` } })),
-      h('div', { class: 'text-[11px] tabular-nums text-gray-700 dark:text-zinc-300' }, `${fmt(values[i])}${props.unit ? ` ${props.unit}` : ''}`),
-    ]))));
+  // One grid for every bar: the tracks have the same width, whatever the length of each value
+  return chartFrame(props.title, h('div', { class: 'grid items-center gap-x-2 gap-y-1.5', style: { gridTemplateColumns: 'minmax(0, 9rem) minmax(0, 1fr) auto' } }, (props.labels ?? []).flatMap((label, i) => [
+    h('div', { class: `text-[11px] truncate ${muted}`, title: String(label) }, String(label)),
+    h('div', { class: 'h-3.5 rounded bg-gray-100 dark:bg-zinc-800 overflow-hidden' },
+      h('div', { class: 'chat-bar h-full rounded bg-emerald-500/80', style: { width: `${(Math.abs(values[i] ?? 0) / max) * 100}%`, animationDelay: `${i * 50}ms` } })),
+    h('div', { class: 'text-[11px] text-right tabular-nums text-gray-700 dark:text-zinc-300' }, `${fmt(values[i])}${props.unit ? ` ${props.unit}` : ''}`),
+  ])));
 };
 
-const renderLineChart: Render<{ labels: string[]; values: number[]; title?: string; unit?: string }> = ({ props }) => {
+export const renderLineChart: Render<{ labels: string[]; values: number[]; title?: string; unit?: string }> = ({ props }) => {
   const values = (props.values ?? []).map(v => Number(v) || 0);
   const labels = props.labels ?? [];
   if (values.length < 2) return renderBarChart({ props, renderNode: () => null });
@@ -100,7 +105,7 @@ export const sqlDetails = (query: string) =>
 
 const renderSql: Render<{ query: string }> = ({ props }) => sqlDetails(props.query);
 
-const renderNote: Render<{ text: string; tone?: 'info' | 'warning' }> = ({ props }) =>
+export const renderNote: Render<{ text: string; tone?: 'info' | 'warning' }> = ({ props }) =>
   h('p', {
     class: props.tone === 'warning'
       ? 'rounded-lg border border-amber-200 dark:border-amber-900/60 bg-amber-50/60 dark:bg-amber-950/20 px-3 py-2 text-[12px] text-amber-800 dark:text-amber-300'
@@ -163,7 +168,7 @@ export function chatSystemPrompt(database: string): string {
     'It is already the active connection of the bbdump MCP tools (do not call use_connection or list_connections). You can only read: never claim you changed anything.',
     'Use the bbdump tools to answer: get_schema_overview first when you need the structure, then execute_query (SELECT only, add LIMIT), read_rows, count_rows, profile_table… Never invent data: only show values the tools returned.',
     'Some values may come masked by the user (starred, fakes, NULL): keep them as they are.',
-    'Write every sentence in the language of the user\'s message, the short notes between tool calls included. Be brief. Plain text for explanations.',
+    'Write every sentence in the language of the user\'s message, the short notes between tool calls included, never the language the data happens to be in. Be brief. Plain text for explanations.',
     'Whenever you show data (rows, counts, totals, comparisons, trends), put it in ONE fenced block whose language is `openui`, holding an OpenUI Lang program as described below. Text outside the block is shown as is.',
   ].join('\n');
   return chatLibrary.prompt({

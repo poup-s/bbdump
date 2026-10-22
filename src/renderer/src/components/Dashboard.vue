@@ -29,6 +29,22 @@ interface Overview {
 
 const { t, currentLanguage } = useI18n();
 
+/** Dashboards pinned to the home page: shortcuts in the header (the cards and scene keep their place) */
+const pinned = ref<Array<{ id: string; databaseId: string; title: string }>>([]);
+async function loadPinned() {
+  try {
+    const list: Array<{ id: string; databaseId: string; title: string; pinned: boolean }> = await ipcRenderer.invoke('dashboards-list') ?? [];
+    pinned.value = list.filter(d => d.pinned && store.databases.some(db => db.id === d.databaseId)).slice(0, 3);
+  } catch {
+    pinned.value = [];
+  }
+}
+const openPinned = (d: { id: string; databaseId: string }) => {
+  store.openDashboard = { databaseId: d.databaseId, id: d.id };
+  store.activeTab = 'boards';
+};
+onMounted(loadPinned);
+
 const overview = ref<Overview[]>([]);
 const launchAtLogin = ref(true);
 const isLoading = ref(false);
@@ -150,6 +166,19 @@ const label = 'text-[11px] font-medium text-gray-500 dark:text-zinc-400';
       <div class="min-w-0">
         <h1 class="text-2xl font-semibold text-gray-900 dark:text-white leading-tight">{{ t('dashboard.title') }}</h1>
         <p class="text-sm text-gray-500 dark:text-gray-400 truncate">{{ t('home.subtitle') }}</p>
+      </div>
+      <div v-if="pinned.length" class="hidden md:flex items-center gap-1.5 ml-auto mr-2 min-w-0">
+        <button
+          v-for="d in pinned"
+          :key="d.id"
+          type="button"
+          class="max-w-[12rem] h-9 px-3 rounded-lg inline-flex items-center gap-1.5 border border-gray-200 dark:border-zinc-800 bg-white/70 dark:bg-zinc-900/70 text-[12px] text-gray-700 dark:text-zinc-300 hover:border-emerald-300 dark:hover:border-emerald-800 transition-colors"
+          :title="t('dashboards.openPinned', { title: d.title })"
+          @click="openPinned(d)"
+        >
+          <svg class="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path stroke-linecap="round" d="M4 20h16M7 16v-5m5 5V6m5 10V8" /></svg>
+          <span class="truncate">{{ d.title || t('dashboards.untitled') }}</span>
+        </button>
       </div>
       <button
         type="button"

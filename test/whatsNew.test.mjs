@@ -39,7 +39,8 @@ describe('who sees the tour', () => {
     assert.deepEqual(ids(tourSlides('1.0.0')), TOURS.flatMap(t => t.slides.map(s => s.id)));
     // From 1.1.2: every newer tour, the newest first
     assert.deepEqual(ids(tourSlides('1.1.2')), TOURS.filter(t => compareVersions('1.1.2', t.version) < 0).flatMap(t => of(t.version)));
-    assert.deepEqual(ids(tourSlides('1.2.2')), of(WHATS_NEW_VERSION));
+    assert.deepEqual(ids(tourSlides('1.2.2')), TOURS.filter(t => compareVersions('1.2.2', t.version) < 0).flatMap(t => of(t.version)));
+    assert.deepEqual(ids(tourSlides(TOURS[1].version)), of(WHATS_NEW_VERSION));
     assert.deepEqual(ids(tourSlides(WHATS_NEW_VERSION)), of(WHATS_NEW_VERSION));
     assert.deepEqual(ids(tourSlides(WHATS_NEW_VERSION, '1.1.0')), of('1.1.0'));
     assert.equal(tourSlides('1.0.0').at(-1).version, '1.1.0');

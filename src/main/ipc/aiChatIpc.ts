@@ -60,7 +60,8 @@ export function forgetChatHistory(databaseId: string): void {
     logger.warn(`Chat history of ${databaseId} not removed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
-const MAX_MESSAGE = 20000;
+/** A dashboard edit sends the dashboard's program with the request */
+const MAX_MESSAGE = 120000;
 const MAX_PROMPT = 60000;
 const TURN_TIMEOUT_MS = 10 * 60 * 1000;
 

@@ -365,6 +365,7 @@ export function registerConfigHandlers() {
         config.databases = config.databases.filter(db => db.id !== id);
         try { forgetAiMasking(id); } catch (error) { logger.warn(`AI masking of ${id} not removed: ${error}`); }
         import('./aiChatIpc').then(({ forgetChatHistory }) => forgetChatHistory(id)).catch(() => { /* history is optional */ });
+        import('./dashboardIpc').then(({ forgetDashboards }) => forgetDashboards(id)).catch(() => { /* dashboards are optional */ });
         import('../backup').then(({ backupManager }) => backupManager.backupHistory().forget(id)).catch(() => { /* history is optional */ });
 
         // If this DB was the proxy target of any project, stop the proxy

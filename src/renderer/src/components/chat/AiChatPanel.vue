@@ -4,35 +4,24 @@
  * bbdump's MCP server, read only. Answers show their data with OpenUI components.
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { Renderer } from '@openuidev/vue-lang';
 import { store } from '../../store';
 import { useI18n } from '../../composables/useI18n';
 import { ipcRenderer, shell } from '../../electron';
-import { chatLibrary, sqlDetails } from '../../chat/openuiLibrary';
-import { splitOpenUi } from '../../chat/messageParts';
-import { isSqlBlock, markdownLite } from '../../chat/markdownLite';
-import { partialPreview } from '../../chat/maskPreview';
 import { relative } from '../../timeText';
 import { useConfirm } from '../../composables/useConfirm';
 import type { SavedConversation } from '../../chat/useDatabaseChat';
 import { useDatabaseChat } from '../../chat/useDatabaseChat';
-import { chatSettings } from '../../chat/chatSettings';
+import { CHAT_TOOLS, chatSettings } from '../../chat/chatSettings';
 import AiChatSettingsModal from './AiChatSettingsModal.vue';
-import type { ChatProviderId, DiscloseBlock, ToolBlock } from '../../chat/chatEvents';
+import ChatMessages from './ChatMessages.vue';
+import type { ChatProviderId } from '../../chat/chatEvents';
 import { btnGhost } from '../ui/classes';
 
 const { t, currentLanguage } = useI18n();
 const { chatFor, reset, send, stop, open } = useDatabaseChat();
 const { showConfirm } = useConfirm();
 
-/** local: a model server bbdump talks to itself (it counts as available when it runs) */
-const PROVIDERS: Array<{ id: ChatProviderId; label: string; url: string; local?: boolean }> = [
-  { id: 'claude', label: 'Claude Code', url: 'https://docs.anthropic.com/en/docs/claude-code/overview' },
-  { id: 'codex', label: 'Codex', url: 'https://github.com/openai/codex' },
-  { id: 'opencode', label: 'OpenCode', url: 'https://opencode.ai' },
-  { id: 'ollama', label: 'Ollama', url: 'https://ollama.com', local: true },
-  { id: 'lmstudio', label: 'LM Studio', url: 'https://lmstudio.ai', local: true },
-];
+const PROVIDERS = CHAT_TOOLS;
 
 const db = computed(() => store.aiChatDb!);
 const dbLabel = computed(() => db.value.displayName || db.value.name);
@@ -43,7 +32,6 @@ const chat = computed(() => chatFor(db.value.id, provider.value));
 const draft = ref('');
 const scroller = ref<HTMLElement | null>(null);
 const input = ref<HTMLTextAreaElement | null>(null);
-const openTools = ref(new Set<string>());
 
 const anyInstalled = computed(() => !!installed.value && Object.values(installed.value).some(Boolean));
 const providerLabel = (id: ChatProviderId) => PROVIDERS.find(p => p.id === id)?.label ?? id;
@@ -255,81 +243,6 @@ function scrollDown() {
 }
 watch(() => JSON.stringify(chat.value.messages).length, scrollDown);
 
-// Questions about what may reach the AI, asked here instead of the tray: columns to anonymize
-const discloseMasks = ref(new Map<string, Set<string>>());
-const maskedIn = (block: DiscloseBlock) => {
-  if (!discloseMasks.value.has(block.id)) {
-    // Checked at first: everything that is not known to be harmless, as in the tray
-    discloseMasks.value.set(block.id, new Set(block.columns.filter(c => c.origin !== 'clear').map(c => c.name)));
-  }
-  return discloseMasks.value.get(block.id)!;
-};
-const setMasked = (block: DiscloseBlock, name: string, masked: boolean) => {
-  const next = new Set(maskedIn(block));
-  if (masked) next.add(name); else next.delete(name);
-  discloseMasks.value = new Map(discloseMasks.value).set(block.id, next);
-};
-const maskAll = (block: DiscloseBlock) => {
-  discloseMasks.value = new Map(discloseMasks.value).set(block.id, new Set(block.columns.map(c => c.name)));
-};
-const answerDisclose = async (block: DiscloseBlock, choice: 'send' | 'block') => {
-  if (block.status !== 'pending') return;
-  const mask = [...maskedIn(block)];
-  block.status = choice === 'block' ? 'blocked' : mask.length ? 'masked' : 'sent';
-  await ipcRenderer.invoke('mcp-confirm-response', { id: block.id, approved: choice !== 'block', mask: choice === 'block' ? undefined : mask });
-};
-/** Seconds left before bbdump's safe default applies */
-const secondsLeft = (block: DiscloseBlock) => Math.min(60, Math.max(0, 60 - Math.floor((now.value - block.askedAt) / 1000)));
-
-const toggleTool = (id: string) => {
-  const next = new Set(openTools.value);
-  if (next.has(id)) next.delete(id); else next.add(id);
-  openTools.value = next;
-};
-/** The SQL a tool ran, else its arguments, for the details */
-const toolDetail = (block: ToolBlock): string => {
-  const args = (block.input ?? {}) as Record<string, unknown>;
-  if (typeof args.sql === 'string') return args.sql;
-  const entries = Object.entries(args).filter(([, v]) => v !== undefined && v !== '');
-  return entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join('\n');
-};
-const toolLabel = (block: ToolBlock) => {
-  const key = `chat.tools.${block.name}`;
-  const label = t(key);
-  if (label !== key) return label;
-  // A tool without a translation: its name made readable (get_database_size → Get database size)
-  const words = block.name.replace(/_/g, ' ').trim();
-  return words ? words[0].toUpperCase() + words.slice(1) : t('chat.tools.unknown');
-};
-
-// Elapsed time while the AI works: something moves even between two steps
-const now = ref(Date.now());
-const busySince = ref(0);
-let ticker: ReturnType<typeof setInterval> | undefined;
-watch(() => chat.value.busy, busy => {
-  clearInterval(ticker);
-  if (!busy) return;
-  busySince.value = Date.now();
-  now.value = Date.now();
-  ticker = setInterval(() => { now.value = Date.now(); }, 1000);
-}, { immediate: true });
-onUnmounted(() => clearInterval(ticker));
-// Just before the delay ends, what is chosen in the card is sent (rather than the default)
-watch(now, () => {
-  for (const message of chat.value.messages) {
-    if (message.role !== 'assistant') continue;
-    for (const block of message.blocks) {
-      if (block.type === 'disclose' && block.status === 'pending' && secondsLeft(block) <= 2) void answerDisclose(block, 'send');
-    }
-  }
-});
-const elapsed = computed(() => {
-  const seconds = Math.max(0, Math.round((now.value - busySince.value) / 1000));
-  return seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, '0')}`;
-});
-/** What the working line says: the step running now, else that the AI is thinking */
-const workingLabel = (blocks: Array<{ type: string; status?: string }>) =>
-  blocks.some(b => b.type === 'tool' && b.status === 'running') ? t('chat.reading') : t('chat.thinking', { tool: providerLabel(chat.value.provider) });
 </script>
 
 <template>
@@ -555,148 +468,7 @@ const workingLabel = (blocks: Array<{ type: string; status?: string }>) =>
           </div>
         </div>
 
-        <div v-else class="px-6 py-6 space-y-6">
-          <template v-for="(message, index) in chat.messages" :key="index">
-            <div v-if="message.role === 'user'" class="chat-from-right flex justify-end pl-12">
-              <div class="rounded-2xl rounded-br-md bg-zinc-900 dark:bg-zinc-100 px-4 py-2.5 text-[13px] leading-relaxed text-white dark:text-zinc-900 whitespace-pre-wrap break-words">{{ message.text }}</div>
-            </div>
-
-            <div v-else class="space-y-3">
-              <template v-for="(block, b) in message.blocks" :key="b">
-                <!-- What may reach the AI: a result of unknown origin. Each column says what the AI will see -->
-                <div v-if="block.type === 'disclose'" class="chat-rise overflow-hidden rounded-2xl border bg-white dark:bg-zinc-900" :class="block.status === 'pending' ? 'border-gray-200 dark:border-zinc-700 shadow-sm' : 'border-gray-200 dark:border-zinc-800'">
-                  <!-- Time left before the safe default (checked columns anonymized) -->
-                  <div v-if="block.status === 'pending'" class="h-0.5 bg-gray-100 dark:bg-zinc-800">
-                    <div class="h-full bg-emerald-500/70 transition-[width] duration-1000 ease-linear" :style="{ width: `${(secondsLeft(block) / 60) * 100}%` }" />
-                  </div>
-                  <div class="px-4 pt-3.5 pb-3 flex items-start gap-3">
-                    <span class="w-8 h-8 shrink-0 rounded-xl flex items-center justify-center" :class="block.status === 'blocked' ? 'bg-gray-100 dark:bg-zinc-800 text-gray-500' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'">
-                      <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
-                    </span>
-                    <div class="flex-1 min-w-0">
-                      <div class="flex items-baseline gap-2">
-                        <span class="flex-1 text-[13px] font-semibold text-gray-900 dark:text-zinc-100">{{ t('chat.disclose.title') }}</span>
-                        <span v-if="block.status === 'pending'" class="text-[11px] tabular-nums text-gray-400 dark:text-zinc-500">{{ secondsLeft(block) }} s</span>
-                      </div>
-                      <p class="mt-0.5 text-[12px] leading-relaxed text-gray-500 dark:text-zinc-400">
-                        {{ block.status === 'pending' ? t('chat.disclose.question', { rows: block.rows }) : t(`chat.disclose.done.${block.status}`, { count: maskedIn(block).size }) }}
-                      </p>
-                    </div>
-                  </div>
-
-                  <template v-if="block.status === 'pending'">
-                    <ul class="mx-4 rounded-xl border border-gray-100 dark:border-zinc-800 divide-y divide-gray-100 dark:divide-zinc-800">
-                      <li v-for="c in block.columns" :key="c.name" class="px-3 py-2.5">
-                        <div class="flex items-center gap-2">
-                          <span class="font-mono text-[12px] font-medium text-gray-900 dark:text-zinc-100 truncate">{{ c.name }}</span>
-                          <span v-if="c.origin === 'rule'" class="shrink-0 px-1.5 py-px rounded-md text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">{{ t('chat.disclose.rule') }}</span>
-                          <span v-else-if="c.origin === 'unknown'" class="shrink-0 px-1.5 py-px rounded-md text-[10px] bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400">{{ t('chat.disclose.unknown') }}</span>
-                          <!-- Anonymized or as is, for this column -->
-                          <span class="ml-auto shrink-0 inline-flex p-0.5 rounded-lg bg-gray-100 dark:bg-zinc-800" role="radiogroup" :aria-label="c.name">
-                            <button
-                              type="button"
-                              role="radio"
-                              :aria-checked="maskedIn(block).has(c.name)"
-                              class="h-6 px-2 rounded-md text-[11px] font-medium transition-colors"
-                              :class="maskedIn(block).has(c.name) ? 'bg-white dark:bg-zinc-700 text-emerald-700 dark:text-emerald-400 shadow-sm' : 'text-gray-500 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-zinc-200'"
-                              @click="setMasked(block, c.name, true)"
-                            >{{ t('chat.disclose.masked') }}</button>
-                            <button
-                              type="button"
-                              role="radio"
-                              :aria-checked="!maskedIn(block).has(c.name)"
-                              class="h-6 px-2 rounded-md text-[11px] font-medium transition-colors"
-                              :class="!maskedIn(block).has(c.name) ? 'bg-white dark:bg-zinc-700 text-amber-700 dark:text-amber-400 shadow-sm' : 'text-gray-500 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-zinc-200'"
-                              @click="setMasked(block, c.name, false)"
-                            >{{ t('chat.disclose.asIs') }}</button>
-                          </span>
-                        </div>
-                        <!-- What the AI will see -->
-                        <div v-if="c.samples.length" class="mt-1.5 flex items-baseline gap-1.5 min-w-0 text-[11px]">
-                          <span class="shrink-0 text-gray-400 dark:text-zinc-500">{{ t('chat.disclose.aiSees') }}</span>
-                          <span class="font-mono truncate" :class="maskedIn(block).has(c.name) ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-700 dark:text-amber-400'">
-                            {{ c.samples.map((v, i) => (maskedIn(block).has(c.name) ? (c.anonymized?.[i] ?? partialPreview(v)) : v)).join(' · ') }}
-                          </span>
-                        </div>
-                      </li>
-                    </ul>
-
-                    <div class="px-4 pt-3 pb-3.5 flex items-center gap-2">
-                      <button type="button" class="text-[11px] text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-100 underline-offset-2 hover:underline" @click="maskAll(block)">{{ t('chat.disclose.maskAll') }}</button>
-                      <span class="flex-1" />
-                      <button type="button" class="h-8 px-3 rounded-lg text-[12px] font-medium text-gray-600 dark:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-800" @click="answerDisclose(block, 'block')">{{ t('chat.disclose.block') }}</button>
-                      <button
-                        type="button"
-                        class="chat-send group h-8 pl-3 pr-2.5 rounded-lg inline-flex items-center gap-1.5 text-[12px] font-medium text-white transition-colors"
-                        :class="maskedIn(block).size ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-amber-600 hover:bg-amber-700'"
-                        @click="answerDisclose(block, 'send')"
-                      >
-                        {{ maskedIn(block).size ? t('chat.disclose.sendMasked', { count: maskedIn(block).size }) : t('chat.disclose.sendRaw') }}
-                        <svg class="chat-arrow w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14m-6-6l6 6-6 6" /></svg>
-                      </button>
-                    </div>
-                    <p class="px-4 pb-3 -mt-1 text-[10px] text-gray-400 dark:text-zinc-500">{{ t('chat.disclose.hint') }}</p>
-                  </template>
-                </div>
-
-                <!-- A tool call: what the AI read -->
-                <div v-else-if="block.type === 'tool'" class="chat-rise text-[12px]">
-                  <button type="button" class="inline-flex items-center gap-2 rounded-lg px-2 py-1 -mx-2 text-gray-500 dark:text-zinc-400 hover:text-gray-800 dark:hover:text-zinc-200 hover:bg-gray-50 dark:hover:bg-zinc-800/60" @click="toggleTool(block.id)">
-                    <span v-if="block.status === 'running'" class="w-3.5 h-3.5 rounded-full border-2 border-emerald-500/30 border-t-emerald-500 animate-spin" />
-                    <svg v-else-if="block.status === 'done'" class="chat-pop w-3.5 h-3.5 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg>
-                    <svg v-else class="w-3.5 h-3.5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01" /></svg>
-                    <span>{{ toolLabel(block) }}</span>
-                    <span v-if="block.masked?.length" class="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400" :title="t('chat.masking.inResult', { columns: block.masked.join(', ') })">
-                      <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
-                      <span class="max-w-[14rem] truncate">{{ t('chat.masking.short', { columns: block.masked.join(', ') }) }}</span>
-                    </span>
-                    <svg class="w-3 h-3 text-gray-300 dark:text-zinc-600 transition-transform" :class="openTools.has(block.id) ? 'rotate-90' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" /></svg>
-                  </button>
-                  <div v-if="openTools.has(block.id)" class="mt-2 ml-5 space-y-2">
-                    <pre v-if="toolDetail(block)" class="rounded-lg bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 px-3 py-2 font-mono text-[11px] leading-relaxed text-gray-700 dark:text-zinc-300 whitespace-pre-wrap break-words">{{ toolDetail(block) }}</pre>
-                    <pre v-if="block.output" class="max-h-48 overflow-auto rounded-lg border border-gray-100 dark:border-zinc-800 px-3 py-2 font-mono text-[10px] leading-relaxed text-gray-500 dark:text-zinc-500 whitespace-pre-wrap break-words">{{ block.output }}</pre>
-                  </div>
-                </div>
-
-                <!-- Text, with its OpenUI blocks (tables, charts) -->
-                <template v-else>
-                  <template v-for="(part, p) in splitOpenUi(block.text)" :key="p">
-                    <div v-if="part.kind === 'ui'" class="chat-rise py-1">
-                      <Renderer :response="part.source" :library="chatLibrary" :is-streaming="!part.complete && !message.done" />
-                    </div>
-                    <div v-else class="chat-rise space-y-2.5 text-[13px] leading-relaxed text-gray-800 dark:text-zinc-200 break-words">
-                      <template v-for="(md, m) in markdownLite(part.text)" :key="m">
-                        <component :is="sqlDetails(md.text)" v-if="md.type === 'code' && isSqlBlock(md)" />
-                        <pre v-else-if="md.type === 'code'" class="rounded-lg bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 px-3 py-2 font-mono text-[11px] whitespace-pre-wrap">{{ md.text }}</pre>
-                        <component :is="md.type === 'h' ? 'h4' : 'p'" v-else-if="md.type === 'p' || md.type === 'h'" :class="md.type === 'h' ? 'pt-1 font-semibold text-gray-900 dark:text-zinc-100' : ''">
-                          <template v-for="(span, s) in md.inlines" :key="s"><code v-if="span.code" class="px-1 py-px rounded bg-gray-100 dark:bg-zinc-800 font-mono text-[12px]">{{ span.text }}</code><strong v-else-if="span.bold" class="font-semibold">{{ span.text }}</strong><template v-else>{{ span.text }}</template></template>
-                        </component>
-                        <component :is="md.type" v-else :class="md.type === 'ul' ? 'list-disc pl-5 space-y-1' : 'list-decimal pl-5 space-y-1'">
-                          <li v-for="(item, i) in md.items" :key="i"><template v-for="(span, s) in item" :key="s"><code v-if="span.code" class="px-1 py-px rounded bg-gray-100 dark:bg-zinc-800 font-mono text-[12px]">{{ span.text }}</code><strong v-else-if="span.bold" class="font-semibold">{{ span.text }}</strong><template v-else>{{ span.text }}</template></template></li>
-                        </component>
-                      </template>
-                    </div>
-                  </template>
-                </template>
-              </template>
-
-              <!-- Still working: shown until the answer is complete, between steps too -->
-              <div v-if="!message.done" class="chat-rise flex items-center gap-2.5 text-[12px] text-gray-500 dark:text-zinc-400" role="status" aria-live="polite">
-                <!-- A small database read tier by tier, like the app's backups -->
-                <span class="chat-reading w-7 h-7 rounded-lg flex items-center justify-center bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true">
-                  <ellipse class="chat-tier chat-tier-1" cx="12" cy="5.5" rx="7" ry="2.5" />
-                  <path class="chat-tier chat-tier-2" d="M5 5.5v6c0 1.38 3.13 2.5 7 2.5s7-1.12 7-2.5v-6" />
-                  <path class="chat-tier chat-tier-3" d="M5 11.5v6c0 1.38 3.13 2.5 7 2.5s7-1.12 7-2.5v-6" />
-                </svg>
-                </span>
-                <span class="chat-shimmer font-medium">{{ workingLabel(message.blocks) }}</span>
-                <span class="tabular-nums text-gray-400 dark:text-zinc-500">{{ elapsed }}</span>
-              </div>
-              <p v-if="message.error" class="rounded-xl border border-red-200 dark:border-red-900/60 bg-red-50/60 dark:bg-red-950/20 px-4 py-3 text-[12px] leading-relaxed text-red-700 dark:text-red-300 whitespace-pre-wrap break-words">{{ message.error }}</p>
-            </div>
-          </template>
-        </div>
+        <ChatMessages v-else :chat="chat" :provider-label="providerLabel(chat.provider)" class="px-6 py-6" />
       </div>
 
       <!-- Composer -->

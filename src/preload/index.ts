@@ -37,6 +37,8 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
     'restart-postgres', 'check-postgres-config', 'fix-postgres-config', 'get-database-size',
     // Database creation
     'create-local-database', 'duplicate-external-to-local', 'duplicate-anonymize-plan', 'duplicate-check-extensions', 'setup-install-pg-client', 'setup-local-password', 'ai-chat-providers', 'ai-chat-models', 'ai-chat-send', 'ai-chat-stop', 'ai-chat-history-list', 'ai-chat-history-get', 'ai-chat-history-save', 'ai-chat-history-pin', 'ai-chat-history-delete', 'ai-chat-history-clear', 'ai-masking-get', 'ai-masking-set', 'ai-masking-list',
+    'dashboards-list', 'dashboards-get', 'dashboards-save', 'dashboards-delete', 'dashboards-cache-get', 'dashboards-save-filters', 'dashboards-cache-set',
+    'dashboards-save-csv', 'dashboards-save-xlsx', 'dashboards-export-file', 'dashboards-import-file', 'dashboards-export-pdf',
     // Proxy
     'proxy-start', 'proxy-stop', 'proxy-switch-target', 'proxy-status', 'proxy-status-all',
     'proxy-check-port', 'proxy-get-logs', 'proxy-clear-logs',

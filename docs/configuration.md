@@ -15,6 +15,8 @@ bbdump keeps its data in the app data folder, written `<data dir>` below:
 | `backup-history.json` | Backup runs, successes and failures (Tasks tab) |
 | `ai-masking.json` | Columns anonymized for AI assistants, per database |
 | `ai-journal/` | Changes made by AI assistants, with their undo data (encrypted) |
+| `ai-chat-history/` | Conversations of the database chat, per database (encrypted) |
+| `dashboards/` | Dashboards and their conversation with the AI, per database, and their kept results (encrypted) |
 | `cloud-credentials.json` | Neon API key (encrypted, mode 600) |
 | `ssh-tunnels.json` | SSH tunnels opened by bbdump, so the ones left by a crash are closed at the next launch |
 | `.mcp-confirm-port` | Port and per-launch token of the local server the MCP server talks to (mode 600) |

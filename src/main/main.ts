@@ -13,6 +13,7 @@ import { registerDbViewerHandlers, closeAllPools } from './ipc/dbViewerIpc';
 import { registerSystemHandlers } from './ipc/systemIpc';
 import { registerSetupHandlers } from './ipc/setupIpc';
 import { registerAiChatHandlers, stopAllChats } from './ipc/aiChatIpc';
+import { registerDashboardHandlers } from './ipc/dashboardIpc';
 import { registerDatabaseCreationHandlers } from './ipc/databaseCreationIpc';
 import { initAutoUpdater, setUpdaterWindow } from './updateChecker';
 import { startConfirmServer, onConfirmRequest, stopConfirmServer, getConfirmToken, writePortFile } from './mcpConfirmServer';
@@ -181,6 +182,7 @@ function createWindow(): void {
     registerSetupHandlers(getMainWindow);
     registerDatabaseCreationHandlers(getMainWindow);
     registerAiChatHandlers(getMainWindow);
+    registerDashboardHandlers(getMainWindow);
     handlersRegistered = true;
   }
 }

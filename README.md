@@ -6,7 +6,7 @@
 
 <p align="center">
   A desktop app for your PostgreSQL databases, local or remote —<br>
-  verified backups, real restores, anonymized copies, a data explorer, a chat with your data, and AI assistants that stay in your control.<br>
+  verified backups, real restores, anonymized copies, a data explorer, a chat with your data, live dashboards, and AI assistants that stay in your control.<br>
   macOS and Linux, Windows in beta.
 </p>
 
@@ -14,6 +14,10 @@
   <a href="https://poups.dev/bbdump">Website</a> &middot;
   <a href="https://github.com/poup-s/bbdump/releases">Download</a> &middot;
   <a href="https://github.com/poup-s/bbdump/issues">Report a bug</a>
+</p>
+
+<p align="center">
+  <a href="captures/demo.mp4"><img src="captures/demo.webp" alt="bbdump: watch the 1-minute tour (video)" width="800"></a>
 </p>
 
 ![Dashboard](captures/dashboard.webp)
@@ -89,9 +93,21 @@ More in [Database Chat](docs/database-chat.md).
 
 ![Chat with a database](captures/chat.webp)
 
+### Dashboards
+
+Describe what you want to follow, or start from a template: the AI builds a dashboard from the database (key figures compared with the previous period, charts, tables) and checks each query before using it. bbdump keeps it and reads the data again each time you open or refresh it, automatically if you like. The queries are read only.
+
+- A period, searches and lists filter the whole dashboard; clicking a bar, a slice or a row filters the linked blocks.
+- Change it with the AI, a block at a time, or by hand: move and resize blocks, edit their SQL, change a chart's type, ask the AI to explain a figure.
+- Export it as PDF, its data to Excel or CSV, copy it into a spreadsheet, share it as a file, use it on another database, pin it to the home page.
+
+More in [Dashboards](docs/dashboards.md).
+
+![Dashboards](captures/dashboards.webp)
+
 ### AI assistants (MCP)
 
-bbdump comes with a PostgreSQL MCP server and connects it in one click to Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Devin, VS Code or OpenCode (any other MCP client can use the configuration to copy). 45 tools and 4 prompts: the whole schema in one call, data profiling, query plans, health checks, index advice with hypothetical indexes, slow queries, comparisons between databases, and more.
+bbdump comes with a PostgreSQL MCP server and connects it in one click to Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Devin, VS Code or OpenCode (any other MCP client can use the configuration to copy). 46 tools and 4 prompts: the whole schema in one call, data profiling, query plans, health checks, index advice with hypothetical indexes, slow queries, comparisons between databases, and more.
 
 - **Every change asks you first**, in the menu bar. It is recorded in a journal, with the rows before and after, and can be undone in one click.
 - **Anonymize for AI**, per database: chosen columns reach the assistant anonymized. A computed result that could come from an anonymized column (a computed column, a view, free SQL) is shown to you first, with a few values: send it, anonymize more, or block it. The database itself is never changed.

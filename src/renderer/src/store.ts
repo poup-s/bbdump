@@ -39,6 +39,10 @@ export const store = reactive({
     aiJournalDb: null as Database | null,
     /** Database whose AI chat panel is open */
     aiChatDb: null as Database | null,
+    /** Dashboard shown on the Dashboards page (null: the list) */
+    openDashboard: null as { databaseId: string; id: string } | null,
+    /** A new dashboard asked from a database card (the page opens its dialog) */
+    newDashboardDb: null as Database | null,
     /** Database whose masking of personal data for AI clients is being set */
     aiMaskingDb: null as Database | null,
     /** Databases whose personal data is masked for AI clients */
