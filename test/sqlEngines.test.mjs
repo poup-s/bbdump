@@ -30,7 +30,8 @@ after(async () => {
   await mysql?.closeMysqlPools();
   process.chdir(cwd);
 });
-process.on('exit', () => fs.rmSync(tmp, { recursive: true, force: true }));
+// Best effort: on Windows a file a stopped query process still held may stay locked a moment
+process.on('exit', () => { try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* left in the temp folder */ } });
 
 describe('manifests', () => {
   test('MySQL, MariaDB and SQLite are known, with a driver each', async () => {

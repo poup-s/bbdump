@@ -65,7 +65,7 @@ jobs:
           --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
           --health-interval 5s
           --health-timeout 5s
-          --health-retries 20
+          --health-retries 60
       mysql:
         image: mysql:8.4
         env:

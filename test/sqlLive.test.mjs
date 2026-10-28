@@ -100,7 +100,8 @@ after(async () => {
   await require(path.join(root, 'dist/main/engines/mysql.js')).closeMysqlPools();
   process.chdir(root);
 });
-process.on('exit', () => fs.rmSync(tmp, { recursive: true, force: true }));
+// Best effort: on Windows a file a stopped query process still held may stay locked a moment
+process.on('exit', () => { try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* left in the temp folder */ } });
 
 /** Creates and fills a MySQL / MariaDB database for an engine entry */
 async function seedServer(e) {
