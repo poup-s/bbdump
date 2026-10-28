@@ -55,7 +55,8 @@ jobs:
   # Database engines on real servers: MongoDB 8, MySQL 8.4, MariaDB 11.8 (and SQLite, a file):
   # explorer, edits, read-only queries, dashboards, backup and restore
   engines:
-    runs-on: ubuntu-latest
+    # MongoDB 8 refuses Linux 6.19+ kernels (SERVER-121912): an image with an older kernel
+    runs-on: ubuntu-22.04
     services:
       mongo:
         image: mongo:8
