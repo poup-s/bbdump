@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
- * Add or edit a MySQL, MariaDB or SQLite database: MySQL / MariaDB by URL or field by field
- * (TLS included), SQLite by its file; then its backups (folder, retention, encryption,
- * schedule). Same shell and fields as the PostgreSQL and MongoDB dialogs.
+ * Add or edit a MySQL, MariaDB or SQLite database: MySQL / MariaDB by URL, field by field
+ * (TLS included) or on a server through SSH, SQLite by its file; then its backups (folder,
+ * retention, encryption, schedule). Same shell and fields as the PostgreSQL and MongoDB dialogs.
  */
 import { ref, computed, watch, onMounted } from 'vue';
 import { getErrorMessage } from '../utils';
@@ -15,6 +15,7 @@ import { engineOf } from '../../../shared/engines/features';
 import { manifestFor } from '../../../shared/engines/manifests';
 import { MYSQL_DEFAULT_PORT, parseMysqlUri } from '../../../shared/engines/mysqlUri';
 import SslOptions from './SslOptions.vue';
+import SshConnectionFields from './SshConnectionFields.vue';
 import CronEditor from './CronEditor.vue';
 import AppModal from './ui/AppModal.vue';
 import ModalHeading from './ui/ModalHeading.vue';
@@ -31,6 +32,7 @@ const ICONS = {
   link: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1',
   edit: 'M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z',
   folder: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z',
+  terminal: 'M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z',
   eye: 'M15 12a3 3 0 11-6 0 3 3 0 016 0z M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z',
   eyeOff: 'M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21',
 };
@@ -49,7 +51,11 @@ const attempted = ref(false);
 const step = ref(0);
 /** Edit: the section shown */
 const section = ref<'connection' | 'backup' | 'schedule'>('connection');
-const mode = ref<'url' | 'manual'>('url');
+const mode = ref<'url' | 'manual' | 'ssh'>('url');
+/** Server via SSH: the tunnel's settings, and the database as the shared SSH fields edit it */
+const emptySsh = (): NonNullable<Database['ssh']> => ({ host: '', remoteHost: 'localhost', remotePort: MYSQL_DEFAULT_PORT, envFile: '', envVar: 'DATABASE_URL' });
+const sshDraft = ref<NonNullable<Database['ssh']>>(emptySsh());
+const sshForm = ref({ name: '', user: '', password: '', displayName: '', host: '', port: MYSQL_DEFAULT_PORT, sslMode: 'disable' as SslMode } as unknown as Database);
 const url = ref('');
 const passwordVisible = ref(false);
 const form = ref({
@@ -77,7 +83,11 @@ const backup = ref({
 onMounted(async () => {
   const db = store.editingDatabase;
   if (db) {
-    mode.value = db.connectionString ? 'url' : 'manual';
+    mode.value = db.ssh ? 'ssh' : db.connectionString ? 'url' : 'manual';
+    if (db.ssh) {
+      sshDraft.value = { ...emptySsh(), ...db.ssh, envVar: db.ssh.envVar || 'DATABASE_URL' };
+      sshForm.value = { ...sshForm.value, name: db.name, user: db.user || '', password: '', displayName: db.displayName || '', host: db.host, port: db.port, sslMode: db.sslMode || 'disable' };
+    }
     url.value = db.connectionString || '';
     form.value = {
       displayName: db.displayName || '',
@@ -131,6 +141,12 @@ const errors = computed(() => {
     if (!url.value.trim()) found.url = t('dbModal.required');
     else if (!parsed.value) found.url = t('sqlModal.urlInvalid', { engine: label.value });
     else if (needsName.value && !form.value.name.trim()) found.name = t('sqlModal.urlNoDatabase');
+  } else if (mode.value === 'ssh') {
+    if (!sshDraft.value.host?.trim()) found.sshHost = t('dbModal.required');
+    if (!sshForm.value.name?.trim()) found.name = t('dbModal.required');
+    if (!sshForm.value.user?.trim()) found.user = t('dbModal.required');
+    const remotePort = Number(sshDraft.value.remotePort) || MYSQL_DEFAULT_PORT;
+    if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) found.remotePort = t('dbModal.portInvalid');
   } else {
     if (!form.value.name.trim()) found.name = t('dbModal.required');
     if (!form.value.host.trim()) found.host = t('dbModal.required');
@@ -147,8 +163,37 @@ const valid = computed(() => Object.keys(errors.value).length === 0);
 const backupValid = computed(() => Object.keys(backupErrors.value).length === 0);
 const shown = (key: string) => (attempted.value ? errors.value[key] ?? backupErrors.value[key] : undefined);
 
+/** The tunnel's settings as saved: empty optional values left out */
+const cleanSsh = (): NonNullable<Database['ssh']> => {
+  const d = sshDraft.value;
+  return {
+    host: d.host.trim(),
+    user: typeof d.user === 'string' && d.user.trim() ? d.user.trim() : undefined,
+    port: typeof d.port === 'number' && d.port > 0 ? d.port : undefined,
+    remoteHost: d.remoteHost?.trim() || 'localhost',
+    remotePort: Number(d.remotePort) || MYSQL_DEFAULT_PORT,
+    envFile: d.envFile?.trim() || undefined,
+    envVar: d.envVar?.trim() || undefined,
+  };
+};
+
 /** What the main process gets, for the test and for saving */
 const connectionFields = () => {
+  if (!isSqlite.value && mode.value === 'ssh') {
+    // As for PostgreSQL: host / port keep the server and the remote port, the tunnel does the rest
+    const sslMode = (sshForm.value.sslMode || 'disable') as SslMode;
+    return {
+      connectionString: undefined,
+      host: sshForm.value.host || sshDraft.value.host.trim(),
+      port: Number(sshDraft.value.remotePort) || MYSQL_DEFAULT_PORT,
+      user: (sshForm.value.user || '').trim(),
+      password: sshForm.value.password || '',
+      name: (sshForm.value.name || '').trim(),
+      sqlite: undefined,
+      sslMode,
+      sslRootCert: undefined,
+    };
+  }
   if (isSqlite.value) {
     const file = form.value.file.trim();
     return { connectionString: undefined, host: '', port: 0, user: '', password: '', name: form.value.name.trim() || fileStem(file) || 'database', sqlite: { path: file }, sslMode: 'disable' as SslMode, sslRootCert: undefined };
@@ -267,7 +312,7 @@ const save = async () => {
       id: store.editingDatabase?.id ?? '',
       engine: engine.value,
       name: fields.name,
-      displayName: form.value.displayName.trim() || undefined,
+      displayName: (mode.value === 'ssh' && !isSqlite.value ? sshForm.value.displayName : form.value.displayName)?.trim() || undefined,
       host: fields.host,
       port: fields.port,
       user: fields.user,
@@ -275,6 +320,7 @@ const save = async () => {
       password: fields.password,
       connectionString: fields.connectionString,
       sqlite: fields.sqlite,
+      ssh: mode.value === 'ssh' && !isSqlite.value ? cleanSsh() : undefined,
       ssl: ['require', 'verify-ca', 'verify-full'].includes(fields.sslMode),
       sslMode: fields.sslMode,
       sslRootCert: fields.sslRootCert,
@@ -321,6 +367,7 @@ const close = () => {
 const modeOptions = computed(() => [
   { value: 'url' as const, label: t('database.modeUrl'), icon: ICONS.link },
   { value: 'manual' as const, label: t('database.modeManual'), icon: ICONS.edit },
+  { value: 'ssh' as const, label: t('ssh.modeShort'), icon: ICONS.terminal },
 ]);
 const title = computed(() => (isEditing.value ? t('sqlModal.editTitle', { engine: label.value }) : t('sqlModal.addTitle', { engine: label.value })));
 const meta = computed(() => (isEditing.value ? label.value : `${label.value} · ${step.value + 1} / 2`));
@@ -393,6 +440,17 @@ const urlPlaceholder = computed(() => `${engine.value === 'mariadb' ? 'mariadb' 
             </FormField>
           </template>
 
+          <!-- Server via SSH: its own test, SSH then the database through the tunnel -->
+          <SshConnectionFields
+            v-else-if="mode === 'ssh'"
+            v-model:form="sshForm"
+            v-model:ssh="sshDraft"
+            :engine="engine === 'mariadb' ? 'mariadb' : 'mysql'"
+            :editing="isEditing"
+            :database-id="store.editingDatabase?.id"
+            :attempted="attempted"
+          />
+
           <!-- Field by field -->
           <template v-else>
             <div class="grid grid-cols-2 gap-3">
@@ -443,8 +501,8 @@ const urlPlaceholder = computed(() => `${engine.value === 'mariadb' ? 'mariadb' 
           </template>
         </template>
 
-        <!-- Connection test -->
-        <div class="flex items-center gap-3 pt-1 min-h-9">
+        <!-- Connection test (the SSH fields have their own) -->
+        <div v-if="isSqlite || mode !== 'ssh'" class="flex items-center gap-3 pt-1 min-h-9">
           <button type="button" :class="btnSecondary" :disabled="test.status === 'testing'" @click="testConnection">
             <svg v-if="test.status === 'testing'" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />

@@ -96,8 +96,8 @@ export const MONGODB: EngineManifest = {
 const MYSQL_FEATURES = {
     'connection.test': 'yes',
     'connection.tls': 'yes',
-    // Not yet: the tunnel works (same as PostgreSQL), the dialog has no SSH mode for these engines
-    'connection.ssh': 'no',
+    // Through the user's ssh, like PostgreSQL: the dump tools and the AI's tools use the same tunnel
+    'connection.ssh': 'yes',
     'stats.size': 'yes',
     'backup.run': 'yes',
     'backup.schedule': 'yes',

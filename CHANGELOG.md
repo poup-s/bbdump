@@ -73,7 +73,10 @@
     rows reached by `ON DELETE CASCADE` included) and run other statements (confirmed, no undo
     point). **Anonymize for AI**, the **database chat** and **dashboards** work on them too,
     each in its own SQL dialect.
-  Not yet: MySQL / MariaDB through SSH, copying or updating a database from another one.
+  - **Server via SSH** (MySQL and MariaDB), as for PostgreSQL: bbdump opens the tunnel with your
+    own `ssh`, finds the `mysql://` / `mariadb://` URL in the server's `.env` files (only their
+    names leave the server), and backups, the explorer and AI assistants all go through it.
+  Not yet: copying or updating a database from another one.
 
 ### Security
 

@@ -50,6 +50,10 @@ describe('manifests', () => {
     assert.equal(manifestFor('mysql').features['connection.tls'], 'yes');
     assert.equal(manifestFor('mariadb').defaultPort, 3306);
   });
+
+  test('MySQL and MariaDB can be reached through SSH, like PostgreSQL and MongoDB', () => {
+    for (const id of ['mysql', 'mariadb']) assert.equal(manifestFor(id).features['connection.ssh'], 'yes', id);
+  });
 });
 
 describe('MySQL URLs', () => {

@@ -5,13 +5,16 @@
  * and the credentials, read from an env file on the server or from a pasted URL.
  * The test checks SSH first (and offers to trust an unknown server, fingerprint shown),
  * then PostgreSQL through the tunnel. engine "mongodb": the same for a MongoDB database
- * (one server, a mongodb:// URL; mongodb+srv and several hosts cannot go through one tunnel).
+ * (one server, a mongodb:// URL; mongodb+srv and several hosts cannot go through one tunnel);
+ * "mysql" / "mariadb": a mysql:// or mariadb:// URL.
  */
 import { ref, computed, onMounted, watch } from 'vue';
 import { useI18n } from '../composables/useI18n';
 import { ipcRenderer, isWindows } from '../electron';
 import { parsePgUrl } from '../pgUrl';
 import { mongoOption, parseMongoUri } from '../../../shared/engines/mongoUri';
+import { MYSQL_DEFAULT_PORT, parseMysqlUri } from '../../../shared/engines/mysqlUri';
+import { manifestFor } from '../../../shared/engines/manifests';
 import type { Database } from '../types';
 import FormField from './ui/FormField.vue';
 import { btnSecondary, inputClass, monoInputClass, panelClass } from './ui/classes';
@@ -19,17 +22,23 @@ import { btnSecondary, inputClass, monoInputClass, panelClass } from './ui/class
 type Ssh = NonNullable<Database['ssh']>;
 type SshFailure = { success: false; code: string; error: string; fingerprints?: string[] };
 
-const props = withDefaults(defineProps<{ editing: boolean; databaseId?: string; attempted: boolean; engine?: 'postgresql' | 'mongodb' }>(), { engine: 'postgresql' });
+const props = withDefaults(defineProps<{ editing: boolean; databaseId?: string; attempted: boolean; engine?: 'postgresql' | 'mongodb' | 'mysql' | 'mariadb' }>(), { engine: 'postgresql' });
 const form = defineModel<Database>('form', { required: true });
 const ssh = defineModel<Ssh>('ssh', { required: true });
 const { t } = useI18n();
 /** MongoDB: the database holding the user (from the URL) */
 const authSource = defineModel<string>('authSource', { default: 'admin' });
 const isMongo = props.engine === 'mongodb';
-const defaultPort = isMongo ? 27017 : 5432;
+const isMysql = props.engine === 'mysql' || props.engine === 'mariadb';
+const engineLabel = manifestFor(props.engine)?.label ?? props.engine;
+const defaultPort = isMongo ? 27017 : isMysql ? MYSQL_DEFAULT_PORT : 5432;
 const defaultVar = isMongo ? 'MONGODB_URI' : 'DATABASE_URL';
-/** A text, its MongoDB wording when there is one */
-const tx = (key: string, params?: Record<string, unknown>) => t(isMongo ? `ssh.mongo.${key}` : `ssh.${key}`, params);
+/** A text, its MongoDB or MySQL wording when there is one ({engine}: MySQL or MariaDB) */
+const tx = (key: string, params?: Record<string, unknown>) =>
+  t(isMongo ? `ssh.mongo.${key}` : isMysql ? `ssh.mysql.${key}` : `ssh.${key}`, { engine: engineLabel, ...params });
+const urlPlaceholder = isMongo
+  ? 'mongodb://user:password@localhost:27017/app'
+  : isMysql ? `${props.engine}://user:password@localhost:3306/app` : 'postgresql://user:password@localhost:5432/app';
 
 const hosts = ref<string[]>([]);
 onMounted(async () => {
@@ -95,8 +104,31 @@ const applyMongoUrl = (url: string) => {
   return true;
 };
 
+/** A mysql:// or mariadb:// URL naming its database */
+const mysqlUrl = (url: string) => {
+  const parsed = parseMysqlUri(url);
+  return parsed?.database ? parsed : null;
+};
+
+const applyMysqlUrl = (url: string) => {
+  const parsed = mysqlUrl(url);
+  if (!parsed) return false;
+  form.value.name = parsed.database;
+  form.value.user = parsed.user;
+  if (parsed.password) form.value.password = parsed.password;
+  // Through the tunnel the server name cannot be checked: verify-full becomes verify-ca
+  form.value.sslMode = !parsed.sslMode ? 'disable' : parsed.sslMode === 'verify-full' ? 'verify-ca' : parsed.sslMode;
+  const remote = remoteHostFor(parsed.host);
+  ssh.value.remoteHost = remote.host;
+  ssh.value.remotePort = parsed.port || defaultPort;
+  containerName.value = remote.container ?? '';
+  if (!form.value.displayName?.trim()) form.value.displayName = parsed.database;
+  return true;
+};
+
 const applyUrl = (url: string) => {
   if (isMongo) return applyMongoUrl(url);
+  if (isMysql) return applyMysqlUrl(url);
   const parsed = parsePgUrl(url);
   if (!parsed?.database) return false;
   form.value.name = parsed.database;
@@ -166,7 +198,11 @@ const readEnv = async () => {
 };
 
 watch(pastedUrl, (url) => { if (url.trim()) applyUrl(url.trim()); });
-const pastedInvalid = computed(() => !!pastedUrl.value.trim() && !(isMongo ? mongoUrl(pastedUrl.value.trim()) : parsePgUrl(pastedUrl.value.trim())?.database));
+const pastedInvalid = computed(() => {
+  const url = pastedUrl.value.trim();
+  if (!url) return false;
+  return !(isMongo ? mongoUrl(url) : isMysql ? mysqlUrl(url) : parsePgUrl(url)?.database);
+});
 
 // --- Test -----------------------------------------------------------------------
 
@@ -218,8 +254,13 @@ const runTest = async () => {
       sslMode: form.value.sslMode,
       ssh: sshPayload(),
       ...(isMongo ? { engine: 'mongodb', mongo: form.value.user ? { authSource: authSource.value || 'admin' } : undefined } : {}),
+      ...(isMysql ? { engine: props.engine } : {}),
     }) as { version: string; tables: number };
-    pgStep.value = { state: 'ok', detail: t('dbModal.testOk', { version: result.version, tables: result.tables }) };
+    const detail = isMongo
+      ? t('mongoModal.testOk', { version: result.version, collections: result.tables })
+      : isMysql ? t('sqlModal.testOk', { version: `${engineLabel} ${result.version}`, tables: result.tables })
+      : t('dbModal.testOk', { version: result.version, tables: result.tables });
+    pgStep.value = { state: 'ok', detail };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     pgStep.value = { state: 'error', detail: message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') };
@@ -365,8 +406,8 @@ const stepMark = (state: Step['state']) => (state === 'ok' ? '✓' : state === '
           <span v-if="readError.error && !['not-url', 'unknown-host'].includes(readError.code)" class="block mt-0.5 font-mono text-[11px] text-gray-500 dark:text-zinc-400 break-words">{{ readError.error }}</span>
         </p>
       </template>
-      <FormField v-else :label="t('database.connectionUrlLabel')" for="ssh-url" :error="pastedInvalid ? (isMongo ? t('ssh.mongo.urlInvalid') : t('dbModal.urlInvalid')) : undefined" :hint="tx('urlHint')">
-        <input id="ssh-url" v-model="pastedUrl" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" :placeholder="isMongo ? 'mongodb://user:password@localhost:27017/app' : 'postgresql://user:password@localhost:5432/app'" />
+      <FormField v-else :label="t('database.connectionUrlLabel')" for="ssh-url" :error="pastedInvalid ? (isMongo || isMysql ? tx('urlInvalid') : t('dbModal.urlInvalid')) : undefined" :hint="tx('urlHint')">
+        <input id="ssh-url" v-model="pastedUrl" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" :placeholder="urlPlaceholder" />
       </FormField>
 
       <div v-if="containerName" class="mt-3 px-3 py-2.5 rounded-lg border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 text-[12px] text-amber-900 dark:text-amber-200" role="alert">
@@ -419,7 +460,7 @@ const stepMark = (state: Step['state']) => (state === 'ok' ? '✓' : state === '
         <div v-if="pgStep.state !== 'idle'" class="flex items-start gap-2">
           <span class="mt-0.5 font-mono text-[11px] w-4" :class="stepClass(pgStep.state)">{{ stepMark(pgStep.state) }}</span>
           <div class="min-w-0 flex-1">
-            <div class="text-gray-800 dark:text-zinc-100">{{ tx(isMongo ? 'test' : 'test.postgres', { target: `${ssh.remoteHost}:${ssh.remotePort}` }) }}</div>
+            <div class="text-gray-800 dark:text-zinc-100">{{ tx(isMongo || isMysql ? 'test' : 'test.postgres', { target: `${ssh.remoteHost}:${ssh.remotePort}` }) }}</div>
             <div v-if="pgStep.detail" class="text-[11.5px] break-words" :class="pgStep.state === 'error' ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-zinc-400'">{{ pgStep.detail }}</div>
           </div>
         </div>

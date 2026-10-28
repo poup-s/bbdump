@@ -82,6 +82,25 @@ describe('MongoDB URLs on the server', () => {
   });
 });
 
+describe('MySQL / MariaDB URLs on the server', () => {
+  test('the search finds mysql:// and mariadb:// URLs (names only), DATABASE_URL first', { skip: process.platform === 'win32' }, () => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bbdump-envsearch-mysql-'));
+    const write = (rel, text) => { fs.mkdirSync(path.dirname(path.join(home, rel)), { recursive: true }); fs.writeFileSync(path.join(home, rel), text); };
+    write('srv/shop/.env', 'MARIADB_URL=mariadb://shop:hidden1@127.0.0.1:3306/shop\nexport DATABASE_URL="mysql://app:hidden2@localhost/app"\nCACHE=redis://localhost\n');
+    write('srv/other/.env', 'DATABASE_URL=postgresql://a:b@localhost/c\n');
+    try {
+      const out = execFileSync('sh', ['-s'], { input: ssh.envSearchScript('mysql'), env: { ...process.env, HOME: home }, encoding: 'utf8', timeout: 60000 });
+      assert.ok(!out.includes('hidden'), 'no secret leaves the server');
+      const mine = ssh.parseEnvSearch(out, 'mysql').filter(m => m.file.startsWith(home));
+      assert.deepEqual(mine.map(m => [path.relative(home, m.file), m.variables]), [['srv/shop/.env', ['DATABASE_URL', 'MARIADB_URL']]]);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('ports as the form sends them', () => {
   test('an emptied SSH port is left out, so the alias decides (Port 4022 in ~/.ssh/config)', () => {
     const n = ssh.normalizeSshPorts({ host: 'my-vps', port: '', remoteHost: 'localhost', remotePort: 5432 });

@@ -139,12 +139,12 @@ export function readEnvCommand(file: string, name: string): string {
 
 /**
  * POSIX sh script, fed to `sh -s` on the server (whatever the login shell): lists the env files
- * that hold a database URL (PostgreSQL, or MongoDB), as "<file>\t<VARIABLE>" lines. Only the variable names leave the
+ * that hold a database URL (PostgreSQL, MongoDB, or MySQL / MariaDB), as "<file>\t<VARIABLE>" lines. Only the variable names leave the
  * server, never the values. Fixed text: nothing typed by the user reaches it.
  */
-export function envSearchScript(engine: 'postgresql' | 'mongodb' = 'postgresql'): string {
+export function envSearchScript(engine: EnvSearchEngine = 'postgresql'): string {
   // A fixed pattern per engine: nothing typed by the user
-  const scheme = engine === 'mongodb' ? 'mongodb(\\+srv)?://' : 'postgres(ql)?://';
+  const scheme = engine === 'mongodb' ? 'mongodb(\\+srv)?://' : engine === 'mysql' ? '(mysql|mariadb)://' : 'postgres(ql)?://';
   return `for d in "$HOME" /srv /var/www /opt /home; do
   [ -d "$d" ] || continue
   find "$d" -maxdepth 6 \\( -name node_modules -o -name .git -o -name vendor -o -name .cache -o -name .npm -o -name .nvm -o -name .local -o -name snap \\) -prune \\
@@ -158,6 +158,9 @@ exit 0
 `;
 }
 
+/** The URL kinds the server search looks for (MariaDB shares MySQL's) */
+export type EnvSearchEngine = 'postgresql' | 'mongodb' | 'mysql';
+
 export const ENV_SEARCH_SCRIPT = envSearchScript('postgresql');
 
 export interface EnvFileMatch {
@@ -170,7 +173,7 @@ export interface EnvFileMatch {
 }
 
 /** The search's "<file>\t<VARIABLE>" lines, grouped by file: real files, then copies, then examples */
-export function parseEnvSearch(stdout: string, engine: 'postgresql' | 'mongodb' = 'postgresql'): EnvFileMatch[] {
+export function parseEnvSearch(stdout: string, engine: EnvSearchEngine = 'postgresql'): EnvFileMatch[] {
   const byFile = new Map<string, string[]>();
   for (const line of stdout.split(/\r?\n/)) {
     const [file, variable] = line.split('\t');
@@ -186,6 +189,8 @@ export function parseEnvSearch(stdout: string, engine: 'postgresql' | 'mongodb' 
   // DATABASE_URL first: it is the one apps (Prisma, Rails, Django…) read
   const order = engine === 'mongodb'
     ? (v: string) => (/^MONGO(DB)?_(URI|URL)$/.test(v) ? 0 : /MONGO|DATABASE/.test(v) ? 1 : 2)
+    : engine === 'mysql'
+    ? (v: string) => (v === 'DATABASE_URL' ? 0 : /DATABASE|MYSQL|MARIADB|DB/.test(v) ? 1 : 2)
     : (v: string) => (v === 'DATABASE_URL' ? 0 : /DATABASE|POSTGRES|PG/.test(v) ? 1 : 2);
   return [...byFile.entries()]
     .map(([file, variables]) => ({ file, variables: variables.sort((a, b) => order(a) - order(b) || a.localeCompare(b)), example: isExample(file), copy: isCopy(file) }))

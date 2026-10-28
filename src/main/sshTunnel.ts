@@ -19,7 +19,7 @@ import { pathManager } from './paths';
 import type { DatabaseConfig, SshSettings } from '../types/config';
 import {
   SshErrorCode, SshRunOptions, SshTarget, baseSshOptions, classifySshError, isSafePort, isSafeSshValue, normalizeSshPorts,
-  envSearchScript, EnvFileMatch, parseEnvLine, parseEnvSearch, parseSshConfigHosts, parseSshConfigIncludes, parseSshG, readEnvCommand, tunnelArgs,
+  envSearchScript, EnvFileMatch, EnvSearchEngine, parseEnvLine, parseEnvSearch, parseSshConfigHosts, parseSshConfigIncludes, parseSshG, readEnvCommand, tunnelArgs,
 } from './sshConfig';
 
 const IDLE_CLOSE_MS = 10 * 60 * 1000;
@@ -135,7 +135,7 @@ export async function readRemoteEnv(ssh: SshSettings, file: string, name: string
  * with the names of those variables only. The script goes on stdin to `sh -s`, so the
  * user's login shell (fish, zsh…) does not matter.
  */
-export async function findRemoteEnvFiles(ssh: SshSettings, engine: 'postgresql' | 'mongodb' = 'postgresql'): Promise<EnvFileMatch[]> {
+export async function findRemoteEnvFiles(ssh: SshSettings, engine: EnvSearchEngine = 'postgresql'): Promise<EnvFileMatch[]> {
   validateSsh(ssh);
   const result = await run(binary('ssh'), [...baseSshOptions(targetOf(ssh), runOptions()), '--', ssh.host, 'sh -s'], envSearchScript(engine), 30000);
   if (result.code === 255) throw new SshError(result.stderr.trim() || 'ssh failed', classifySshError(result.stderr), result.stderr);
