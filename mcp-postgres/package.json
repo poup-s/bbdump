@@ -18,7 +18,7 @@
     "mongodb": "7.7.0",
     "pg": "^8.16.3",
     "pg-format": "^1.0.4",
-    "zod": "^3.25.76"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^20.10.6",

@@ -55,6 +55,11 @@
   As for PostgreSQL, a password pasted in the URL is taken out of it and kept encrypted; the tools
   get the connection from a temporary file only you can read, never on their command line.
 
+### Security
+
+- Dependencies updated for published vulnerabilities: zod 4 (validation of the AI's tool calls and of
+  dashboards), and in the AI assistants' server (MCP) its SDK and the libraries it brings along.
+
 ## 1.4.0 — 2026-10-22
 
 ### Added

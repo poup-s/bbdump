@@ -26,7 +26,7 @@ const MAX_PARAMS = 65535;
 /** Column added to RETURNING to keep each row as JSON for the undo point */
 const ROW_JSON = '__bbdump_row';
 
-const cellValue = z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(z.any()), z.record(z.any())]);
+const cellValue = z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(z.any()), z.record(z.string(), z.any())]);
 
 /** node-postgres sends objects as JSON and arrays as PostgreSQL arrays */
 const toParam = (value: unknown) => value;
@@ -134,7 +134,7 @@ export function registerMutationTools(server: McpServer) {
         table: tableParam,
         database: databaseParam,
         schema: schemaParam,
-        rows: z.array(z.record(cellValue)).min(1).max(5000)
+        rows: z.array(z.record(z.string(), cellValue)).min(1).max(5000)
           .describe('Rows to insert, e.g. [{"name": "Alice", "age": 30}]'),
       },
       annotations: WRITE,
@@ -184,7 +184,7 @@ export function registerMutationTools(server: McpServer) {
         table: tableParam,
         database: databaseParam,
         schema: schemaParam,
-        set: z.record(cellValue).describe('Columns to update, e.g. {"name": "Bob", "age": 31}'),
+        set: z.record(z.string(), cellValue).describe('Columns to update, e.g. {"name": "Bob", "age": 31}'),
         filters: z.array(filterSchema).min(1).describe('Filters selecting the rows to update (at least one)'),
       },
       annotations: WRITE,
