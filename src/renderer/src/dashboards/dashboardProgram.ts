@@ -100,13 +100,51 @@ export function bindFilters(sql: string, values: Record<string, string | null | 
 }
 
 /**
- * The engine a program's queries are written for (Query("sql", …) or Query("mongo", …)), null
- * when it has none yet: a dashboard only goes on a database of that engine.
+ * The engine a program's queries are written for: Query("sql", …) PostgreSQL, Query("mysql", …)
+ * MySQL / MariaDB, Query("sqlite", …), Query("mongo", …); null when it has none yet. A dashboard
+ * only goes on a database of the same family (its SQL dialect, or MongoDB).
  */
-export function programEngine(program: string): 'postgresql' | 'mongodb' | null {
+export function programEngine(program: string): 'postgresql' | 'mysql' | 'sqlite' | 'mongodb' | null {
   if (/\bQuery\(\s*"mongo"/.test(program)) return 'mongodb';
+  if (/\bQuery\(\s*"mysql"/.test(program)) return 'mysql';
+  if (/\bQuery\(\s*"sqlite"/.test(program)) return 'sqlite';
   if (/\bQuery\(\s*"sql"/.test(program)) return 'postgresql';
   return null;
+}
+
+/** The family a database's dashboards belong to: MySQL and MariaDB share their dialect */
+export function dashboardFamily(engine: string): string {
+  return engine === 'mariadb' ? 'mysql' : engine;
+}
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+/** "2026-10-28 09:30:00" in UTC: how MySQL DATETIME and SQLite text dates compare */
+function sqlDateText(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`;
+}
+
+/** Bounds of "all time" for MySQL and SQLite (text dates sort the same way) */
+const SQL_DATE_MIN = '1000-01-01 00:00:00';
+const SQL_DATE_MAX = '9999-12-31 23:59:59';
+
+/**
+ * Filter placeholders of a MySQL / MariaDB or SQLite query as ? parameters (one per placeholder,
+ * in order): values never go into the SQL text. {{from}} / {{to}} become UTC date texts
+ * ("all time": the year 1000 to 9999), other filters text, or null when the filter is "all".
+ */
+export function bindSqlParams(sql: string, values: Record<string, string | null | undefined>): { text: string; params: Array<string | null> } {
+  const params: Array<string | null> = [];
+  const text = sql.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, name: string) => {
+    const raw = values[name];
+    if (name === 'from' || name === 'to') {
+      params.push(!raw || raw === '-infinity' ? SQL_DATE_MIN : raw === 'infinity' ? SQL_DATE_MAX : sqlDateText(raw));
+    } else {
+      params.push(raw ?? null);
+    }
+    return '?';
+  });
+  return { text, params };
 }
 
 // --- MongoDB: Query("mongo", {query: "{\"collection\": …, \"pipeline\": […]}"}) -----------------

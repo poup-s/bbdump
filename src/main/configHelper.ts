@@ -59,6 +59,8 @@ export function sanitizeDatabaseConfig(db: Partial<DatabaseConfig>): DatabaseCon
         verifyBackups: db.verifyBackups !== false,
         masked: db.masked === true, // Default to false if undefined
         ssh: sanitizeSsh(db.ssh),
+        // SQLite: an absolute path only
+        sqlite: typeof db.sqlite?.path === 'string' && db.sqlite.path.trim() ? { path: db.sqlite.path.trim() } : undefined,
         viaTunnel: undefined, // runtime only
     // The remaining required fields (name, host...) are passed through as stored, unvalidated
     } as DatabaseConfig;

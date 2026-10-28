@@ -111,15 +111,16 @@ export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null
     ipcMain.handle('backup-now', async (_, id: string) =>
         runBackupNow(id, (channel, payload) => getMainWindow()?.webContents.send(channel, payload)));
 
-    ipcMain.handle('restore-backup', async (_, payload: { backupFile: string; target: { name: string; host: string; port: number; user: string; password: string; connectionString?: string }; replace?: boolean }) => {
+    ipcMain.handle('restore-backup', async (_, payload: { backupFile: string; target: { id?: string; name: string; host: string; port: number; user: string; password: string; connectionString?: string }; replace?: boolean }) => {
         const { backupFile, target } = payload;
         logger.info(`Restore request: ${backupFile} to ${target.name}@${target.host}:${target.port}`);
 
         try {
             // The renderer only has masked passwords and no SSL settings: take the
             // credentials (decrypted, injected into the URI) from the matching saved database
-            const saved = getConfig().databases.find(d =>
-                d.name === target.name && d.host === target.host && d.port === target.port);
+            // By id first: SQLite files have no host or port, two of them may share a name
+            const saved = (target.id ? getConfig().databases.find(d => d.id === target.id) : undefined)
+                ?? getConfig().databases.find(d => d.name === target.name && d.host === target.host && d.port === target.port);
             let fromSaved = {};
             if (saved) {
                 const runtime = toRuntimeDatabase(saved);
@@ -129,6 +130,8 @@ export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null
                     ssl: saved.ssl, sslMode: saved.sslMode, sslRootCert: saved.sslRootCert,
                     // MongoDB: the authentication database of a database entered field by field
                     mongo: saved.mongo,
+                    // SQLite: the file restored into
+                    sqlite: saved.sqlite,
                 };
             }
             // Restored by the target's engine (feature flag checked first)
@@ -309,6 +312,19 @@ export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null
             properties: ['openFile'],
             filters: [
                 { name: 'Certificates', extensions: ['pem', 'crt', 'cer'] },
+                { name: 'All files', extensions: ['*'] }
+            ]
+        });
+        if (result.canceled || result.filePaths.length === 0) return null;
+        return result.filePaths[0];
+    });
+
+    // SQLite: the database file (any extension: apps name them as they like)
+    ipcMain.handle('select-sqlite-file', async () => {
+        const result = await dialog.showOpenDialog({
+            properties: ['openFile'],
+            filters: [
+                { name: 'SQLite', extensions: ['sqlite', 'sqlite3', 'db', 'db3', 's3db', 'sl3'] },
                 { name: 'All files', extensions: ['*'] }
             ]
         });

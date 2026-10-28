@@ -10,6 +10,7 @@ import { Combobox, ComboboxInput, ComboboxOptions, ComboboxOption, ComboboxButto
 import { useDebounceFn } from '@vueuse/core';
 import { DEFAULT_SCHEMA, displayTableName } from './schemaNames';
 import { draftColumns, insertPayload, isAutoValue, isDbFilled, isDraftRequired, isRowTimestamp, keyShape, newKey } from './rowDraft';
+import { columnKind, type ColumnKind } from './columnKinds';
 import type { ViewerTabState } from './viewerTabs';
 
 /** Shortcut labels: ⌘ on macOS, Ctrl elsewhere (the handlers accept both) */
@@ -375,23 +376,16 @@ const handleFieldChange = (col: TableColumnDetail, newValue: unknown) => {
   }
 };
 
-const getFieldInputType = (col: TableColumnDetail): string => {
-  const dtype = col.data_type?.toLowerCase() || '';
-  const udtName = col.udt_name?.toLowerCase() || '';
-  if (dtype === 'boolean' || udtName === 'bool') return 'checkbox';
-  if (dtype === 'json' || dtype === 'jsonb' || dtype === 'text') return 'textarea';
-  if (dtype.includes('timestamp')) return 'datetime-local';
-  if (dtype === 'date') return 'date';
-  if (dtype === 'time' || dtype === 'time without time zone' || dtype === 'time with time zone') return 'time';
-  if (dtype === 'integer' || dtype === 'bigint' || dtype === 'smallint' || dtype === 'numeric' || dtype === 'real' || dtype === 'double precision' || dtype === 'serial' || dtype === 'bigserial') return 'number';
-  return 'text';
+const INPUT_TYPES: Record<ColumnKind, string> = {
+  bool: 'checkbox', json: 'textarea', longtext: 'textarea', datetime: 'datetime-local', date: 'date', time: 'time', number: 'number', text: 'text',
 };
+const getFieldInputType = (col: TableColumnDetail): string => INPUT_TYPES[columnKind(col)];
 
 const formatForInput = (value: unknown, col: TableColumnDetail): string => {
   if (value === null || value === undefined) return '';
-  const dtype = col.data_type?.toLowerCase() || '';
+  const kind = columnKind(col);
   const pad = (n: number) => String(n).padStart(2, '0');
-  if (dtype.includes('timestamp')) {
+  if (kind === 'datetime') {
     try {
       const d = toDate(value);
       if (!isNaN(d.getTime())) {
@@ -399,7 +393,7 @@ const formatForInput = (value: unknown, col: TableColumnDetail): string => {
       }
     } catch { /* fallback */ }
   }
-  if (dtype === 'date') {
+  if (kind === 'date') {
     try {
       const d = toDate(value);
       if (!isNaN(d.getTime())) {
@@ -407,7 +401,7 @@ const formatForInput = (value: unknown, col: TableColumnDetail): string => {
       }
     } catch { /* fallback */ }
   }
-  if (dtype === 'json' || dtype === 'jsonb') {
+  if (kind === 'json') {
     if (typeof value === 'object') {
       try { return JSON.stringify(value, null, 2); } catch { /* fallback */ }
     }
@@ -762,41 +756,41 @@ const navigateToFk = async (col: TableColumnDetail, value: unknown) => {
 // Cell display formatting
 const formatCellValue = (value: unknown, col: TableColumnDetail): string => {
   if (value === null) return '';
-  const dtype = col.data_type?.toLowerCase() || '';
-  const udtName = col.udt_name?.toLowerCase() || '';
+  const kind = columnKind(col);
 
   // Boolean
-  if (dtype === 'boolean' || udtName === 'bool') {
+  if (kind === 'bool') {
     return value ? 'true' : 'false';
   }
   // JSON
-  if (dtype === 'json' || dtype === 'jsonb') {
+  if (kind === 'json') {
     try {
       if (typeof value === 'string') return value;
       return JSON.stringify(value, null, 2);
     } catch { return String(value); }
   }
   // Timestamp/date
-  if (dtype.includes('timestamp') || dtype === 'date') {
+  if (kind === 'datetime' || kind === 'date') {
     try {
       const d = toDate(value);
       if (!isNaN(d.getTime())) {
-        if (dtype === 'date') return d.toLocaleDateString();
+        if (kind === 'date') return d.toLocaleDateString();
         return d.toLocaleString();
       }
     } catch { /* fallback */ }
   }
+  // SQLite / MySQL blobs
+  if (value instanceof Uint8Array) return `[${value.length} bytes]`;
   return String(value);
 };
 
 const getCellClass = (value: unknown, col: TableColumnDetail): string => {
   if (value === null) return '';
-  const dtype = col.data_type?.toLowerCase() || '';
-  const udtName = col.udt_name?.toLowerCase() || '';
-  if (dtype === 'boolean' || udtName === 'bool') return value ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400';
-  if (dtype === 'json' || dtype === 'jsonb') return 'text-purple-600 dark:text-purple-400';
-  if (dtype.includes('timestamp') || dtype === 'date') return 'text-blue-600 dark:text-blue-400';
-  if (dtype === 'integer' || dtype === 'bigint' || dtype === 'smallint' || dtype === 'numeric' || dtype === 'real' || dtype === 'double precision') return 'tabular-nums';
+  const kind = columnKind(col);
+  if (kind === 'bool') return value ? 'text-green-600 dark:text-green-400' : 'text-red-500 dark:text-red-400';
+  if (kind === 'json') return 'text-purple-600 dark:text-purple-400';
+  if (kind === 'datetime' || kind === 'date') return 'text-blue-600 dark:text-blue-400';
+  if (kind === 'number') return 'tabular-nums';
   return '';
 };
 

@@ -67,16 +67,17 @@ describe('feature resolution', () => {
 });
 
 describe('features.json', () => {
-  test('keeps valid levels only, and stable engines (PostgreSQL, MongoDB) can never be turned off', () => {
-    assert.deepEqual(shared.sanitizeRollout({ engines: { postgresql: 'off', mongodb: 'off', mysql: 'beta', 'Bad Name': 'on', x: 'maybe' }, disabled: ['backup.run', 'nope', 3] }),
-      { engines: { postgresql: 'on', mongodb: 'on', mysql: 'beta' }, disabled: ['backup.run'] });
+  test('keeps valid levels only, and stable engines can never be turned off', () => {
+    const stable = { postgresql: 'on', mongodb: 'on', mysql: 'on', mariadb: 'on', sqlite: 'on' };
+    assert.deepEqual(shared.sanitizeRollout({ engines: { postgresql: 'off', mongodb: 'off', mysql: 'beta', redis: 'beta', 'Bad Name': 'on', x: 'maybe' }, disabled: ['backup.run', 'nope', 3] }),
+      { engines: { ...stable, redis: 'beta' }, disabled: ['backup.run'] });
     assert.deepEqual(shared.sanitizeRollout('garbage'), shared.DEFAULT_ROLLOUT);
-    assert.deepEqual(shared.DEFAULT_ROLLOUT.engines, { postgresql: 'on', mongodb: 'on' });
+    assert.deepEqual(shared.DEFAULT_ROLLOUT.engines, stable);
   });
 
   test('development overrides set the levels of engines in testing and switch features', () => {
-    const next = shared.applyOverrides(shared.DEFAULT_ROLLOUT, 'mysql:beta, mongodb:off, explorer.edit:off ,broken');
-    assert.equal(next.engines.mysql, 'beta');
+    const next = shared.applyOverrides(shared.DEFAULT_ROLLOUT, 'redis:beta, mongodb:off, explorer.edit:off ,broken');
+    assert.equal(next.engines.redis, 'beta');
     assert.equal(next.engines.mongodb, 'on');
     assert.deepEqual(next.disabled, ['explorer.edit']);
     assert.deepEqual(shared.applyOverrides(next, 'explorer.edit:on').disabled, []);
@@ -85,7 +86,7 @@ describe('features.json', () => {
   test('the file is read, sanitized, then the development overrides apply', () => {
     // features.json still says mongodb: 'beta' (saved while it was in testing): no longer applies
     assert.deepEqual(flags.currentRollout(), {
-      engines: { postgresql: 'on', mongodb: 'on' },
+      engines: { postgresql: 'on', mongodb: 'on', mysql: 'on', mariadb: 'on', sqlite: 'on' },
       disabled: ['explorer.edit', 'explorer.query'],
     });
   });
@@ -98,7 +99,7 @@ describe('features.json', () => {
   test('the main process refuses a feature that is off', () => {
     assert.doesNotThrow(() => flags.requireFeature('postgresql', 'backup.run'));
     assert.throws(() => flags.requireFeature('postgresql', 'explorer.edit'), { name: 'FeatureUnavailableError' });
-    assert.throws(() => flags.requireFeature('mysql', 'backup.run'), /does not support/);
+    assert.throws(() => flags.requireFeature('cassandra', 'backup.run'), /does not support/);
   });
 });
 
@@ -130,8 +131,8 @@ describe('drivers and manifests agree', () => {
     const catalog = await registry.facetFor('postgresql', 'explorer.browse', 'catalog');
     assert.equal(typeof catalog.listEntities, 'function');
     await assert.rejects(registry.facetFor('postgresql', 'explorer.edit', 'records'), { name: 'FeatureUnavailableError' });
-    await assert.rejects(registry.facetFor('mysql', 'backup.run', 'backup'), { name: 'FeatureUnavailableError' });
-    assert.equal(await registry.getDriver('mysql'), undefined);
+    await assert.rejects(registry.facetFor('cassandra', 'backup.run', 'backup'), { name: 'FeatureUnavailableError' });
+    assert.equal(await registry.getDriver('cassandra'), undefined);
   });
 });
 

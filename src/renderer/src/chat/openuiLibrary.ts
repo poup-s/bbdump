@@ -162,8 +162,8 @@ chart = BarChart(["Lyon", "Paris"], [245.5, 300], "Total by city", "EUR")
 rows = Table(["City", "Orders", "Total"], [["Lyon", 3, 245.5], ["Paris", 1, 300]])
 query = Sql("SELECT city, count(*), sum(total) FROM orders JOIN customers ON customers.id = orders.customer_id GROUP BY city")`;
 
-/** How the AI reads the database: SQL tools, or the mongo_* tools for a MongoDB database */
-const READING: Record<'postgresql' | 'mongodb', string[]> = {
+/** How the AI reads the database: PostgreSQL tools, the sql_* tools (MySQL, MariaDB, SQLite), or the mongo_* tools */
+const READING: Record<'postgresql' | 'mongodb' | 'sql', string[]> = {
   postgresql: [
     'Use the bbdump tools to answer: get_schema_overview first when you need the structure, then execute_query (SELECT only, add LIMIT), read_rows, count_rows, profile_table… Never invent data: only show values the tools returned.',
   ],
@@ -171,15 +171,27 @@ const READING: Record<'postgresql' | 'mongodb', string[]> = {
     'It is a MongoDB database. Use only the mongo_* tools: mongo_list_collections, then mongo_describe_collection (fields and indexes) before writing a filter or a pipeline, then mongo_find, mongo_count and mongo_aggregate (MongoDB syntax, Extended JSON for ids and dates: {"$oid": …}, {"$date": …}). The SQL tools do not apply. Never invent data: only show values the tools returned.',
     'For Sql, give the MongoDB command you ran, quotes inside escaped: Sql("db.orders.aggregate([{\\"$group\\": {\\"_id\\": \\"$city\\", \\"n\\": {\\"$sum\\": 1}}}])").',
   ],
+  sql: [
+    'Use only the sql_* tools: sql_schema_overview first when you need the structure (or sql_describe_table for one table), then sql_query (one reading statement, ? placeholders with params, add LIMIT). The other SQL tools are for PostgreSQL and do not apply. Never invent data: only show values the tools returned.',
+  ],
+};
+
+/** The dialect notes of an engine of the sql_* tools */
+const DIALECT: Record<string, string> = {
+  mysql: 'It is a MySQL database: quote names with `backticks`, dates with DATE(), DATE_FORMAT(), YEARWEEK(); no ILIKE (LIKE ignores case), no ::casts (CAST(x AS …)).',
+  mariadb: 'It is a MariaDB database: quote names with `backticks`, dates with DATE(), DATE_FORMAT(); no ILIKE (LIKE ignores case), no ::casts (CAST(x AS …)).',
+  sqlite: 'It is a SQLite database: quote names with "double quotes", dates are text or numbers (date(), strftime(\'%Y-%m\', col)); no ILIKE (LIKE ignores ASCII case), CAST(x AS INTEGER / REAL / TEXT).',
 };
 
 /** Everything the AI is told: who it is, what it may do, and how to show data */
 export function chatSystemPrompt(database: string, engine: string = 'postgresql'): string {
   const mongo = engine === 'mongodb';
+  const sql = engine in DIALECT;
   const preamble = [
-    `You are the assistant built into bbdump, a desktop app for ${mongo ? 'PostgreSQL and MongoDB' : 'PostgreSQL'} databases. The user is chatting with you about one database: "${database}".`,
+    `You are the assistant built into bbdump, a desktop app for PostgreSQL, MySQL, MariaDB, SQLite and MongoDB databases. The user is chatting with you about one database: "${database}".`,
     'It is already the active connection of the bbdump MCP tools (do not call use_connection or list_connections). You can only read: never claim you changed anything.',
-    ...READING[mongo ? 'mongodb' : 'postgresql'],
+    ...READING[mongo ? 'mongodb' : sql ? 'sql' : 'postgresql'],
+    ...(sql ? [DIALECT[engine]] : []),
     'Some values may come masked by the user (starred, fakes, NULL): keep them as they are.',
     'Write every sentence in the language of the user\'s message, the short notes between tool calls included, never the language the data happens to be in. Be brief. Plain text for explanations.',
     'Whenever you show data (rows, counts, totals, comparisons, trends), put it in ONE fenced block whose language is `openui`, holding an OpenUI Lang program as described below. Text outside the block is shown as is.',

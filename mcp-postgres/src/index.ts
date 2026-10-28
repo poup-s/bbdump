@@ -4,8 +4,9 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createServer } from './server.js';
 import { closeAll, setActiveConnection } from './db.js';
 import { chatScope } from './chatScope.js';
-import { findDatabase, getConnectionParams, getMongoTarget, savedEngine } from './connections.js';
+import { findDatabase, getConnectionParams, getMongoTarget, getSqlTarget, isSqlEngine, savedEngine } from './connections.js';
 import { useMongo } from './mongo/client.js';
+import { useSql } from './sql/client.js';
 import { reachThroughApp } from './tunnel.js';
 
 /** A chat on one database: connected to it before the first call */
@@ -17,6 +18,12 @@ async function connectChatDatabase(): Promise<void> {
       const mongo = getMongoTarget(chatScope.databaseId);
       if (!mongo) throw new Error('saved database not found');
       await useMongo(mongo.id, mongo.label, mongo.target, mongo.sshDatabaseId);
+      return;
+    }
+    if (isSqlEngine(savedEngine(chatScope.databaseId) ?? undefined)) {
+      const sql = getSqlTarget(chatScope.databaseId);
+      if (!sql) throw new Error('saved database not found');
+      await useSql(sql);
       return;
     }
     const params = getConnectionParams(chatScope.databaseId);

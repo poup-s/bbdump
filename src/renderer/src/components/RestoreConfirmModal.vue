@@ -49,6 +49,7 @@ const restore = async () => {
 
   try {
     const target = {
+      id: store.restoreTargetDb.id,
       name: store.restoreTargetDb.name,
       host: store.restoreTargetDb.host,
       port: store.restoreTargetDb.port,

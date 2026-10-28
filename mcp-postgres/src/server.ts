@@ -17,6 +17,9 @@ import { mongoToolsEnabled } from './mongo/features.js';
 import { savedEngine } from './connections.js';
 import { registerMongoTools } from './mongo/tools.js';
 import { registerMongoWriteTools } from './mongo/writes.js';
+import { registerSqlTools } from './sql/tools.js';
+import { registerSqlWriteTools } from './sql/writes.js';
+import { isSqlEngine } from './connections.js';
 
 export const SERVER_VERSION = '1.1.0';
 
@@ -35,12 +38,19 @@ const INSTRUCTIONS = `PostgreSQL tools from bbdump.
 const MONGO_INSTRUCTIONS = `
 - MongoDB databases appear in list_connections with engine "mongodb". After use_connection on one, use the mongo_* tools (mongo_list_collections, mongo_describe_collection, mongo_find, mongo_count, mongo_aggregate; mongo_insert_documents, mongo_update_documents, mongo_delete_documents, confirmed in bbdump with an undo point that list_changes / undo_change use); the other tools are for PostgreSQL. Filters and pipelines are Extended JSON ({"$oid": …}, {"$date": …}).`;
 
+/** Added with the MongoDB ones: MySQL, MariaDB and SQLite databases */
+const SQL_INSTRUCTIONS = `
+- MySQL, MariaDB and SQLite databases appear in list_connections with their engine. After use_connection on one, use the sql_* tools (sql_schema_overview, sql_list_tables, sql_describe_table, sql_query read-only with ? params, sql_explain; sql_insert_rows, sql_update_rows, sql_delete_rows with an undo point, sql_execute for any other change, all confirmed in bbdump); the other tools are for PostgreSQL. Write the SQL of that engine: MySQL / MariaDB quote names with \`backticks\`, SQLite with "double quotes"; dates are DATETIME / TEXT columns (SQLite: date(), strftime()).`;
+
 export function createServer(): McpServer {
   // The mongo_* tools are offered unless turned off in bbdump when the server starts (each call checks again)
   const mongo = mongoToolsEnabled();
-  const base = mongo ? INSTRUCTIONS + MONGO_INSTRUCTIONS : INSTRUCTIONS;
+  const base = mongo ? INSTRUCTIONS + MONGO_INSTRUCTIONS + SQL_INSTRUCTIONS : INSTRUCTIONS;
+  const chatEngine = chatScope.databaseId ? savedEngine(chatScope.databaseId) : null;
+  const chatTools = mongo && chatEngine === 'mongodb' ? ' It is a MongoDB database: use the mongo_* tools only.'
+    : mongo && isSqlEngine(chatEngine ?? undefined) ? ` It is a ${chatEngine === 'sqlite' ? 'SQLite' : chatEngine === 'mariadb' ? 'MariaDB' : 'MySQL'} database: use the sql_* tools only.` : '';
   const instructions = chatScope.databaseId
-    ? `${base}\n- This session is a chat opened in bbdump on one database: it is already the active connection${chatScope.readOnly ? ', and only reading is possible' : ''}.${mongo && savedEngine(chatScope.databaseId) === 'mongodb' ? ' It is a MongoDB database: use the mongo_* tools only.' : ''}`
+    ? `${base}\n- This session is a chat opened in bbdump on one database: it is already the active connection${chatScope.readOnly ? ', and only reading is possible' : ''}.${chatTools}`
     : base;
   const server = new McpServer({ name: 'bbdump-postgres', version: SERVER_VERSION }, { instructions });
 
@@ -66,6 +76,8 @@ export function createServer(): McpServer {
   registerCompareTools(server);
   if (mongo) registerMongoTools(server);
   if (mongo && mongoToolsEnabled('mcp.write')) registerMongoWriteTools(server);
+  if (mongo) registerSqlTools(server);
+  if (mongo && mongoToolsEnabled('mcp.write')) registerSqlWriteTools(server);
   registerPrompts(server);
 
   return server;

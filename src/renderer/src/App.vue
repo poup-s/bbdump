@@ -17,6 +17,7 @@ import ToastNotification from './components/ToastNotification.vue';
 import ConfirmModal from './components/ConfirmModal.vue';
 import DatabaseModal from './components/DatabaseModal.vue';
 import MongoDatabaseModal from './components/MongoDatabaseModal.vue';
+import SqlEngineDatabaseModal from './components/SqlEngineDatabaseModal.vue';
 import { engineOf } from '../../shared/engines/features';
 import CreateDatabaseModal from './components/CreateDatabaseModal.vue';
 import RestoreBackupModal from './components/RestoreBackupModal.vue';
@@ -183,6 +184,7 @@ const handleLoaderComplete = () => {
     <!-- Modals — mounted on demand via v-if for memory efficiency -->
     <Transition enter-active-class="transition duration-300 ease-out" enter-from-class="opacity-0" enter-to-class="opacity-100" leave-active-class="transition duration-200 ease-in" leave-from-class="opacity-100" leave-to-class="opacity-0">
       <MongoDatabaseModal v-if="store.showDatabaseModal && databaseModalEngine === 'mongodb'" />
+      <SqlEngineDatabaseModal v-else-if="store.showDatabaseModal && ['mysql', 'mariadb', 'sqlite'].includes(databaseModalEngine)" />
       <DatabaseModal v-else-if="store.showDatabaseModal" />
     </Transition>
     <Transition enter-active-class="transition duration-300 ease-out" enter-from-class="opacity-0" enter-to-class="opacity-100" leave-active-class="transition duration-200 ease-in" leave-from-class="opacity-100" leave-to-class="opacity-0">

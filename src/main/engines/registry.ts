@@ -11,6 +11,9 @@ import type { EngineDriver, Facets } from './driver';
 const LOADERS: Record<string, () => Promise<EngineDriver>> = {
     postgresql: async () => (await import('./postgresql')).postgresqlDriver,
     mongodb: async () => (await import('./mongodb')).mongodbDriver,
+    mysql: async () => (await import('./mysql')).mysqlDriver,
+    mariadb: async () => (await import('./mysql')).mariadbDriver,
+    sqlite: async () => (await import('./sqlite')).sqliteDriver,
 };
 
 /** Engines with a driver in this version */

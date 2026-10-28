@@ -3,6 +3,7 @@ import { databaseAllowed } from './chatScope.js';
 import * as fs from 'fs';
 import { mongoToolsEnabled } from './mongo/features.js';
 import { MONGO_DEFAULT_PORT, isMongoUri, mongoOption, parseMongoUri, type MongoTarget } from './shared/mongoUri.js';
+import { MYSQL_DEFAULT_PORT, parseMysqlUri, type MysqlTarget } from './shared/mysqlUri.js';
 
 const ALGORITHM = 'aes-256-gcm';
 
@@ -31,6 +32,8 @@ interface BbdumpDatabaseConfig {
   engine?: string;
   /** MongoDB, entered field by field */
   mongo?: { authSource?: string };
+  /** SQLite: the database file */
+  sqlite?: { path?: string };
 }
 
 interface BbdumpConfig {
@@ -55,6 +58,8 @@ export interface ConnectionInfo {
   last_backup?: string;
   /** Only for databases other than PostgreSQL */
   engine?: string;
+  /** SQLite: the database file */
+  file?: string;
 }
 
 export interface ConnectionParams {
@@ -188,7 +193,7 @@ function loadAllDatabases(): BbdumpConfig | null {
     const mongo = mongoToolsEnabled();
     // A chat on one database sees that database only
     const databases = Array.isArray(parsed.databases)
-      ? parsed.databases.filter((d) => databaseAllowed(d.id) && (isPostgres(d) || (mongo && d.engine === 'mongodb')))
+      ? parsed.databases.filter((d) => databaseAllowed(d.id) && (isPostgres(d) || (mongo && (d.engine === 'mongodb' || isSqlEngine(d.engine)))))
       : [];
     return { ...parsed, databases };
   } catch (err: any) {
@@ -198,6 +203,10 @@ function loadAllDatabases(): BbdumpConfig | null {
 }
 
 const isPostgres = (db: BbdumpDatabaseConfig) => !db.engine || db.engine === 'postgresql';
+
+/** MySQL, MariaDB and SQLite: tables queried with the sql_* tools */
+export type SqlEngine = 'mysql' | 'mariadb' | 'sqlite';
+export const isSqlEngine = (engine: string | undefined): engine is SqlEngine => engine === 'mysql' || engine === 'mariadb' || engine === 'sqlite';
 
 /** The PostgreSQL databases only: what every tool but the mongo_* ones works on */
 function loadBbdumpConfig(): BbdumpConfig | null {
@@ -245,6 +254,39 @@ export function getMongoTarget(identifier: string): { id: string; label: string;
   };
 }
 
+/** A saved MySQL, MariaDB or SQLite database: its target (password decrypted, memory only) or its file */
+export function getSqlTarget(identifier: string): { id: string; label: string; engine: SqlEngine; target?: MysqlTarget; file?: string; sshDatabaseId?: string } | null {
+  const db = findSaved(loadAllDatabases()?.databases ?? [], identifier);
+  if (!db || !isSqlEngine(db.engine)) return null;
+  const label = db.displayName || db.name;
+  if (db.engine === 'sqlite') {
+    if (!db.sqlite?.path) throw new Error('This SQLite database has no file');
+    return { id: db.id, label, engine: 'sqlite', file: db.sqlite.path };
+  }
+  let password = db.password;
+  if (db.encrypted !== false && password) {
+    const key = loadEncryptionKey();
+    if (!key) throw new Error('Encryption key not available; cannot decrypt password');
+    password = decryptPassword(password, key);
+  }
+  return {
+    id: db.id,
+    label,
+    engine: db.engine,
+    sshDatabaseId: db.ssh ? db.id : undefined,
+    target: {
+      connectionString: db.connectionString,
+      host: db.host,
+      port: db.port,
+      user: db.user,
+      password: password || undefined,
+      database: db.name,
+      sslMode: db.sslMode || (db.ssl ? 'require' : undefined),
+      sslRootCert: db.sslRootCert,
+    },
+  };
+}
+
 export function isBbdumpConfigured(): boolean {
   return !!(process.env.BBDUMP_CONFIG_PATH && process.env.BBDUMP_KEY_PATH);
 }
@@ -260,6 +302,7 @@ export function listConnections(): ConnectionInfo[] | null {
 
   return bbdumpConfig.databases.map((db) => {
     if (db.engine === 'mongodb') return mongoConnectionInfo(db, projectOf.get(db.id));
+    if (isSqlEngine(db.engine)) return sqlConnectionInfo(db, db.engine, projectOf.get(db.id));
     const uri = db.connectionString ? parseConnectionString(db.connectionString) : {};
     const sslMode = db.sslMode || uri.sslMode || (db.ssl ? 'require' : undefined);
     return {
@@ -295,6 +338,30 @@ function mongoConnectionInfo(db: BbdumpDatabaseConfig, project: string | undefin
     user: parsed?.username || db.user,
     database: db.name,
     ssl: parsed ? mongoOption(parsed, 'tls') === 'true' || mongoOption(parsed, 'ssl') === 'true' || parsed.srv : !!db.sslMode && db.sslMode !== 'disable' && db.sslMode !== 'prefer',
+    local: false,
+    ...(db.ssh ? { via_ssh: db.ssh.host } : {}),
+    last_backup: db.lastBackup,
+  };
+}
+
+/** A MySQL, MariaDB or SQLite database in list_connections, never with its password */
+function sqlConnectionInfo(db: BbdumpDatabaseConfig, engine: SqlEngine, project: string | undefined): ConnectionInfo {
+  if (engine === 'sqlite') {
+    return { id: db.id, name: db.name, displayName: db.displayName, project, engine, host: '', port: 0, user: '', database: db.name, file: db.sqlite?.path, ssl: false, local: true, last_backup: db.lastBackup };
+  }
+  const parsed = db.connectionString ? parseMysqlUri(db.connectionString) : null;
+  const sslMode = db.sslMode || parsed?.sslMode;
+  return {
+    id: db.id,
+    name: db.name,
+    displayName: db.displayName,
+    project,
+    engine,
+    host: parsed?.host || db.host,
+    port: parsed?.port || db.port || MYSQL_DEFAULT_PORT,
+    user: parsed?.user || db.user,
+    database: db.name,
+    ssl: !!sslMode && sslMode !== 'disable' && sslMode !== 'prefer',
     local: false,
     ...(db.ssh ? { via_ssh: db.ssh.host } : {}),
     last_backup: db.lastBackup,

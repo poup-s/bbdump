@@ -10,6 +10,7 @@ import { recordQuery } from '../history.js';
 import { statementCount, findWriteKeyword } from '../sql.js';
 import { findDatabase } from '../connections.js';
 import { activeMongo } from '../mongo/client.js';
+import { activeSql } from '../sql/client.js';
 import { journalAvailable, listEntries, writeEntry, MAX_UNDO_ROWS, type UndoTable } from '../journal.js';
 import {
   primaryKey, selectForUndo, captureDelete, modifiedTable, snapshotTable, diffSnapshots, touchedRows, startTriggerCapture, UndoUnavailable,
@@ -428,7 +429,8 @@ export function registerMutationTools(server: McpServer) {
       if (!journalAvailable()) return errorResult('The change journal needs the MCP server set up by bbdump (Settings → MCP).');
       const active = getActiveConnectionInfo();
       const mongo = activeMongo();
-      const saved = mongo ? { id: mongo.id } : active.label ? findDatabase(active.label) : null;
+      const sql = activeSql();
+      const saved = sql ? { id: sql.id } : mongo ? { id: mongo.id } : active.label ? findDatabase(active.label) : null;
       const entries = listEntries(all_databases ? {} : saved ? { databaseId: saved.id } : { database: active.database }, limit);
       return jsonResult({
         changes: entries.map(e => ({

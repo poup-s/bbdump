@@ -52,8 +52,9 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 
-  # MongoDB on a real server: explorer, document edits, aggregations, dashboards, backup and restore
-  mongodb:
+  # Database engines on real servers: MongoDB 8, MySQL 8.4, MariaDB 11.8 (and SQLite, a file):
+  # explorer, edits, read-only queries, dashboards, backup and restore
+  engines:
     runs-on: ubuntu-latest
     services:
       mongo:
@@ -65,6 +66,28 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-pw
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pci-root-pw"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+      mariadb:
+        image: mariadb:11.8
+        env:
+          MARIADB_ROOT_PASSWORD: ci-root-pw
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
     steps:
       - uses: actions/checkout@v4
 
@@ -91,11 +114,23 @@ jobs:
           echo "$RUNNER_TEMP/mongo-bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/mongo-bin/mongodump" --version
 
-      - name: Tests on MongoDB 8
+      # The runner has MySQL's own client tools: they back up MySQL, and MariaDB as a fallback
+      - name: MySQL client tools
+        run: mysqldump --version && mysql --version
+
+      - name: MongoDB 8
         env:
           BBDUMP_TEST_MONGO: 127.0.0.1:27017
           BBDUMP_TEST_MONGO_TOOLS: required
         run: node --test test/mongoLive.test.mjs
+
+      - name: MySQL 8.4, MariaDB 11.8 and SQLite
+        env:
+          BBDUMP_TEST_MYSQL: 127.0.0.1:3306
+          BBDUMP_TEST_MARIADB: 127.0.0.1:3307
+          BBDUMP_TEST_MYSQL_PASSWORD: ci-root-pw
+          BBDUMP_TEST_SQL_TOOLS: required
+        run: node --test test/sqlLive.test.mjs
 
   # Windows (beta): build, tests, the installer, and a start of the packaged app
   windows:

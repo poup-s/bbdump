@@ -12,8 +12,9 @@ import { formatMongoUri, isMongoUri, parseMongoUri } from '../shared/engines/mon
 
 const KEYWORD_PASSWORD = /(^|\s)password\s*=\s*('(?:[^'\\]|\\.)*'|\S+)/i;
 
+/** URL forms with one host, read by WHATWG URL (PostgreSQL, MySQL, MariaDB) */
 function isUri(cs: string): boolean {
-  return /^postgres(ql)?:\/\//i.test(cs.trim());
+  return /^(postgres(ql)?|mysql|mariadb):\/\//i.test(cs.trim());
 }
 
 /** Splits a connection string into the same string without password, and that password. */

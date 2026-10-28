@@ -30,7 +30,7 @@ const fileEngine = ref<string | null>(null);
 const databases = computed(() => (store.databases || []).filter(db =>
   isEnabled(db, 'restore.replace') && (!fileEngine.value || engineOf(db) === fileEngine.value)));
 /** A new local database is a PostgreSQL one: not for another engine's backup */
-const canCreate = computed(() => !isRemoteOnly() && fileEngine.value !== 'mongodb');
+const canCreate = computed(() => !isRemoteOnly() && (!fileEngine.value || fileEngine.value === 'postgresql'));
 const selectedDb = ref<string>('');
 const restoreMode = ref<'existing' | 'new'>('existing');
 const newDbName = ref('');

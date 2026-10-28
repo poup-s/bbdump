@@ -4,7 +4,7 @@
  */
 
 /** Engines with a driver in this version. A saved database may name another one (written by a newer bbdump). */
-export type KnownEngineId = 'postgresql' | 'mongodb';
+export type KnownEngineId = 'postgresql' | 'mongodb' | 'mysql' | 'mariadb' | 'sqlite';
 
 /** What the code of an engine supports for one feature */
 export type Support = 'yes' | 'beta' | 'no';

@@ -11,9 +11,12 @@ export const tableId = (schema: string, table: string): string => `${schema}.${t
 export const displayTableName = (schema: string | undefined, table: string, currentSchema: string = DEFAULT_SCHEMA): string =>
   !schema || schema === currentSchema ? table : `${schema}.${table}`;
 
-/** Quotes a PostgreSQL identifier (doubles embedded double quotes). */
-export const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`;
+/** Quotes an identifier: backticks for MySQL / MariaDB, double quotes otherwise (PostgreSQL, SQLite). */
+export const quoteIdent = (name: string, engine = 'postgresql'): string =>
+  engine === 'mysql' || engine === 'mariadb'
+    ? `\`${name.replace(/`/g, '``')}\``
+    : `"${name.replace(/"/g, '""')}"`;
 
-/** Schema-qualified, quoted table reference: "schema"."table". */
-export const qualifiedIdent = (schema: string, table: string): string =>
-  `${quoteIdent(schema)}.${quoteIdent(table)}`;
+/** Schema-qualified, quoted table reference: "schema"."table" (`database`.`table` for MySQL). */
+export const qualifiedIdent = (schema: string, table: string, engine = 'postgresql'): string =>
+  `${quoteIdent(schema, engine)}.${quoteIdent(table, engine)}`;

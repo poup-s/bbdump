@@ -88,7 +88,93 @@ export const MONGODB: EngineManifest = {
     features: MONGODB_FEATURES,
 };
 
-export const MANIFESTS: readonly EngineManifest[] = [POSTGRESQL, MONGODB];
+/**
+ * MySQL and MariaDB: one driver (mysql2), two products. Tables like PostgreSQL, so the table
+ * explorer, the SQL editor, dashboards and the AI's sql_* tools; a backup is the server's own
+ * dump tool (mysqldump or mariadb-dump) written compressed. One database = one namespace.
+ */
+const MYSQL_FEATURES = {
+    'connection.test': 'yes',
+    'connection.tls': 'yes',
+    // Not yet: the tunnel works (same as PostgreSQL), the dialog has no SSH mode for these engines
+    'connection.ssh': 'no',
+    'stats.size': 'yes',
+    'backup.run': 'yes',
+    'backup.schedule': 'yes',
+    'backup.verify': 'yes',
+    'backup.encrypt': 'yes',
+    // The tables of the backup replace those of the target (no transaction around DDL: "back up first" stays on)
+    'restore.replace': 'yes',
+    'explorer.browse': 'yes',
+    'explorer.edit': 'yes',
+    'explorer.query': 'yes',
+    'explorer.diagram': 'yes',
+    'mcp.read': 'yes',
+    'mcp.write': 'yes',
+    'mcp.undo': 'yes',
+    'mask.fields': 'yes',
+    'chat': 'yes',
+    'dashboards': 'yes',
+} as const satisfies Partial<Record<FeatureKey, Support>>;
+
+export const MYSQL: EngineManifest = {
+    id: 'mysql',
+    label: 'MySQL',
+    defaultPort: 3306,
+    uriSchemes: ['mysql'],
+    queryLanguage: 'sql',
+    features: MYSQL_FEATURES,
+};
+
+export const MARIADB: EngineManifest = {
+    id: 'mariadb',
+    label: 'MariaDB',
+    defaultPort: 3306,
+    uriSchemes: ['mariadb'],
+    queryLanguage: 'sql',
+    features: MYSQL_FEATURES,
+};
+
+/**
+ * SQLite: a file on this computer, read and written in-process (node:sqlite, no tool to
+ * install). Backups use SQLite's online backup (consistent while an app writes to it), and a
+ * restore writes into the file the same way. No server: no SSH, TLS or proxy.
+ */
+const SQLITE_FEATURES = {
+    'connection.test': 'yes',
+    'stats.size': 'yes',
+    'backup.run': 'yes',
+    'backup.schedule': 'yes',
+    'backup.verify': 'yes',
+    'backup.encrypt': 'yes',
+    'restore.replace': 'yes',
+    'explorer.browse': 'yes',
+    'explorer.edit': 'yes',
+    'explorer.query': 'yes',
+    'explorer.diagram': 'yes',
+    'mcp.read': 'yes',
+    'mcp.write': 'yes',
+    'mcp.undo': 'yes',
+    'mask.fields': 'yes',
+    'chat': 'yes',
+    'dashboards': 'yes',
+} as const satisfies Partial<Record<FeatureKey, Support>>;
+
+export const SQLITE: EngineManifest = {
+    id: 'sqlite',
+    label: 'SQLite',
+    uriSchemes: [],
+    queryLanguage: 'sql',
+    features: SQLITE_FEATURES,
+};
+
+export const MANIFESTS: readonly EngineManifest[] = [POSTGRESQL, MONGODB, MYSQL, MARIADB, SQLITE];
+
+/** Engines whose databases are tables queried in SQL (the table explorer, SQL dashboards) */
+export const SQL_ENGINES: readonly string[] = ['postgresql', 'mysql', 'mariadb', 'sqlite'];
+
+/** MySQL-family engines (one driver, one dialect) */
+export const isMysqlFamily = (engine: string | undefined) => engine === 'mysql' || engine === 'mariadb';
 
 /** Undefined for an engine this version does not know (a database saved by a newer bbdump) */
 export function manifestFor(engine: string): EngineManifest | undefined {

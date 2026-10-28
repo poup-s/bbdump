@@ -14,7 +14,7 @@ import { relative } from '../../timeText';
 import type { Database } from '../../types';
 import { useDashboards, type DashboardSummary, type DashboardTemplate } from '../../dashboards/useDashboards';
 import { ipcRenderer } from '../../electron';
-import { programEngine } from '../../dashboards/dashboardProgram';
+import { dashboardFamily, programEngine } from '../../dashboards/dashboardProgram';
 import { engineOf } from '../../../../shared/engines/features';
 import AppModal from '../ui/AppModal.vue';
 import FormField from '../ui/FormField.vue';
@@ -88,7 +88,7 @@ const importing = ref<{ template: DashboardTemplate; databaseId: string } | null
 /** The databases a file can go on: those of the engine its queries are written for */
 const importDatabases = computed(() => {
   const engine = importing.value ? programEngine(importing.value.template.program ?? '') : null;
-  return boardDatabases.value.filter(d => !engine || engineOf(d) === engine);
+  return boardDatabases.value.filter(d => !engine || dashboardFamily(engineOf(d)) === engine);
 });
 async function importFile() {
   const result = await ipcRenderer.invoke('dashboards-import-file');

@@ -6,6 +6,8 @@ import * as fs from 'fs';
 import { userInfo, homedir, devNull } from 'os';
 import type { ClientConfig } from 'pg';
 import { promisify } from 'util';
+import * as zlib from 'zlib';
+import { pipeline } from 'stream/promises';
 import { DatabaseConfig, BackupResult } from '../types/config';
 import { logger } from './logger';
 import { pathManager } from './paths';
@@ -1518,6 +1520,13 @@ apt-get install -y postgresql-client-${majorVersion}
     file: string;
     timestamp: string;
     verify?: (file: string) => Promise<{ valid: boolean; error?: string }>;
+    /**
+     * The tool writes the dump on its standard output (mysqldump): gzipped into `file`, after
+     * this first line (it names the engine, see backupFormat.ts). Never written to the log.
+     */
+    stdoutTo?: { header: string };
+    /** Fed to the tool's standard input (a restore), closed when done */
+    stdin?: NodeJS.ReadableStream;
   }): Promise<BackupResult> {
     const { file: timestampedPath, timestamp } = run;
     const timeout = db.backupTimeout ?? 30 * 60 * 1000; // 30 minutes by default
@@ -1618,9 +1627,24 @@ apt-get install -y postgresql-client-${majorVersion}
         logger.info(message.trim(), db.name);
       });
 
-      child.stdout.on('data', (data) => {
-        logger.info(data.toString().trim(), db.name);
-      });
+      let written: Promise<void> | null = null;
+      if (run.stdoutTo) {
+        const gzip = zlib.createGzip();
+        const out = fs.createWriteStream(timestampedPath, { mode: 0o600 });
+        gzip.write(`${run.stdoutTo.header}\n`);
+        written = pipeline(child.stdout, gzip, out);
+        // A write error (disk full) fails the run; close reports it below
+        written.catch(() => {});
+      } else {
+        child.stdout.on('data', (data) => {
+          logger.info(data.toString().trim(), db.name);
+        });
+      }
+      if (run.stdin) {
+        run.stdin.on('error', () => child.kill('SIGTERM'));
+        child.stdin.on('error', () => { /* the tool stopped reading: its exit code says why */ });
+        run.stdin.pipe(child.stdin);
+      }
 
       child.on('error', (error) => {
         cleanup();
@@ -1663,91 +1687,15 @@ apt-get install -y postgresql-client-${majorVersion}
         }
 
         if (code === 0) {
-          // Read the whole archive back before trusting it (and before encrypting it)
-          if (db.verifyBackups !== false && run.verify) {
-            const verification = await run.verify(timestampedPath);
-            if (!verification.valid) {
-              const errorMsg = `Backup verification failed: ${verification.error}`;
-              logger.error(errorMsg, db.name);
-              resolve({ success: false, database: db.name, timestamp, error: errorMsg });
+          if (written) {
+            try {
+              await written;
+            } catch (error) {
+              resolve({ success: false, database: db.name, timestamp, error: `Could not write the backup file: ${getErrorMessage(error)}` });
               return;
             }
           }
-
-          // If encryption is enabled, encrypt the file
-          if (db.encryptBackups) {
-            const encryptedPath = timestampedPath + '.encrypted';
-
-            try {
-              logger.info(`Encrypting backup file...`, db.name);
-
-              // Encrypt the file
-              await fileEncryptionManager.encryptFile(timestampedPath, encryptedPath);
-
-              // Delete the unencrypted file
-              try {
-                fs.unlinkSync(timestampedPath);
-              } catch (unlinkError) {
-                logger.warn(`Failed to delete unencrypted backup: ${unlinkError}`, db.name);
-                // Continue anyway to rename the encrypted file
-              }
-
-              // Rename the encrypted file
-              try {
-                fs.renameSync(encryptedPath, timestampedPath);
-              } catch (renameError) {
-                logger.error(`Failed to rename encrypted file: ${renameError}`, db.name);
-                throw renameError;
-              }
-
-              const successMsg = `Backup successful and encrypted: ${timestampedPath}`;
-              logger.info(successMsg, db.name);
-              resolve({
-                success: true,
-                database: db.name,
-                timestamp,
-                message: successMsg,
-                filePath: timestampedPath
-              });
-            } catch (encryptError) {
-              const errorMsg = `Error during encryption: ${encryptError}`;
-              logger.error(errorMsg, db.name);
-
-              // Nettoyage des fichiers en cas d'erreur
-              try {
-                // Delete the partial encrypted file if it exists
-                if (fs.existsSync(encryptedPath)) {
-                  fs.unlinkSync(encryptedPath);
-                  logger.info(`Cleaned up partial encrypted file: ${encryptedPath}`, db.name);
-                }
-
-                // Also delete the unencrypted file
-                if (fs.existsSync(timestampedPath)) {
-                  fs.unlinkSync(timestampedPath);
-                  logger.info(`Cleaned up unencrypted backup file: ${timestampedPath}`, db.name);
-                }
-              } catch (cleanupError) {
-                logger.warn(`Failed to cleanup files after encryption error: ${cleanupError}`, db.name);
-              }
-
-              resolve({
-                success: false,
-                database: db.name,
-                timestamp,
-                error: errorMsg
-              });
-            }
-          } else {
-            const successMsg = `Backup successful: ${timestampedPath}`;
-            logger.info(successMsg, db.name);
-            resolve({
-              success: true,
-              database: db.name,
-              timestamp,
-              message: successMsg,
-              filePath: timestampedPath
-            });
-          }
+          resolve(await this.finishDump(db, { file: timestampedPath, timestamp, verify: run.verify }));
         } else {
           const errorMsg = `${run.label} failed with code ${code}\n${errorOutput}`;
           logger.error(errorMsg, db.name);
@@ -1760,6 +1708,115 @@ apt-get install -y postgresql-client-${majorVersion}
         }
       });
     });
+  }
+
+  /**
+   * The end of every backup, whatever wrote the file: read it back (`verify`), then encrypt it
+   * when the database asks for it. A failure removes the file (no partial file that looks
+   * restorable).
+   */
+  async finishDump(db: DatabaseConfig, run: {
+    file: string;
+    timestamp: string;
+    verify?: (file: string) => Promise<{ valid: boolean; error?: string }>;
+  }): Promise<BackupResult> {
+    const { file: timestampedPath, timestamp } = run;
+    const result = await (async (): Promise<BackupResult> => {
+      // Read the whole archive back before trusting it (and before encrypting it)
+      if (db.verifyBackups !== false && run.verify) {
+        const verification = await run.verify(timestampedPath);
+        if (!verification.valid) {
+          const errorMsg = `Backup verification failed: ${verification.error}`;
+          logger.error(errorMsg, db.name);
+          return ({ success: false, database: db.name, timestamp, error: errorMsg });
+        }
+      }
+
+      // If encryption is enabled, encrypt the file
+      if (db.encryptBackups) {
+        const encryptedPath = timestampedPath + '.encrypted';
+
+        try {
+          logger.info(`Encrypting backup file...`, db.name);
+
+          // Encrypt the file
+          await fileEncryptionManager.encryptFile(timestampedPath, encryptedPath);
+
+          // Delete the unencrypted file
+          try {
+            fs.unlinkSync(timestampedPath);
+          } catch (unlinkError) {
+            logger.warn(`Failed to delete unencrypted backup: ${unlinkError}`, db.name);
+            // Continue anyway to rename the encrypted file
+          }
+
+          // Rename the encrypted file
+          try {
+            fs.renameSync(encryptedPath, timestampedPath);
+          } catch (renameError) {
+            logger.error(`Failed to rename encrypted file: ${renameError}`, db.name);
+            throw renameError;
+          }
+
+          const successMsg = `Backup successful and encrypted: ${timestampedPath}`;
+          logger.info(successMsg, db.name);
+          return ({
+            success: true,
+            database: db.name,
+            timestamp,
+            message: successMsg,
+            filePath: timestampedPath
+          });
+        } catch (encryptError) {
+          const errorMsg = `Error during encryption: ${encryptError}`;
+          logger.error(errorMsg, db.name);
+
+          // Nettoyage des fichiers en cas d'erreur
+          try {
+            // Delete the partial encrypted file if it exists
+            if (fs.existsSync(encryptedPath)) {
+              fs.unlinkSync(encryptedPath);
+              logger.info(`Cleaned up partial encrypted file: ${encryptedPath}`, db.name);
+            }
+
+            // Also delete the unencrypted file
+            if (fs.existsSync(timestampedPath)) {
+              fs.unlinkSync(timestampedPath);
+              logger.info(`Cleaned up unencrypted backup file: ${timestampedPath}`, db.name);
+            }
+          } catch (cleanupError) {
+            logger.warn(`Failed to cleanup files after encryption error: ${cleanupError}`, db.name);
+          }
+
+          return ({
+            success: false,
+            database: db.name,
+            timestamp,
+            error: errorMsg
+          });
+        }
+      } else {
+        const successMsg = `Backup successful: ${timestampedPath}`;
+        logger.info(successMsg, db.name);
+        return ({
+          success: true,
+          database: db.name,
+          timestamp,
+          message: successMsg,
+          filePath: timestampedPath
+        });
+      }
+    })();
+    if (!result.success) {
+      for (const leftover of [timestampedPath, `${timestampedPath}.encrypted`]) {
+        try {
+          if (fs.existsSync(leftover)) fs.unlinkSync(leftover);
+        } catch (unlinkError) {
+          logger.warn(`Failed to remove incomplete backup ${leftover}: ${unlinkError}`, db.name);
+        }
+      }
+    }
+    return result;
   }
 
   /**

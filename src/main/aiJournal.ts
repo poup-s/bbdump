@@ -149,6 +149,12 @@ export async function previewUndo(id: string) {
     const { payload: _payload, ...summary } = entry;
     return { entry: summary, databaseId, ...(await previewMongoUndo(databaseId, tables)) };
   }
+  if (entry.engine && isSqlEngine(entry.engine)) {
+    requireFeature(entry.engine, 'mcp.undo');
+    const { previewSqlUndo } = await import('./sqlUndo');
+    const { payload: _payload, ...summary } = entry;
+    return { entry: summary, databaseId, ...(await previewSqlUndo(entry.engine, databaseId, tables)) };
+  }
   const sample = (rows: string[]) => rows.slice(0, 20).map(r => JSON.parse(r) as Record<string, unknown>);
   const counts = tables.map(t => {
     const keyOf = (row: string) => { const o = JSON.parse(row); return JSON.stringify(t.primaryKey.map(c => o[c])); };
@@ -177,6 +183,17 @@ async function undoMongo(databaseId: string, tables: UndoTable[]) {
   return { conflicts: result.conflicts, restored: result.restored };
 }
 
+/** MySQL, MariaDB and SQLite changes: same journal, undone by sqlUndo.ts */
+async function undoSql(engine: string, databaseId: string, tables: UndoTable[]) {
+  requireFeature(engine, 'mcp.undo');
+  const { undoSqlChange } = await import('./sqlUndo');
+  const result = await undoSqlChange(engine, databaseId, tables);
+  return { conflicts: result.conflicts, restored: result.restored };
+}
+
+/** MySQL, MariaDB and SQLite: tables in their own dialect, undone by sqlUndo.ts */
+const isSqlEngine = (engine: string) => engine === 'mysql' || engine === 'mariadb' || engine === 'sqlite';
+
 /**
  * Undoes a change in one transaction: rows it inserted are deleted, rows it deleted come
  * back, rows it updated get their previous values. Refused when rows changed since.
@@ -195,7 +212,9 @@ export async function undoChange(id: string): Promise<{ success: boolean; error?
 
   try {
     const tables = undoTables(entry);
-    const outcome = entry.engine === 'mongodb' ? await undoMongo(databaseId, tables) : await withConnection(await connectionParamsFor(databaseId), async (client) => {
+    const outcome = entry.engine === 'mongodb' ? await undoMongo(databaseId, tables)
+      : entry.engine && isSqlEngine(entry.engine) ? await undoSql(entry.engine, databaseId, tables)
+      : await withConnection(await connectionParamsFor(databaseId), async (client) => {
       await client.query('BEGIN');
       try {
         const conflicts = await findConflicts(client, tables);

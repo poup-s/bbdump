@@ -158,6 +158,11 @@ export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWin
                 const { buildMongoMaskingPlan } = await import('../mongoMasking');
                 return { success: true, plan: await buildMongoMaskingPlan(sourceId) };
             }
+            // MySQL, MariaDB, SQLite: tables and columns from the driver's catalog
+            if (['mysql', 'mariadb', 'sqlite'].includes(engineOf(saved))) {
+                const { buildSqlMaskingPlan } = await import('../sqlMasking');
+                return { success: true, plan: await buildSqlMaskingPlan(sourceId) };
+            }
             const plan = await onSource(sourceId, async src => {
                 const catalog = await readCatalog(src);
                 // Statistics may be missing on small or fresh tables: count those

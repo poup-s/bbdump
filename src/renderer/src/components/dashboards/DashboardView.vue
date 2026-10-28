@@ -18,7 +18,7 @@ import { ipcRenderer, shell } from '../../electron';
 import { CHAT_TOOLS, chatSettings } from '../../chat/chatSettings';
 import type { ChatProviderId } from '../../chat/chatEvents';
 import { DASHBOARD_CONTEXT, dashboardLibrary, type BlockInfo, type BlockLayout } from '../../dashboards/dashboardLibrary';
-import { bindFilters, bindMongoFilters, mongoDashboardQuery, periodRange, toMongoQueryResult, toQueryResult, type QueryResult } from '../../dashboards/dashboardProgram';
+import { bindFilters, bindMongoFilters, bindSqlParams, dashboardFamily, mongoDashboardQuery, periodRange, toMongoQueryResult, toQueryResult, type QueryResult } from '../../dashboards/dashboardProgram';
 import { engineOf } from '../../../../shared/engines/features';
 import {
   blockLabels, blockQueries, blockTitle, blockType, changeType, duplicateBlock, kpiItems, moveBlock, moveBlockTo, parseStatements, splitKpis, querySql, removeBlock, setBlockTitle, setQuerySql, typeChoices,
@@ -88,7 +88,8 @@ const runQuery = async (query: string): Promise<QueryResult> => {
     const { collection, pipeline } = mongoDashboardQuery(bindMongoFilters(query, boundValues()));
     return toMongoQueryResult(await ipcRenderer.invoke('dashboards-aggregate', { db: { id: props.databaseId }, query: { collection, pipeline, limit: 1000 } }));
   }
-  const { text, params } = bindFilters(query, boundValues());
+  // MySQL, MariaDB, SQLite: ? parameters; PostgreSQL: $n with their types
+  const { text, params } = engine.value === 'postgresql' ? bindFilters(query, boundValues()) : bindSqlParams(query, boundValues());
   return toQueryResult(await ipcRenderer.invoke('execute-sql', { db: { id: props.databaseId }, sql: text, params, maxRows: 1000, timeoutMs: 30000 }));
 };
 const inflight = ref(0);
@@ -134,7 +135,7 @@ const runTool = async (args: Record<string, unknown>) => {
   }
 };
 /** Query("sql", …) on PostgreSQL, Query("mongo", …) on MongoDB: the same runner */
-const tools = { sql: runTool, mongo: runTool };
+const tools = { sql: runTool, mongo: runTool, mysql: runTool, sqlite: runTool };
 
 /** Blocks the renderer could not build (wrong arguments, unknown component…) */
 const renderErrors = ref<OpenUIError[]>([]);
@@ -572,7 +573,7 @@ const showAppearance = ref(false);
 const copying = ref<{ databaseId: string } | null>(null);
 // A dashboard can be copied to another database whose engine has dashboards
 // Same engine only: the queries are SQL or MongoDB aggregations
-const otherDatabases = computed(() => store.databases.filter(d => d.id !== props.databaseId && isEnabled(d, 'dashboards') && engineOf(d) === engine.value));
+const otherDatabases = computed(() => store.databases.filter(d => d.id !== props.databaseId && isEnabled(d, 'dashboards') && dashboardFamily(engineOf(d)) === dashboardFamily(engine.value)));
 const menuItems = computed<ActionMenuItem[]>(() => [
   ...(dashboard.value?.versions.length ? [{ key: 'undo', label: t('dashboards.menu.undo'), icon: 'M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3' }] : []),
   { key: 'appearance', label: t('dashboards.menu.appearance'), icon: 'M4.098 19.902a3.75 3.75 0 005.304 0l6.401-6.402M6.75 21A3.75 3.75 0 013 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 003.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.879 2.88M6.75 17.25h.008v.008H6.75v-.008z' },

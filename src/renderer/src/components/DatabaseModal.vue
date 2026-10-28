@@ -38,10 +38,18 @@ const ICONS = {
   folder: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z',
   terminal: 'M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z',
   leaf: 'M12 21c-4-3-6-7.5-6-11.5C6 6 8.7 3 12 3s6 3 6 6.5C18 13.5 16 18 12 21zm0 0V8',
+  file: 'M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z',
 };
 
 const { t } = useI18n();
 const { engineLevel } = useFeatures();
+/** Engines other than PostgreSQL, when turned on: a card each */
+const otherEngines = computed(() => [
+  { id: 'mongodb', label: 'MongoDB', description: t('mongoModal.methodDesc'), icon: ICONS.leaf },
+  { id: 'mysql', label: 'MySQL', description: t('sqlModal.mysqlMethodDesc'), icon: ICONS.database },
+  { id: 'mariadb', label: 'MariaDB', description: t('sqlModal.mariadbMethodDesc'), icon: ICONS.database },
+  { id: 'sqlite', label: 'SQLite', description: t('sqlModal.sqliteMethodDesc'), icon: ICONS.file },
+].filter(engine => engineLevel(engine.id) !== 'off'));
 const { addToast } = useToast();
 
 const isEditing = computed(() => !!store.editingDatabase);
@@ -485,15 +493,21 @@ const parsedPreview = computed(() => connectionMode.value === 'url' && connectio
           :selected="connectionMode === 'ssh'"
           @select="selectMode('ssh')"
         />
-        <!-- Other engines (when on): their own dialog -->
-        <ChoiceCard
-          v-if="engineLevel('mongodb') !== 'off'"
-          :title="'MongoDB'"
-          :description="t('mongoModal.methodDesc')"
-          :icon="ICONS.leaf"
-          :selected="false"
-          @select="store.databaseModalEngine = 'mongodb'"
-        />
+      </div>
+      <!-- Other engines (when on): each in its own dialog -->
+      <div class="mt-5">
+        <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-gray-400 dark:text-zinc-500 mb-2">{{ t('dbModal.method.otherEngines') }}</div>
+        <div role="radiogroup" class="space-y-2">
+          <ChoiceCard
+            v-for="other in otherEngines"
+            :key="other.id"
+            :title="other.label"
+            :description="other.description"
+            :icon="other.icon"
+            :selected="false"
+            @select="store.databaseModalEngine = other.id"
+          />
+        </div>
       </div>
       <div class="mt-5">
         <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-gray-400 dark:text-zinc-500 mb-2">{{ t('dbModal.method.guides') }}</div>

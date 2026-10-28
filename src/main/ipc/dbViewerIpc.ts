@@ -14,6 +14,8 @@ import type { AggregateQuery, DocumentEdit, DocumentQuery } from '../../shared/e
 
 export async function closeAllPools() {
     await dbViewer.closeAllPools();
+    // MySQL / MariaDB connections, when that driver was loaded
+    await import('../engines/mysql').then(mysql => mysql.closeMysqlPools()).catch(() => {});
 }
 
 export function registerDbViewerHandlers() {
@@ -25,7 +27,7 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('test-database-connection', async (_, params: {
         id?: string; host: string; port: number; user: string; password?: string; database: string;
         connectionString?: string; sslMode?: DatabaseConfig['sslMode']; sslRootCert?: string;
-        ssh?: DatabaseConfig['ssh']; engine?: string; mongo?: DatabaseConfig['mongo'];
+        ssh?: DatabaseConfig['ssh']; engine?: string; mongo?: DatabaseConfig['mongo']; sqlite?: DatabaseConfig['sqlite'];
     }) => {
         const saved = params.id ? getConfig()?.databases?.find(db => db.id === params.id) : undefined;
         // Tested by the database's engine (a saved one keeps its own), when it is turned on
@@ -45,6 +47,8 @@ export function registerDbViewerHandlers() {
         try {
             return await connection.test({
                 mongo: params.mongo,
+                // SQLite: the saved file when the dialog sends none (editing)
+                sqlite: params.sqlite ?? saved?.sqlite,
                 host: reached.host,
                 port: reached.port,
                 user: params.user,
@@ -317,9 +321,10 @@ export function registerDbViewerHandlers() {
         try {
             logger.info(`Executing SQL query on ${params.db.id} (maxRows: ${params.maxRows || 500})`);
             const query = await facetForDb(params.db.id, 'explorer.query', 'query');
-            // Bound values (dashboard filters): plain values only, never SQL
+            // Bound values (dashboard filters): plain values only, never SQL. MySQL and SQLite
+            // bind one ? per placeholder (a filter used five times is five values)
             const values = Array.isArray(params.params)
-                ? params.params.slice(0, 50).map(v => (v === null || ['string', 'number', 'boolean'].includes(typeof v) ? v as string | number | boolean | null : null))
+                ? params.params.slice(0, 200).map(v => (v === null || ['string', 'number', 'boolean'].includes(typeof v) ? v as string | number | boolean | null : null))
                 : undefined;
             return await query.run(params.db.id, {
                 sql: params.sql,

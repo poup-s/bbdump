@@ -6,6 +6,8 @@ export interface Database {
     engine?: string;
     /** MongoDB only (see DatabaseConfig.mongo) */
     mongo?: { authSource?: string };
+    /** SQLite only: the database file (see DatabaseConfig.sqlite) */
+    sqlite?: { path: string };
     name: string;
     displayName?: string;
     host: string;

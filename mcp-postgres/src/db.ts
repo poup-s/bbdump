@@ -7,6 +7,7 @@ import type { ConnectionParams } from './connections.js';
 import { reachThroughApp } from './tunnel.js';
 import { chatScope } from './chatScope.js';
 import { activeMongo, clearMongo } from './mongo/client.js';
+import { activeSql } from './sql/client.js';
 
 const { Pool } = pg;
 
@@ -105,6 +106,10 @@ export function getPool(database?: string): pg.Pool {
   const mongo = activeMongo();
   if (mongo) {
     throw new Error(`The active connection is the MongoDB database "${mongo.label}": use the mongo_* tools, or use_connection on a PostgreSQL database.`);
+  }
+  const sql = activeSql();
+  if (sql) {
+    throw new Error(`The active connection is the ${sql.engine} database "${sql.label}": use the sql_* tools, or use_connection on a PostgreSQL database.`);
   }
   const db = database || activeConnection.database;
   // A chat on one database cannot read the other databases of its server

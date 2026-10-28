@@ -9,7 +9,7 @@
  */
 import type * as explorer from '../dbViewer';
 import type { BackupManager } from '../backup';
-import type { DatabaseConfig, MongoSettings } from '../../types/config';
+import type { DatabaseConfig, MongoSettings, SqliteSettings } from '../../types/config';
 import type { EngineManifest, FacetName } from '../../shared/engines/types';
 import type { AggregateQuery, AggregateResult, CollectionDescription, CollectionInfo, DocumentEdit, DocumentPage, DocumentQuery } from '../../shared/engines/documents';
 
@@ -20,9 +20,9 @@ type Args<F> = Omit<FirstArg<F>, 'host' | 'port' | 'user' | 'password' | 'databa
 
 /**
  * What a dialog's connection test sends, already resolved by the handler: password decrypted
- * (or typed), SSH tunnel opened when there is one. `mongo` only for MongoDB.
+ * (or typed), SSH tunnel opened when there is one. `mongo` only for MongoDB, `sqlite` for SQLite.
  */
-export type ConnectionTestInput = FirstArg<typeof explorer.testConnection> & { mongo?: MongoSettings };
+export type ConnectionTestInput = FirstArg<typeof explorer.testConnection> & { mongo?: MongoSettings; sqlite?: SqliteSettings };
 
 export interface ConnectionFacet {
     /** Server version and number of entities (tables, collections) */
@@ -92,8 +92,8 @@ export interface BackupFacet {
 type RestoreArgs = Parameters<BackupManager['restoreBackup']>;
 
 export interface RestoreFacet {
-    /** The target is reached (tunnel open, password decrypted); `mongo` only for MongoDB */
-    restore(backupFile: RestoreArgs[0], target: RestoreArgs[1] & { mongo?: MongoSettings }, options?: RestoreArgs[2]): ReturnType<BackupManager['restoreBackup']>;
+    /** The target is reached (tunnel open, password decrypted); `mongo` only for MongoDB, `sqlite` for SQLite */
+    restore(backupFile: RestoreArgs[0], target: RestoreArgs[1] & { mongo?: MongoSettings; sqlite?: SqliteSettings }, options?: RestoreArgs[2]): ReturnType<BackupManager['restoreBackup']>;
 }
 
 export interface EngineDriver {

@@ -54,6 +54,26 @@
   kind (PostgreSQL or MongoDB).
   As for PostgreSQL, a password pasted in the URL is taken out of it and kept encrypted; the tools
   get the connection from a temporary file only you can read, never on their command line.
+- **MySQL, MariaDB and SQLite databases.** **Add an external connection** offers them under
+  **Other databases**: MySQL and MariaDB by `mysql://` / `mariadb://` URL or field by field (TLS
+  included, a password in the URL kept encrypted), SQLite by its file (nothing to install). They
+  get what PostgreSQL databases have:
+  - **Backups** now or on a schedule, with retention, encryption and verification. MySQL and
+    MariaDB: one compressed SQL dump (`mysqldump` or `mariadb-dump`, the connection in a
+    temporary file only you can read), read back to its end. SQLite: SQLite's own online copy,
+    consistent while an app writes to the file, then checked page by page.
+  - **Restore** into the same database or another one: the archive is checked first (a damaged
+    one changes nothing), then its tables replace the target's. A backup only goes into a
+    database of its own engine.
+  - **View**: the table explorer (tables, columns, keys, the schema diagram, editing rows, the
+    SQL editor with each engine's quoting). Queries run read only; a query that runs too long
+    is stopped (SQLite queries run apart, so a slow one never freezes bbdump).
+  - **AI assistants (MCP)**: `sql_*` tools to read the schema, run read-only queries and
+    explain them; insert, update and delete rows (confirmed in bbdump, with an undo point,
+    rows reached by `ON DELETE CASCADE` included) and run other statements (confirmed, no undo
+    point). **Anonymize for AI**, the **database chat** and **dashboards** work on them too,
+    each in its own SQL dialect.
+  Not yet: MySQL / MariaDB through SSH, copying or updating a database from another one.
 
 ### Security
 

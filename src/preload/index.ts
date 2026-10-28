@@ -13,7 +13,7 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
     'setup-get-environment', 'setup-get-plan', 'setup-install',
     'backup-now', 'restore-backup', 'get-backups', 'backup-engine', 'delete-backup', 'download-backup',
     'logs-read', 'clear-logs', 'get-scheduled-tasks', 'schedule-overview',
-    'get-app-version', 'get-about-info', 'get-default-path', 'select-directory', 'select-ssl-root-cert',
+    'get-app-version', 'get-about-info', 'get-default-path', 'select-directory', 'select-ssl-root-cert', 'select-sqlite-file',
     'check-for-updates', 'download-update', 'install-update',
     'check-encryption-key', 'check-key-status', 'export-encryption-key', 'import-encryption-key',
     'get-mcp-status', 'install-mcp-claude-desktop', 'uninstall-mcp-claude-desktop',

@@ -79,6 +79,7 @@
     "electron-updater": "^6.8.9",
     "fflate": "^0.8.3",
     "mongodb": "^7.7.0",
+    "mysql2": "^3.24.6",
     "node-cron": "^4.6.0",
     "pg": "^8.16.3",
     "pg-copy-streams": "^7.0.0",

@@ -147,6 +147,11 @@ const copyConnectionUrl = async (db: Database) => {
       database: db.name,
       options: db.user ? [['authSource', db.mongo?.authSource || 'admin']] : [],
     });
+  } else if (engineOf(db) === 'sqlite') {
+    // A file, not a server: its path
+    url = db.sqlite?.path || '';
+  } else if (engineOf(db) === 'mysql' || engineOf(db) === 'mariadb') {
+    url = `${engineOf(db)}://${encodeURIComponent(db.user || '')}@${db.host}:${db.port}/${encodeURIComponent(db.name)}`;
   } else if (db.isLocalBbdump && window.electron?.platform === 'linux') {
     // On Linux, local databases use peer auth via Unix socket
     url = `postgresql://${db.user}@/${db.name}?host=/var/run/postgresql&port=${db.port}`;

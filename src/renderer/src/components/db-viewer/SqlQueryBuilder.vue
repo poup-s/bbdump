@@ -8,6 +8,7 @@ import { ipcRenderer } from '../../electron';
 import { buildDbConfig, Database, type FullSchema } from '../../types';
 import { store } from '../../store';
 import { DEFAULT_SCHEMA, displayTableName, quoteIdent, qualifiedIdent } from './schemaNames';
+import { engineOf } from '../../../../shared/engines/features';
 
 /** Shortcut labels: ⌘ on macOS, Ctrl elsewhere (the handlers accept both) */
 const isMacKeys = navigator.userAgent.includes('Mac');
@@ -23,6 +24,10 @@ const props = withDefaults(defineProps<{
 const { t } = useI18n();
 const { addToast } = useToast();
 const { showConfirm } = useConfirm();
+
+/** The SQL dialect of the database: identifiers quoted its way, its operators only */
+const engine = computed(() => engineOf(props.db));
+const quote = (name: string) => quoteIdent(name, engine.value);
 
 const MUTATION_REGEX = /^\s*(UPDATE|DELETE|INSERT|DROP|ALTER|TRUNCATE|CREATE)\b/i;
 const DANGEROUS_REGEX = /^\s*(DELETE|DROP|TRUNCATE)\b/i;
@@ -244,7 +249,7 @@ const getFkSuggestions = (joinTable: string) => {
 // Quoted, schema-qualified SQL for a table key (unknown names are quoted as-is)
 const tableSql = (key: string): string => {
   const ref = tableRefs.value.get(key);
-  return ref ? qualifiedIdent(ref.schema, ref.name) : quoteIdent(key);
+  return ref ? qualifiedIdent(ref.schema, ref.name, engine.value) : quote(key);
 };
 
 // Quoted SQL for a column reference picked in the builder ("col" or "tableKey.col").
@@ -254,8 +259,8 @@ const columnSql = (colRef: string): string => {
   if (!ref || ref === '*') return ref;
   const candidates = allColumns.value.filter(c => activeTables.value.includes(c.table_name));
   const qualified = candidates.find(c => `${c.table_name}.${c.column_name}` === ref);
-  if (qualified) return `${tableSql(qualified.table_name)}.${quoteIdent(qualified.column_name)}`;
-  if (candidates.some(c => c.column_name === ref)) return quoteIdent(ref);
+  if (qualified) return `${tableSql(qualified.table_name)}.${quote(qualified.column_name)}`;
+  if (candidates.some(c => c.column_name === ref)) return quote(ref);
   return ref;
 };
 
@@ -346,7 +351,7 @@ const generatedSql = computed(() => {
     if (!valuesBlock?.rows.length) return '';
     const cols = insertBlock.columns;
     const parts: string[] = [];
-    parts.push(`INSERT INTO ${tableSql(insertBlock.table)} (${cols.map(quoteIdent).join(', ')})`);
+    parts.push(`INSERT INTO ${tableSql(insertBlock.table)} (${cols.map(quote).join(', ')})`);
     const rowStrings = valuesBlock.rows.map(row => {
       const vals = cols.map(col => {
         const v = row[col] ?? '';
@@ -1050,7 +1055,8 @@ const toggleRawMode = () => {
   rawMode.value = !rawMode.value;
 };
 
-const operators = ['=', '!=', '>', '<', '>=', '<=', 'LIKE', 'ILIKE', 'IN', 'IS NULL', 'IS NOT NULL'];
+// ILIKE is PostgreSQL's (LIKE is already case-insensitive in MySQL and, for ASCII, in SQLite)
+const operators = computed(() => ['=', '!=', '>', '<', '>=', '<=', 'LIKE', ...(engine.value === 'postgresql' ? ['ILIKE'] : []), 'IN', 'IS NULL', 'IS NOT NULL']);
 
 // When FROM table changes via user dropdown interaction (not from parser), reset columns
 // We track this with a flag to avoid resetting parsed columns

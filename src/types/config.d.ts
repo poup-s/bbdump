@@ -8,6 +8,11 @@ export interface DatabaseConfig {
   engine?: string;
   /** MongoDB only, for a database entered field by field (a URL carries its own options) */
   mongo?: MongoSettings;
+  /**
+   * SQLite only: the database file on this computer. `host`/`port`/`user` stay empty, so a
+   * version without SQLite fails to connect instead of reaching another database.
+   */
+  sqlite?: SqliteSettings;
   isLocalBbdump?: boolean;
   name: string;
   displayName?: string;
@@ -48,6 +53,11 @@ export interface DatabaseConfig {
 export interface MongoSettings {
   /** Database holding the user (MongoDB's default: admin when a user is given) */
   authSource?: string;
+}
+
+export interface SqliteSettings {
+  /** Absolute path of the database file */
+  path: string;
 }
 
 export interface SshSettings {
