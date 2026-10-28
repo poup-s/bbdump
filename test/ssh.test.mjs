@@ -67,7 +67,7 @@ describe('MongoDB URLs on the server', () => {
     const os = require('node:os');
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bbdump-envsearch-mongo-'));
     const write = (rel, text) => { fs.mkdirSync(path.dirname(path.join(home, rel)), { recursive: true }); fs.writeFileSync(path.join(home, rel), text); };
-    write('apps/api/.env', 'APP_DB=mongodb://app:s3cret@localhost:27017/shop?authSource=admin\nMONGODB_URI="mongodb+srv://u:pw@cluster0.x.mongodb.net/shop"\nDATABASE_URL=postgresql://a:b@localhost/c\n');
+    write('apps/api/.env', 'APP_DB=mongodb://app:s3cret@localhost:27017/shop?authSource=admin\nMONGODB_URI="mongodb+srv://u:pw@cluster0.db.example/shop"\nDATABASE_URL=postgresql://a:b@localhost/c\n');
     try {
       const out = execFileSync('sh', ['-s'], { input: ssh.envSearchScript('mongodb'), env: { ...process.env, HOME: home }, encoding: 'utf8', timeout: 60000 });
       assert.ok(!out.includes('s3cret') && !out.includes('pw@'), 'no secret leaves the server');

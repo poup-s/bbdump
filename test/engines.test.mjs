@@ -334,8 +334,8 @@ describe('MongoDB connection strings', () => {
   });
 
   test('SRV names one host without a port', () => {
-    assert.equal(uri.parseMongoUri('mongodb+srv://u:p@cluster0.x.mongodb.net/app').srv, true);
-    assert.equal(uri.parseMongoUri('mongodb+srv://u:p@cluster0.x.mongodb.net:27017/app'), null);
+    assert.equal(uri.parseMongoUri('mongodb+srv://u:p@cluster0.db.example/app').srv, true);
+    assert.equal(uri.parseMongoUri('mongodb+srv://u:p@cluster0.db.example:27017/app'), null);
     assert.equal(uri.parseMongoUri('mongodb+srv://a.net,b.net/app'), null);
   });
 
@@ -391,10 +391,10 @@ describe('MongoDB connection of the driver', () => {
   });
 
   test('a URL saved without its password gets it back; the field wins over the path', () => {
-    const result = mongo.mongoConnection({ connectionString: 'mongodb+srv://app@cluster0.x.mongodb.net/main', host: '', port: 0, user: 'app', password: 'pw', database: 'other' });
-    assert.equal(result.uri, 'mongodb+srv://app:pw@cluster0.x.mongodb.net/main');
+    const result = mongo.mongoConnection({ connectionString: 'mongodb+srv://app@cluster0.db.example/main', host: '', port: 0, user: 'app', password: 'pw', database: 'other' });
+    assert.equal(result.uri, 'mongodb+srv://app:pw@cluster0.db.example/main');
     assert.equal(result.database, 'other');
-    assert.equal(result.hosts, 'srv:cluster0.x.mongodb.net');
+    assert.equal(result.hosts, 'srv:cluster0.db.example');
   });
 
   test('a failed login with a URL naming a database but no authSource suggests admin', () => {
