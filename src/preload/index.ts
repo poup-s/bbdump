@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 
 const ALLOWED_INVOKE_CHANNELS = new Set([
     // Config
-    'get-config', 'complete-onboarding', 'save-settings', 'whats-new-seen',
+    'get-config', 'complete-onboarding', 'save-settings', 'whats-new-seen', 'features-get', 'features-set-engine',
     'open-external', 'show-item-in-folder',
     'add-database', 'update-database', 'remove-database',
     'toggle-schedule', 'toggle-mask',
@@ -11,7 +11,7 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
     // System
     'check-prerequisites', 'install-homebrew', 'install-postgresql',
     'setup-get-environment', 'setup-get-plan', 'setup-install',
-    'backup-now', 'restore-backup', 'get-backups', 'delete-backup', 'download-backup',
+    'backup-now', 'restore-backup', 'get-backups', 'backup-engine', 'delete-backup', 'download-backup',
     'logs-read', 'clear-logs', 'get-scheduled-tasks', 'schedule-overview',
     'get-app-version', 'get-about-info', 'get-default-path', 'select-directory', 'select-ssl-root-cert',
     'check-for-updates', 'download-update', 'install-update',
@@ -21,6 +21,8 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
     'mcp-confirm-response',
     // DB Viewer
     'get-database-tables', 'test-database-connection', 'get-db-schemas', 'get-db-tables', 'get-db-full-schema',
+    'documents-collections', 'documents-find', 'documents-describe', 'documents-aggregate',
+    'documents-insert', 'documents-replace', 'documents-delete', 'dashboards-aggregate',
     'count-table-rows', 'get-table-schema',
     'get-table-relations', 'get-table-data', 'get-fk-row',
     'update-table-data', 'delete-table-row', 'insert-table-row', 'get-enum-values',

@@ -66,7 +66,7 @@ See [Encryption & Security](encryption-and-security.md).
 
 ### AI assistants (MCP)
 
-- One-click connection for each supported client: Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Devin desktop, VS Code, OpenCode.
+- One-click connection for each supported client: Claude Desktop, Claude Code, Codex, Cursor, Windsurf, Devin desktop, VS Code, OpenCode, Mistral Vibe.
 - **Let assistants change data without asking**: off by default, so each change waits for your approval. Even when on, changes stay in the AI journal and can be undone.
 - **Another client: configuration to copy**: a ready-made snippet for any other MCP client. It runs on bbdump's own binary, no Node.js needed.
 

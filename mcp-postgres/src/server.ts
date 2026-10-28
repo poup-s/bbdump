@@ -13,6 +13,10 @@ import { registerBackupTools } from './tools/backups.js';
 import { registerCompareTools } from './tools/compare.js';
 import { registerPrompts } from './prompts.js';
 import { chatScope, toolAllowed } from './chatScope.js';
+import { mongoToolsEnabled } from './mongo/features.js';
+import { savedEngine } from './connections.js';
+import { registerMongoTools } from './mongo/tools.js';
+import { registerMongoWriteTools } from './mongo/writes.js';
 
 export const SERVER_VERSION = '1.1.0';
 
@@ -27,10 +31,17 @@ const INSTRUCTIONS = `PostgreSQL tools from bbdump.
 - compare_databases tells what a database lacks compared to another (e.g. a local dev copy behind prod).
 - The user may mask personal data of a database: values come partly starred (****234@email.fr) or as fakes (Camille Martin, camille.martin.3f2a@example.com, XXXX…, NULL; numbers and dates with noise or rounded) and results say masked_columns. Work with them; never try to recover the real values. A result the user blocked must not be asked again.`;
 
+/** Added when MongoDB is on in bbdump (unless the AI's access to it is turned off) */
+const MONGO_INSTRUCTIONS = `
+- MongoDB databases appear in list_connections with engine "mongodb". After use_connection on one, use the mongo_* tools (mongo_list_collections, mongo_describe_collection, mongo_find, mongo_count, mongo_aggregate; mongo_insert_documents, mongo_update_documents, mongo_delete_documents, confirmed in bbdump with an undo point that list_changes / undo_change use); the other tools are for PostgreSQL. Filters and pipelines are Extended JSON ({"$oid": …}, {"$date": …}).`;
+
 export function createServer(): McpServer {
+  // The mongo_* tools are offered unless turned off in bbdump when the server starts (each call checks again)
+  const mongo = mongoToolsEnabled();
+  const base = mongo ? INSTRUCTIONS + MONGO_INSTRUCTIONS : INSTRUCTIONS;
   const instructions = chatScope.databaseId
-    ? `${INSTRUCTIONS}\n- This session is a chat opened in bbdump on one database: it is already the active connection${chatScope.readOnly ? ', and only reading is possible' : ''}.`
-    : INSTRUCTIONS;
+    ? `${base}\n- This session is a chat opened in bbdump on one database: it is already the active connection${chatScope.readOnly ? ', and only reading is possible' : ''}.${mongo && savedEngine(chatScope.databaseId) === 'mongodb' ? ' It is a MongoDB database: use the mongo_* tools only.' : ''}`
+    : base;
   const server = new McpServer({ name: 'bbdump-postgres', version: SERVER_VERSION }, { instructions });
 
   // A read-only chat: the tools that change something are not even offered
@@ -53,6 +64,8 @@ export function createServer(): McpServer {
   registerMutationTools(server);
   registerBackupTools(server);
   registerCompareTools(server);
+  if (mongo) registerMongoTools(server);
+  if (mongo && mongoToolsEnabled('mcp.write')) registerMongoWriteTools(server);
   registerPrompts(server);
 
   return server;

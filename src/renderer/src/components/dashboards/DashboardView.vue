@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * One dashboard: its blocks (OpenUI, data read live through 'execute-sql', read only), a
+ * One dashboard: its blocks (OpenUI, data read live, read only: 'execute-sql' for PostgreSQL,
+ * 'dashboards-aggregate' for MongoDB), a
  * toolbar (name, refresh, automatic refresh, more) and the AI editor on the right. Each block
  * has its own menu (type, width, order, title, SQL, CSV…); filters bind {{from}}, {{to}} and
  * {{name}} as SQL parameters. Opening runs every query; "Refresh" runs them again and keeps the
@@ -10,13 +11,15 @@ import { computed, h, nextTick, onMounted, onUnmounted, provide, ref, watch } fr
 import { Renderer, type OpenUIError, type ParseResult } from '@openuidev/vue-lang';
 import { store } from '../../store';
 import { useI18n } from '../../composables/useI18n';
+import { useFeatures } from '../../composables/useFeatures';
 import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
 import { ipcRenderer, shell } from '../../electron';
 import { CHAT_TOOLS, chatSettings } from '../../chat/chatSettings';
 import type { ChatProviderId } from '../../chat/chatEvents';
 import { DASHBOARD_CONTEXT, dashboardLibrary, type BlockInfo, type BlockLayout } from '../../dashboards/dashboardLibrary';
-import { bindFilters, periodRange, toQueryResult, type QueryResult } from '../../dashboards/dashboardProgram';
+import { bindFilters, bindMongoFilters, mongoDashboardQuery, periodRange, toMongoQueryResult, toQueryResult, type QueryResult } from '../../dashboards/dashboardProgram';
+import { engineOf } from '../../../../shared/engines/features';
 import {
   blockLabels, blockQueries, blockTitle, blockType, changeType, duplicateBlock, kpiItems, moveBlock, moveBlockTo, parseStatements, splitKpis, querySql, removeBlock, setBlockTitle, setQuerySql, typeChoices,
 } from '../../dashboards/programEdit';
@@ -34,6 +37,7 @@ const props = defineProps<{ databaseId: string; dashboardId: string }>();
 const emit = defineEmits<{ close: [] }>();
 
 const { t, currentLanguage } = useI18n();
+const { isEnabled } = useFeatures();
 const { addToast } = useToast();
 const { showConfirm } = useConfirm();
 const { open, ask, stop, undo, update, setProgram, saveFilters: saveDashboardFilters, copyTo, resetChat, remove } = useDashboards();
@@ -76,7 +80,17 @@ const saveFilters = () => {
 };
 onUnmounted(() => clearTimeout(filtersTimer));
 
-// --- Data: every Query("sql") goes through 'execute-sql', read only ----------------------------
+// --- Data: every Query runs read only, on the database's engine -------------------------------
+const engine = computed(() => engineOf(db.value));
+/** One block's query with the filters bound as values (never pasted into SQL) */
+const runQuery = async (query: string): Promise<QueryResult> => {
+  if (engine.value === 'mongodb') {
+    const { collection, pipeline } = mongoDashboardQuery(bindMongoFilters(query, boundValues()));
+    return toMongoQueryResult(await ipcRenderer.invoke('dashboards-aggregate', { db: { id: props.databaseId }, query: { collection, pipeline, limit: 1000 } }));
+  }
+  const { text, params } = bindFilters(query, boundValues());
+  return toQueryResult(await ipcRenderer.invoke('execute-sql', { db: { id: props.databaseId }, sql: text, params, maxRows: 1000, timeoutMs: 30000 }));
+};
 const inflight = ref(0);
 const refreshedAt = ref<number | null>(null);
 /** Queries that failed, by SQL text (cleared when one runs again without error) */
@@ -87,42 +101,40 @@ const results = new Map<string, QueryResult>();
 /** Results kept from the last time (shown at once, then refreshed) */
 let cached: Record<string, QueryResult> | null = null;
 
-const tools = {
-  sql: async (args: Record<string, unknown>) => {
-    const query = String(args?.query ?? '').trim();
-    const { text, params } = bindFilters(query, boundValues());
-    const key = `${query}\u0000${filterKey()}`;
-    if (cached?.[key]) {
-      const hit = cached[key];
-      delete cached[key];
-      return hit;
+const runTool = async (args: Record<string, unknown>) => {
+  const query = String(args?.query ?? '').trim();
+  const key = `${query}\u0000${filterKey()}`;
+  if (cached?.[key]) {
+    const hit = cached[key];
+    delete cached[key];
+    return hit;
+  }
+  inflight.value++;
+  const startedAt = Date.now();
+  try {
+    const result = await runQuery(query);
+    if (failures.value.has(query)) {
+      const next = new Map(failures.value);
+      next.delete(query);
+      failures.value = next;
     }
-    inflight.value++;
-    const startedAt = Date.now();
-    try {
-      const raw = await ipcRenderer.invoke('execute-sql', { db: { id: props.databaseId }, sql: text, params, maxRows: 1000, timeoutMs: 30000 });
-      if (failures.value.has(query)) {
-        const next = new Map(failures.value);
-        next.delete(query);
-        failures.value = next;
-      }
-      const result = toQueryResult(raw);
-      // The latest result per query and filters, at most 200 (the oldest go first)
-      results.delete(key);
-      results.set(key, result);
-      while (results.size > 200) results.delete(results.keys().next().value!);
-      return result;
-    } catch (error) {
-      const message = (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
-      failures.value = new Map(failures.value).set(query, message);
-      throw error;
-    } finally {
-      durations.value = new Map(durations.value).set(query, Date.now() - startedAt);
-      inflight.value--;
-      refreshedAt.value = Date.now();
-    }
-  },
+    // The latest result per query and filters, at most 200 (the oldest go first)
+    results.delete(key);
+    results.set(key, result);
+    while (results.size > 200) results.delete(results.keys().next().value!);
+    return result;
+  } catch (error) {
+    const message = (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+    failures.value = new Map(failures.value).set(query, message);
+    throw error;
+  } finally {
+    durations.value = new Map(durations.value).set(query, Date.now() - startedAt);
+    inflight.value--;
+    refreshedAt.value = Date.now();
+  }
 };
+/** Query("sql", …) on PostgreSQL, Query("mongo", …) on MongoDB: the same runner */
+const tools = { sql: runTool, mongo: runTool };
 
 /** Blocks the renderer could not build (wrong arguments, unknown component…) */
 const renderErrors = ref<OpenUIError[]>([]);
@@ -435,19 +447,27 @@ const saveRename = async () => {
 interface SqlDraft { name: string; sql: string; original: string; test: { busy: boolean; ok?: boolean; text?: string; columns?: string[]; rows?: Array<Record<string, unknown>> } }
 const sqlBlock = ref<string | null>(null);
 const sqlDrafts = ref<SqlDraft[]>([]);
+/** A MongoDB query is kept on one line in the program, shown laid out to be edited */
+const reshape = (text: string, indent?: number) => {
+  if (engine.value !== 'mongodb') return text;
+  try {
+    return JSON.stringify(JSON.parse(text), null, indent);
+  } catch {
+    return text;
+  }
+};
 const openSql = (id: string) => {
   sqlBlock.value = id;
   sqlDrafts.value = blockQueries(program.value, id).map(name => {
-    const sql = querySql(program.value, name) ?? '';
+    const sql = reshape(querySql(program.value, name) ?? '', 2);
     return { name, sql, original: sql, test: { busy: false } };
   });
 };
 const testSql = async (draft: SqlDraft) => {
   draft.test = { busy: true };
-  const { text, params } = bindFilters(draft.sql.trim(), boundValues());
   const startedAt = Date.now();
   try {
-    const result = toQueryResult(await ipcRenderer.invoke('execute-sql', { db: { id: props.databaseId }, sql: text, params, maxRows: 1000, timeoutMs: 30000 }));
+    const result = await runQuery(draft.sql.trim());
     draft.test = { busy: false, ok: true, text: t('dashboards.sqlOk', { count: result.rows.length, ms: Date.now() - startedAt }), columns: result.columns, rows: result.rows.slice(0, 5) };
   } catch (error) {
     draft.test = { busy: false, ok: false, text: (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': (Error: )?/, '') };
@@ -455,7 +475,7 @@ const testSql = async (draft: SqlDraft) => {
 };
 const saveSql = async () => {
   let next = program.value;
-  for (const d of sqlDrafts.value) if (d.sql.trim() && d.sql !== d.original) next = setQuerySql(next, d.name, d.sql);
+  for (const d of sqlDrafts.value) if (d.sql.trim() && d.sql !== d.original) next = setQuerySql(next, d.name, reshape(d.sql));
   sqlBlock.value = null;
   await applyProgram(next);
 };
@@ -550,7 +570,9 @@ onUnmounted(() => clearTimeout(checkTimer));
 const showCode = ref(false);
 const showAppearance = ref(false);
 const copying = ref<{ databaseId: string } | null>(null);
-const otherDatabases = computed(() => store.databases.filter(d => d.id !== props.databaseId));
+// A dashboard can be copied to another database whose engine has dashboards
+// Same engine only: the queries are SQL or MongoDB aggregations
+const otherDatabases = computed(() => store.databases.filter(d => d.id !== props.databaseId && isEnabled(d, 'dashboards') && engineOf(d) === engine.value));
 const menuItems = computed<ActionMenuItem[]>(() => [
   ...(dashboard.value?.versions.length ? [{ key: 'undo', label: t('dashboards.menu.undo'), icon: 'M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3' }] : []),
   { key: 'appearance', label: t('dashboards.menu.appearance'), icon: 'M4.098 19.902a3.75 3.75 0 005.304 0l6.401-6.402M6.75 21A3.75 3.75 0 013 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 003.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.879 2.88M6.75 17.25h.008v.008H6.75v-.008z' },
@@ -922,7 +944,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey));
 
     <!-- The SQL of a block, tried before it is saved -->
     <AppModal v-if="sqlBlock" :title="t('dashboards.sqlTitle')" icon="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" width="lg" @close="sqlBlock = null" @submit="saveSql">
-      <p class="mb-3 text-[12px] text-gray-500 dark:text-zinc-400">{{ t('dashboards.sqlHint') }}</p>
+      <p class="mb-3 text-[12px] text-gray-500 dark:text-zinc-400">{{ engine === 'mongodb' ? t('dashboards.mongoHint') : t('dashboards.sqlHint') }}</p>
       <div class="space-y-4">
         <div v-for="d in sqlDrafts" :key="d.name">
           <div class="mb-1 font-mono text-[11px] text-gray-500 dark:text-zinc-400">{{ d.name }}</div>

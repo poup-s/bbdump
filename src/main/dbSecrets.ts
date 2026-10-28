@@ -2,6 +2,7 @@ import { AppConfig, DatabaseConfig } from '../types/config';
 import { encryptionManager } from './encryption';
 import { logger } from './logger';
 import { withLocalServerPassword } from './localServerCredential';
+import { formatMongoUri, isMongoUri, parseMongoUri } from '../shared/engines/mongoUri';
 
 /**
  * Connection strings are stored WITHOUT their password: the password lives in the
@@ -17,6 +18,12 @@ function isUri(cs: string): boolean {
 
 /** Splits a connection string into the same string without password, and that password. */
 export function splitUriPassword(connectionString: string): { connectionString: string; password?: string } {
+  // MongoDB: several hosts are allowed, which URL cannot read
+  if (isMongoUri(connectionString)) {
+    const parsed = parseMongoUri(connectionString);
+    if (!parsed || !parsed.password) return { connectionString };
+    return { connectionString: formatMongoUri({ ...parsed, password: undefined }), password: parsed.password };
+  }
   if (isUri(connectionString)) {
     try {
       const url = new URL(connectionString);
@@ -41,6 +48,11 @@ export function splitUriPassword(connectionString: string): { connectionString: 
 export function injectUriPassword(connectionString: string | undefined, password: string | undefined): string | undefined {
   if (!connectionString || !password) return connectionString;
   if (splitUriPassword(connectionString).password !== undefined) return connectionString;
+  if (isMongoUri(connectionString)) {
+    const parsed = parseMongoUri(connectionString);
+    // No user in the URI: the driver takes no password either
+    return parsed?.username ? formatMongoUri({ ...parsed, password }) : connectionString;
+  }
   if (isUri(connectionString)) {
     try {
       const url = new URL(connectionString);

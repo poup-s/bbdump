@@ -139,20 +139,26 @@ export function readEnvCommand(file: string, name: string): string {
 
 /**
  * POSIX sh script, fed to `sh -s` on the server (whatever the login shell): lists the env files
- * that hold a PostgreSQL URL, as "<file>\t<VARIABLE>" lines. Only the variable names leave the
+ * that hold a database URL (PostgreSQL, or MongoDB), as "<file>\t<VARIABLE>" lines. Only the variable names leave the
  * server, never the values. Fixed text: nothing typed by the user reaches it.
  */
-export const ENV_SEARCH_SCRIPT = `for d in "$HOME" /srv /var/www /opt /home; do
+export function envSearchScript(engine: 'postgresql' | 'mongodb' = 'postgresql'): string {
+  // A fixed pattern per engine: nothing typed by the user
+  const scheme = engine === 'mongodb' ? 'mongodb(\\+srv)?://' : 'postgres(ql)?://';
+  return `for d in "$HOME" /srv /var/www /opt /home; do
   [ -d "$d" ] || continue
   find "$d" -maxdepth 6 \\( -name node_modules -o -name .git -o -name vendor -o -name .cache -o -name .npm -o -name .nvm -o -name .local -o -name snap \\) -prune \\
     -o -type f \\( -name .env -o -name '.env.*' -o -name '*.env' \\) -size -512k -print 2>/dev/null
 done | sort -u | head -n 300 | while IFS= read -r f; do
-  grep -oE '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=.{0,2}postgres(ql)?://' "$f" 2>/dev/null \\
+  grep -oE '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=.{0,2}${scheme}' "$f" 2>/dev/null \\
     | sed -E 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*).*/\\2/' | sort -u \\
     | while IFS= read -r v; do printf '%s\\t%s\\n' "$f" "$v"; done
 done
 exit 0
 `;
+}
+
+export const ENV_SEARCH_SCRIPT = envSearchScript('postgresql');
 
 export interface EnvFileMatch {
   file: string;
@@ -164,7 +170,7 @@ export interface EnvFileMatch {
 }
 
 /** The search's "<file>\t<VARIABLE>" lines, grouped by file: real files, then copies, then examples */
-export function parseEnvSearch(stdout: string): EnvFileMatch[] {
+export function parseEnvSearch(stdout: string, engine: 'postgresql' | 'mongodb' = 'postgresql'): EnvFileMatch[] {
   const byFile = new Map<string, string[]>();
   for (const line of stdout.split(/\r?\n/)) {
     const [file, variable] = line.split('\t');
@@ -178,7 +184,9 @@ export function parseEnvSearch(stdout: string): EnvFileMatch[] {
   const isCopy = (file: string) => !isExample(file) && /(\.bak|backup|\.old|\.orig|\.save|~$|\.\d{6,})/i.test(name(file));
   const rank = (m: EnvFileMatch) => (m.example ? 2 : m.copy ? 1 : 0);
   // DATABASE_URL first: it is the one apps (Prisma, Rails, Django…) read
-  const order = (v: string) => (v === 'DATABASE_URL' ? 0 : /DATABASE|POSTGRES|PG/.test(v) ? 1 : 2);
+  const order = engine === 'mongodb'
+    ? (v: string) => (/^MONGO(DB)?_(URI|URL)$/.test(v) ? 0 : /MONGO|DATABASE/.test(v) ? 1 : 2)
+    : (v: string) => (v === 'DATABASE_URL' ? 0 : /DATABASE|POSTGRES|PG/.test(v) ? 1 : 2);
   return [...byFile.entries()]
     .map(([file, variables]) => ({ file, variables: variables.sort((a, b) => order(a) - order(b) || a.localeCompare(b)), example: isExample(file), copy: isCopy(file) }))
     .sort((a, b) => rank(a) - rank(b) || a.file.localeCompare(b.file));

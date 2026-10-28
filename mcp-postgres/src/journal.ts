@@ -31,6 +31,8 @@ export interface JournalEntry {
   version: number;
   id: string;
   createdAt: string;
+  /** Absent: PostgreSQL. mongodb: tables are collections (schema = database), rows documents as canonical Extended JSON keyed by _id */
+  engine?: string;
   client?: string;
   tool: string;
   databaseId?: string;

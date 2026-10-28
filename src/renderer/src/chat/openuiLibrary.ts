@@ -98,7 +98,8 @@ export const sqlDetails = (query: string) =>
     h('summary', { class: 'inline-flex items-center gap-1.5 cursor-pointer select-none list-none text-[11px] text-gray-400 dark:text-zinc-500 hover:text-gray-700 dark:hover:text-zinc-300' }, [
       h('svg', { class: 'chat-sql-chevron w-3 h-3 transition-transform', fill: 'none', viewBox: '0 0 24 24', stroke: 'currentColor', 'stroke-width': 2.5 },
         [h('path', { 'stroke-linecap': 'round', 'stroke-linejoin': 'round', d: 'M9 5l7 7-7 7' })]),
-      useI18n().t('chat.showSql'),
+      // A MongoDB command (db.orders.aggregate(…)) is not SQL
+      useI18n().t(/^\s*db\./.test(query) ? 'chat.showCommand' : 'chat.showSql'),
     ]),
     h('pre', { class: 'mt-1.5 rounded-lg bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 px-3 py-2 font-mono text-[11px] text-gray-700 dark:text-zinc-300 overflow-x-auto whitespace-pre-wrap' }, query),
   ]);
@@ -161,12 +162,24 @@ chart = BarChart(["Lyon", "Paris"], [245.5, 300], "Total by city", "EUR")
 rows = Table(["City", "Orders", "Total"], [["Lyon", 3, 245.5], ["Paris", 1, 300]])
 query = Sql("SELECT city, count(*), sum(total) FROM orders JOIN customers ON customers.id = orders.customer_id GROUP BY city")`;
 
-/** Everything the AI is told: who it is, what it may do, and how to show data */
-export function chatSystemPrompt(database: string): string {
-  const preamble = [
-    `You are the assistant built into bbdump, a PostgreSQL desktop app. The user is chatting with you about one database: "${database}".`,
-    'It is already the active connection of the bbdump MCP tools (do not call use_connection or list_connections). You can only read: never claim you changed anything.',
+/** How the AI reads the database: SQL tools, or the mongo_* tools for a MongoDB database */
+const READING: Record<'postgresql' | 'mongodb', string[]> = {
+  postgresql: [
     'Use the bbdump tools to answer: get_schema_overview first when you need the structure, then execute_query (SELECT only, add LIMIT), read_rows, count_rows, profile_table… Never invent data: only show values the tools returned.',
+  ],
+  mongodb: [
+    'It is a MongoDB database. Use only the mongo_* tools: mongo_list_collections, then mongo_describe_collection (fields and indexes) before writing a filter or a pipeline, then mongo_find, mongo_count and mongo_aggregate (MongoDB syntax, Extended JSON for ids and dates: {"$oid": …}, {"$date": …}). The SQL tools do not apply. Never invent data: only show values the tools returned.',
+    'For Sql, give the MongoDB command you ran, quotes inside escaped: Sql("db.orders.aggregate([{\\"$group\\": {\\"_id\\": \\"$city\\", \\"n\\": {\\"$sum\\": 1}}}])").',
+  ],
+};
+
+/** Everything the AI is told: who it is, what it may do, and how to show data */
+export function chatSystemPrompt(database: string, engine: string = 'postgresql'): string {
+  const mongo = engine === 'mongodb';
+  const preamble = [
+    `You are the assistant built into bbdump, a desktop app for ${mongo ? 'PostgreSQL and MongoDB' : 'PostgreSQL'} databases. The user is chatting with you about one database: "${database}".`,
+    'It is already the active connection of the bbdump MCP tools (do not call use_connection or list_connections). You can only read: never claim you changed anything.',
+    ...READING[mongo ? 'mongodb' : 'postgresql'],
     'Some values may come masked by the user (starred, fakes, NULL): keep them as they are.',
     'Write every sentence in the language of the user\'s message, the short notes between tool calls included, never the language the data happens to be in. Be brief. Plain text for explanations.',
     'Whenever you show data (rows, counts, totals, comparisons, trends), put it in ONE fenced block whose language is `openui`, holding an OpenUI Lang program as described below. Text outside the block is shown as is.',

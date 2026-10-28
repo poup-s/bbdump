@@ -100,6 +100,118 @@ export function bindFilters(sql: string, values: Record<string, string | null | 
 }
 
 /**
+ * The engine a program's queries are written for (Query("sql", …) or Query("mongo", …)), null
+ * when it has none yet: a dashboard only goes on a database of that engine.
+ */
+export function programEngine(program: string): 'postgresql' | 'mongodb' | null {
+  if (/\bQuery\(\s*"mongo"/.test(program)) return 'mongodb';
+  if (/\bQuery\(\s*"sql"/.test(program)) return 'postgresql';
+  return null;
+}
+
+// --- MongoDB: Query("mongo", {query: "{\"collection\": …, \"pipeline\": […]}"}) -----------------
+
+/** What "all time" stands for in a MongoDB filter (Extended JSON dates, both ends included) */
+const MONGO_DATE_MIN = { $date: { $numberLong: '-62135596800000' } };
+const MONGO_DATE_MAX = { $date: { $numberLong: '253402300799999' } };
+
+/** The collection and the pipeline of a MongoDB block's query text */
+export function mongoDashboardQuery(text: string): { collection: string; pipeline: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`The query is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const value = parsed as { collection?: unknown; pipeline?: unknown } | null;
+  if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.collection !== 'string' || !value.collection) {
+    throw new Error('The query must be {"collection": "orders", "pipeline": [...]}');
+  }
+  if (!Array.isArray(value.pipeline)) throw new Error('"pipeline" must be an array of stages');
+  return { collection: value.collection, pipeline: JSON.stringify(value.pipeline) };
+}
+
+const REGEX_SPECIAL = /[.*+?^${}()|[\]\\]/g;
+
+/**
+ * Filter placeholders of a MongoDB query, replaced by values (never by text the user typed as
+ * code): a whole string "{{from}}" / "{{to}}" becomes a date, "{{name}}" the text (null when the
+ * filter is "all"); a placeholder inside a longer string (a $regex) gets the text escaped, empty
+ * when the filter is "all".
+ */
+export function bindMongoFilters(text: string, values: Record<string, string | null | undefined>): string {
+  const valueOf = (name: string): unknown => {
+    const raw = values[name];
+    if (name === 'from' || name === 'to') {
+      if (!raw || raw === '-infinity') return MONGO_DATE_MIN;
+      if (raw === 'infinity') return MONGO_DATE_MAX;
+      return { $date: raw };
+    }
+    return raw ?? null;
+  };
+  // A whole JSON string: the value itself
+  const whole = text.replace(/"\{\{\s*(\w+)\s*\}\}"/g, (_m, name: string) => JSON.stringify(valueOf(name)));
+  // Inside a string: the text, escaped for JSON and for a regular expression
+  return whole.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, name: string) => {
+    const raw = values[name];
+    const textValue = typeof raw === 'string' && name !== 'from' && name !== 'to' ? raw.replace(REGEX_SPECIAL, '\\$&') : '';
+    return JSON.stringify(textValue).slice(1, -1);
+  });
+}
+
+/** A relaxed Extended JSON value as a cell: dates as text, ObjectIds as hex, numbers as numbers */
+function documentCell(value: unknown): unknown {
+  if (value === null || value === undefined) return null;
+  if (Array.isArray(value)) return JSON.stringify(value);
+  if (typeof value !== 'object') return value;
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 1) {
+    const [key, inner] = entries[0];
+    if (key === '$date') {
+      const time = typeof inner === 'string' ? Date.parse(inner) : Number((inner as { $numberLong?: string })?.$numberLong);
+      if (!Number.isFinite(time)) return null;
+      // Midnight UTC: a day ($dateTrunc, a birth date), shown as such whatever the time zone
+      return time % 86400000 === 0 ? new Date(time).toISOString().slice(0, 10) : dateText(new Date(time));
+    }
+    if (key === '$oid') return String(inner);
+    if (key === '$numberDecimal' || key === '$numberLong' || key === '$numberDouble' || key === '$numberInt') {
+      const n = Number(inner);
+      return Number.isFinite(n) ? n : String(inner);
+    }
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Documents of an aggregation as the components read them: one column per top-level field (in
+ * order of appearance); a $group key made of several fields ({_id: {city, year}}) gives one
+ * column per field.
+ */
+export function toMongoQueryResult(raw: { documents?: Array<Record<string, unknown>>; truncated?: boolean } | null | undefined): QueryResult {
+  const columns: string[] = [];
+  const rows = (Array.isArray(raw?.documents) ? raw!.documents : []).map(document => {
+    const flat: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(document ?? {})) {
+      const compound = key === '_id' && value && typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).some(k => k.startsWith('$'));
+      if (compound) {
+        for (const [inner, innerValue] of Object.entries(value as Record<string, unknown>)) if (!(inner in document)) flat[inner] = innerValue;
+      } else {
+        flat[key] = value;
+      }
+    }
+    const row: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(flat)) {
+      if (!columns.includes(key)) columns.push(key);
+      row[key] = documentCell(value);
+    }
+    return row;
+  });
+  // Every row has every column (null when a document lacks the field)
+  for (const row of rows) for (const column of columns) if (!(column in row)) row[column] = null;
+  return { columns, rows, truncated: !!raw?.truncated };
+}
+
+/**
  * The programs (or patches) of an answer, in order: every complete OpenUI block. An answer may
  * write the program, then correct it in a second block; both apply.
  */

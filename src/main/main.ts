@@ -10,6 +10,7 @@ import { pathManager } from './paths';
 import { registerConfigHandlers, loadConfig, saveConfig, getConfig, repairLocalDatabaseUsers } from './ipc/configIpc';
 import { registerCloudHandlers } from './ipc/cloudIpc';
 import { registerDbViewerHandlers, closeAllPools } from './ipc/dbViewerIpc';
+import { registerFeatureHandlers } from './featureFlags';
 import { registerSystemHandlers } from './ipc/systemIpc';
 import { registerSetupHandlers } from './ipc/setupIpc';
 import { registerAiChatHandlers, stopAllChats } from './ipc/aiChatIpc';
@@ -389,6 +390,7 @@ app.whenReady().then(async () => {
       shell.showItemInFolder(itemPath);
     }
   });
+  registerFeatureHandlers();
   registerDbViewerHandlers(); // DbViewer handlers don't need window
   registerProxyHandlers(); // Proxy handlers don't need window
   registerCloudHandlers();

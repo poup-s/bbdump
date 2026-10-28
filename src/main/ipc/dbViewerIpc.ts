@@ -3,18 +3,18 @@ import { getErrorMessage } from '../utils';
 import * as dbViewer from '../dbViewer';
 import { logger } from '../logger';
 import { credentialsForConnectionTest, toRuntimeDatabase } from '../dbSecrets';
-import { connectionParamsFor } from '../savedConnection';
 import { tunnelled } from '../sshTunnel';
 import { DatabaseConfig } from '../../types/config';
 import { getConfig } from './configIpc';
 import * as postgresConfig from '../postgresConfig';
+import { facetFor, facetForDb } from '../engines/registry';
+import { requireFeature } from '../featureFlags';
+import { engineOf } from '../../shared/engines/features';
+import type { AggregateQuery, DocumentEdit, DocumentQuery } from '../../shared/engines/documents';
 
 export async function closeAllPools() {
     await dbViewer.closeAllPools();
 }
-
-// Connection parameters of a saved database (lookup by id, password decrypted)
-const getDbConfig = (dbId: string) => connectionParamsFor(dbId);
 
 export function registerDbViewerHandlers() {
     // Database Viewer Handlers
@@ -25,9 +25,13 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('test-database-connection', async (_, params: {
         id?: string; host: string; port: number; user: string; password?: string; database: string;
         connectionString?: string; sslMode?: DatabaseConfig['sslMode']; sslRootCert?: string;
-        ssh?: DatabaseConfig['ssh'];
+        ssh?: DatabaseConfig['ssh']; engine?: string; mongo?: DatabaseConfig['mongo'];
     }) => {
         const saved = params.id ? getConfig()?.databases?.find(db => db.id === params.id) : undefined;
+        // Tested by the database's engine (a saved one keeps its own), when it is turned on
+        const engine = engineOf(saved ?? params);
+        const connection = await facetFor(engine, 'connection.test', 'connection');
+        if (params.ssh) requireFeature(engine, 'connection.ssh');
         const { password, connectionString } = credentialsForConnectionTest(
             params,
             saved ? () => toRuntimeDatabase(saved).password : null,
@@ -39,7 +43,8 @@ export function registerDbViewerHandlers() {
         });
         const sslMode = reached.sslMode || 'disable';
         try {
-            return await dbViewer.testConnection({
+            return await connection.test({
+                mongo: params.mongo,
                 host: reached.host,
                 port: reached.port,
                 user: params.user,
@@ -67,11 +72,56 @@ export function registerDbViewerHandlers() {
         }
     });
 
+    // Document databases (MongoDB): collections, a page of documents, sampled fields and indexes
+    ipcMain.handle('documents-collections', async (_, params: { db: { id: string } }) => {
+        const documents = await facetForDb(params.db.id, 'explorer.documents', 'documents');
+        return documents.listCollections(params.db.id);
+    });
+
+    ipcMain.handle('documents-find', async (_, params: { db: { id: string }; query: DocumentQuery }) => {
+        const documents = await facetForDb(params.db.id, 'explorer.documents', 'documents');
+        logger.info(`Reading documents of ${params.query?.collection} (skip ${params.query?.skip ?? 0}, limit ${params.query?.limit ?? 50})`);
+        return documents.find(params.db.id, params.query);
+    });
+
+    ipcMain.handle('documents-describe', async (_, params: { db: { id: string }; collection: string }) => {
+        const documents = await facetForDb(params.db.id, 'explorer.documents', 'documents');
+        return documents.describe(params.db.id, params.collection);
+    });
+
+    ipcMain.handle('documents-aggregate', async (_, params: { db: { id: string }; query: AggregateQuery }) => {
+        const documents = await facetForDb(params.db.id, 'explorer.aggregate', 'documents');
+        logger.info(`Aggregation on ${params.query?.collection}`);
+        return documents.aggregate(params.db.id, params.query);
+    });
+
+    // A dashboard block of a MongoDB database (read only, like its SQL blocks)
+    ipcMain.handle('dashboards-aggregate', async (_, params: { db: { id: string }; query: AggregateQuery }) => {
+        const documents = await facetForDb(params.db.id, 'dashboards', 'documents');
+        return documents.aggregate(params.db.id, { collection: params.query?.collection, pipeline: params.query?.pipeline, limit: params.query?.limit });
+    });
+
+    // One document at a time, refused when it changed since the explorer read it
+    ipcMain.handle('documents-insert', async (_, params: { db: { id: string }; collection: string; document: string }) => {
+        const writes = await facetForDb(params.db.id, 'explorer.editDocuments', 'documentWrites');
+        return writes.insert(params.db.id, params.collection, params.document);
+    });
+
+    ipcMain.handle('documents-replace', async (_, params: { db: { id: string }; edit: DocumentEdit }) => {
+        const writes = await facetForDb(params.db.id, 'explorer.editDocuments', 'documentWrites');
+        return writes.replace(params.db.id, params.edit);
+    });
+
+    ipcMain.handle('documents-delete', async (_, params: { db: { id: string }; edit: DocumentEdit }) => {
+        const writes = await facetForDb(params.db.id, 'explorer.editDocuments', 'documentWrites');
+        await writes.remove(params.db.id, params.edit);
+    });
+
     ipcMain.handle('get-db-schemas', async (_, params: { db: { id: string } }) => {
         try {
             logger.info(`Getting schemas for database: ${params.db.id}`);
-            const dbConfig = await getDbConfig(params.db.id);
-            return await dbViewer.getDatabaseSchemas(dbConfig);
+            const catalog = await facetForDb(params.db.id, 'explorer.browse', 'catalog');
+            return await catalog.listNamespaces(params.db.id);
         } catch (error) {
             logger.error(`Error getting database schemas: ${getErrorMessage(error) || error}`);
             throw error;
@@ -82,8 +132,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('get-db-tables', async (_, params: { db: { id: string }, schema?: string }) => {
         try {
             logger.info(`Getting tables for database: ${params.db.id} (schema: ${params.schema || dbViewer.DEFAULT_SCHEMA})`);
-            const dbConfig = await getDbConfig(params.db.id);
-            return await dbViewer.getDatabaseTables({ ...dbConfig, schema: params.schema });
+            const catalog = await facetForDb(params.db.id, 'explorer.browse', 'catalog');
+            return await catalog.listEntities(params.db.id, params.schema);
         } catch (error) {
             logger.error(`Error getting database tables: ${getErrorMessage(error) || error}`);
             throw error;
@@ -93,8 +143,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('get-db-full-schema', async (_, params: { db: { id: string }, schema?: string }) => {
         try {
             logger.info(`Getting full schema for database: ${params.db.id}${params.schema ? ` (schema: ${params.schema})` : ''}`);
-            const dbConfig = await getDbConfig(params.db.id);
-            return await dbViewer.getDatabaseFullSchema({ ...dbConfig, schema: params.schema });
+            const catalog = await facetForDb(params.db.id, 'explorer.diagram', 'catalog');
+            return await catalog.fullSchema(params.db.id, params.schema);
         } catch (error) {
             logger.error(`Error getting database full schema: ${getErrorMessage(error) || error}`);
             throw error;
@@ -104,8 +154,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('count-table-rows', async (_, params: { db: { id: string }, schema?: string, table: string }) => {
         try {
             logger.info(`Counting rows of table: ${params.schema || dbViewer.DEFAULT_SCHEMA}.${params.table}`);
-            const dbConfig = await getDbConfig(params.db.id);
-            return await dbViewer.countTableRows({ ...dbConfig, schema: params.schema, table: params.table });
+            const records = await facetForDb(params.db.id, 'explorer.browse', 'records');
+            return await records.count(params.db.id, { schema: params.schema, table: params.table });
         } catch (error) {
             logger.error(`Error counting table rows: ${error}`);
             throw error;
@@ -115,8 +165,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('get-table-schema', async (_, params: { db: { id: string }, schema?: string, table: string }) => {
         try {
             logger.info(`Getting schema for table: ${params.schema || dbViewer.DEFAULT_SCHEMA}.${params.table}`);
-            const dbConfig = await getDbConfig(params.db.id);
-            return await dbViewer.getTableSchema({ ...dbConfig, schema: params.schema, table: params.table });
+            const catalog = await facetForDb(params.db.id, 'explorer.browse', 'catalog');
+            return await catalog.describeEntity(params.db.id, { schema: params.schema, table: params.table });
         } catch (error) {
             logger.error(`Error getting table schema: ${error}`);
             throw error;
@@ -126,8 +176,8 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('get-table-relations', async (_, params: { db: { id: string }, schema?: string, table: string }) => {
         try {
             logger.info(`Getting relations for table: ${params.schema || dbViewer.DEFAULT_SCHEMA}.${params.table}`);
-            const dbConfig = await getDbConfig(params.db.id);
-            return await dbViewer.getTableRelations({ ...dbConfig, schema: params.schema, table: params.table });
+            const catalog = await facetForDb(params.db.id, 'explorer.browse', 'catalog');
+            return await catalog.entityRelations(params.db.id, { schema: params.schema, table: params.table });
         } catch (error) {
             logger.error(`Error getting table relations: ${error}`);
             throw error;
@@ -140,9 +190,8 @@ export function registerDbViewerHandlers() {
             const offset = params.page ? (params.page - 1) * limit : 0;
 
             logger.info(`Getting data for table: ${params.table} (limit: ${limit}, offset: ${offset}, search: ${params.search || ''}, sort: ${params.sortBy || ''} ${params.sortOrder || ''})`);
-            const dbConfig = await getDbConfig(params.db.id);
-            return await dbViewer.getTableData({
-                ...dbConfig,
+            const records = await facetForDb(params.db.id, 'explorer.browse', 'records');
+            return await records.page(params.db.id, {
                 schema: params.schema,
                 table: params.table,
                 limit,
@@ -165,9 +214,8 @@ export function registerDbViewerHandlers() {
         value: unknown;
     }) => {
         try {
-            const dbConfig = await getDbConfig(params.db.id);
-            return await dbViewer.getFkRow({
-                ...dbConfig,
+            const records = await facetForDb(params.db.id, 'explorer.browse', 'records');
+            return await records.lookup(params.db.id, {
                 schema: params.schema,
                 table: params.table,
                 column: params.column,
@@ -187,9 +235,8 @@ export function registerDbViewerHandlers() {
     }) => {
         try {
             logger.info(`Updating table data: ${params.table} (${params.changes.length} changes)`);
-            const dbConfig = await getDbConfig(params.db.id);
-            return await dbViewer.updateTableData({
-                ...dbConfig,
+            const records = await facetForDb(params.db.id, 'explorer.edit', 'records');
+            return await records.update(params.db.id, {
                 schema: params.schema,
                 table: params.table,
                 changes: params.changes
@@ -209,9 +256,8 @@ export function registerDbViewerHandlers() {
     }) => {
         try {
             logger.info(`Deleting row from table: ${params.table}`);
-            const dbConfig = await getDbConfig(params.db.id);
-            return await dbViewer.deleteTableRow({
-                ...dbConfig,
+            const records = await facetForDb(params.db.id, 'explorer.edit', 'records');
+            return await records.remove(params.db.id, {
                 schema: params.schema,
                 table: params.table,
                 rowId: params.rowId,
@@ -231,9 +277,8 @@ export function registerDbViewerHandlers() {
     }) => {
         try {
             logger.info(`Inserting row into table: ${params.table}`);
-            const dbConfig = await getDbConfig(params.db.id);
-            return await dbViewer.insertTableRow({
-                ...dbConfig,
+            const records = await facetForDb(params.db.id, 'explorer.edit', 'records');
+            return await records.insert(params.db.id, {
                 schema: params.schema,
                 table: params.table,
                 rowData: params.rowData
@@ -251,9 +296,8 @@ export function registerDbViewerHandlers() {
     }) => {
         try {
             logger.info(`Getting enum values for type: ${params.typeName}`);
-            const dbConfig = await getDbConfig(params.db.id);
-            return await dbViewer.getEnumValues({
-                ...dbConfig,
+            const catalog = await facetForDb(params.db.id, 'explorer.browse', 'catalog');
+            return await catalog.enumValues(params.db.id, {
                 typeName: params.typeName,
                 typeSchema: params.typeSchema
             });
@@ -272,13 +316,12 @@ export function registerDbViewerHandlers() {
     }) => {
         try {
             logger.info(`Executing SQL query on ${params.db.id} (maxRows: ${params.maxRows || 500})`);
-            const dbConfig = await getDbConfig(params.db.id);
+            const query = await facetForDb(params.db.id, 'explorer.query', 'query');
             // Bound values (dashboard filters): plain values only, never SQL
             const values = Array.isArray(params.params)
                 ? params.params.slice(0, 50).map(v => (v === null || ['string', 'number', 'boolean'].includes(typeof v) ? v as string | number | boolean | null : null))
                 : undefined;
-            return await dbViewer.executeQuery({
-                ...dbConfig,
+            return await query.run(params.db.id, {
                 sql: params.sql,
                 maxRows: params.maxRows,
                 timeoutMs: params.timeoutMs,
@@ -302,9 +345,8 @@ export function registerDbViewerHandlers() {
                 throw new Error('SQL mutations are disabled in settings');
             }
             logger.info(`Executing SQL mutation on ${params.db.id}`);
-            const dbConfig = await getDbConfig(params.db.id);
-            return await dbViewer.executeMutationQuery({
-                ...dbConfig,
+            const query = await facetForDb(params.db.id, 'explorer.query', 'query');
+            return await query.runMutation(params.db.id, {
                 sql: params.sql,
                 maxRows: params.maxRows,
                 timeoutMs: params.timeoutMs
@@ -512,17 +554,8 @@ export function registerDbViewerHandlers() {
 
     ipcMain.handle('get-database-size', async (_, dbId: string): Promise<number | null> => {
         try {
-            const dbConfig = await getDbConfig(dbId);
-            const result = await dbViewer.executeQuery({
-                ...dbConfig,
-                sql: 'SELECT pg_database_size(current_database()) as size',
-                maxRows: 1,
-                timeoutMs: 5000
-            });
-            if (result.rows && result.rows.length > 0) {
-                return parseInt(result.rows[0].size, 10);
-            }
-            return null;
+            const stats = await facetForDb(dbId, 'stats.size', 'stats');
+            return await stats.size(dbId);
         } catch (error) {
             logger.error(`Error getting database size for ${dbId}: ${getErrorMessage(error)}`);
             return null;

@@ -1,6 +1,6 @@
 # MCP Server
 
-bbdump includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI assistants (Claude Desktop, Claude Code, Codex, Cursor, Windsurf / Devin desktop, VS Code, OpenCode and any other MCP client) work with your PostgreSQL databases.
+bbdump includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI assistants (Claude Desktop, Claude Code, Codex, Cursor, Windsurf / Devin desktop, VS Code, OpenCode, Mistral Vibe and any other MCP client) work with your PostgreSQL databases.
 
 Reads are free; every write needs your approval in bbdump (see [Mutation Confirmation](#mutation-confirmation)).
 
@@ -40,6 +40,7 @@ bbdump detects which clients are present. A client shows **Update available** wh
 | Devin desktop (formerly Windsurf) | `~/.config/devin/mcp_config.json` (or `$XDG_CONFIG_HOME/devin/`) | `mcpServers.bbdump-postgres` |
 | VS Code | macOS `~/Library/Application Support/Code/User/mcp.json`, Linux `~/.config/Code/User/mcp.json` | `servers.bbdump-postgres`, `"type": "stdio"` |
 | OpenCode | `~/.config/opencode/opencode.json` (or `opencode.jsonc`) | `mcp.bbdump-postgres`, `"type": "local"`, `command` array, `environment` |
+| Mistral Vibe | `~/.vibe/config.toml` (or `$VIBE_HOME/config.toml`) — TOML | a `[[mcp_servers]]` entry with `name = "bbdump-postgres"`, `transport = "stdio"`, `command`, `args`, `env`; the rest of the file is kept as is |
 
 ### What happens during installation
 

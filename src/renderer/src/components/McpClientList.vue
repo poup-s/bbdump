@@ -8,6 +8,7 @@ import claudeGlyph from '../assets/client-icons/claude.svg';
 import cursorGlyph from '../assets/client-icons/cursor.svg';
 import windsurfGlyph from '../assets/client-icons/windsurf.svg';
 import opencodeGlyph from '../assets/client-icons/opencode.svg';
+import mistralGlyph from '../assets/client-icons/mistral.svg';
 
 interface McpClientStatus {
   id: string;
@@ -44,6 +45,7 @@ const GLYPHS: Record<string, string> = {
   windsurf: windsurfGlyph,
   devin: windsurfGlyph,
   opencode: opencodeGlyph,
+  vibe: mistralGlyph,
 };
 
 const connected = computed(() => clients.value.filter(c => c.state !== 'not-installed'));

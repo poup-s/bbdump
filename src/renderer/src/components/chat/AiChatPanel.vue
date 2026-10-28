@@ -16,6 +16,7 @@ import AiChatSettingsModal from './AiChatSettingsModal.vue';
 import ChatMessages from './ChatMessages.vue';
 import type { ChatProviderId } from '../../chat/chatEvents';
 import { btnGhost } from '../ui/classes';
+import { engineOf } from '../../../../shared/engines/features';
 
 const { t, currentLanguage } = useI18n();
 const { chatFor, reset, send, stop, open } = useDatabaseChat();
@@ -216,7 +217,7 @@ const submit = async (text = draft.value) => {
   showHistory.value = false;
   if (!text.trim() || chat.value.busy) return;
   draft.value = '';
-  await send(chat.value, text, dbLabel.value);
+  await send(chat.value, text, dbLabel.value, engineOf(db.value));
 };
 /** The message box grows with its text, up to a few lines */
 const autoGrow = () => {
@@ -233,7 +234,9 @@ const onEnter = (event: KeyboardEvent) => {
   void submit();
 };
 
-const suggestions = computed(() => [t('chat.suggest.overview'), t('chat.suggest.biggest'), t('chat.suggest.trend')]);
+const suggestions = computed(() => (engineOf(db.value) === 'mongodb'
+  ? [t('chat.suggest.overview'), t('chat.suggestMongo.biggest'), t('chat.suggestMongo.trend')]
+  : [t('chat.suggest.overview'), t('chat.suggest.biggest'), t('chat.suggest.trend')]));
 
 function scrollDown() {
   void nextTick(() => {
@@ -506,7 +509,7 @@ watch(() => JSON.stringify(chat.value.messages).length, scrollDown);
             <svg class="chat-arrow w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14m-6-6l6 6-6 6" /></svg>
           </button>
         </div>
-        <p class="mt-2 text-center text-[10px] text-gray-400 dark:text-zinc-500">{{ t('chat.footer', { tool: providerLabel(chat.provider) }) }}</p>
+        <p class="mt-2 text-center text-[10px] text-gray-400 dark:text-zinc-500">{{ t(engineOf(db) === 'mongodb' ? 'chat.footerMongo' : 'chat.footer', { tool: providerLabel(chat.provider) }) }}</p>
       </footer>
     </section>
     <AiChatSettingsModal v-if="showSettings && installed" :providers="PROVIDERS" :installed="installed" @close="showSettings = false" @saved="onSettingsSaved" />

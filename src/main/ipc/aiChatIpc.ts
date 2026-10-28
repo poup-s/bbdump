@@ -21,6 +21,8 @@ import {
 } from '../aiChat/localModels';
 import { McpStdioClient } from '../aiChat/mcpStdioClient';
 import { onChatConfirmRequest } from '../mcpConfirmServer';
+import { featureState } from '../featureFlags';
+import { engineOf } from '../../shared/engines/features';
 import { encryptionManager } from '../encryption';
 import { ChatHistory, type ChatConversation } from '../aiChat/chatHistory';
 
@@ -99,7 +101,7 @@ export function registerAiChatHandlers(getMainWindow: () => BrowserWindow | null
       samples: Array.isArray(c.samples) ? c.samples.map(String).slice(0, 3) : [],
       ...(Array.isArray(c.anonymized) ? { anonymized: c.anonymized.map(String).slice(0, 3) } : {}),
     })) : [];
-    send(data.chatId, { type: 'disclose', requestId: data.id, rows: Number(data.rows) || 0, sql: typeof data.sql === 'string' ? data.sql : undefined, columns });
+    send(data.chatId, { type: 'disclose', requestId: data.id, rows: Number(data.rows) || 0, sql: typeof data.sql === 'string' ? data.sql : undefined, ...(data.engine === 'mongodb' ? { engine: 'mongodb' as const } : {}), columns });
     return true;
   }, (chatId, id) => send(chatId, { type: 'disclose-timeout', requestId: id }));
 
@@ -175,6 +177,9 @@ export function registerAiChatHandlers(getMainWindow: () => BrowserWindow | null
     if (model !== undefined && model !== '' && (typeof model !== 'string' || !MODEL_RE.test(model))) return { success: false, error: 'Invalid model' };
     const database = getConfig().databases.find(db => db.id === databaseId);
     if (!database) return { success: false, error: 'Database not found' };
+    // A MongoDB database has the chat only while MongoDB is on
+    const chatState = featureState(engineOf(database), 'chat');
+    if (!chatState.enabled) return { success: false, error: 'The chat is not available for this database' };
     // bbdump's MCP server, as the AI assistants run it, limited to this database and to reading
     const spec = getMcpLaunchSpec();
     const mcp = { command: spec.command, args: spec.args, env: { ...spec.env, BBDUMP_MCP_DATABASE: database.id, BBDUMP_MCP_READ_ONLY: '1', BBDUMP_MCP_CHAT_ID: chatId } };

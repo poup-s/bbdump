@@ -16,6 +16,8 @@ import { safeResolveLocalUser } from '../localPgUser';
 import { withLocalServerPassword } from '../localServerCredential';
 import { applyLaunchAtLogin } from '../loginItem';
 import { moveUriPasswordsOutOfConfig, splitUriPassword, toRuntimeDatabase } from '../dbSecrets';
+import { requireFeature } from '../featureFlags';
+import { DEFAULT_ENGINE, engineOf } from '../../shared/engines/features';
 
 // Local variable to store the configuration in memory
 let config: AppConfig = { databases: [] };
@@ -270,6 +272,9 @@ export function registerConfigHandlers() {
 
     // Database management handlers that modify config
     ipcMain.handle('add-database', async (_, db: DatabaseConfig): Promise<AppConfig> => {
+        // Another engine only once it is turned on (Settings → Features in testing)
+        const isPostgres = engineOf(db) === DEFAULT_ENGINE;
+        if (!isPostgres) requireFeature(engineOf(db), 'connection.test');
         db = withPasswordOutOfUri(db);
         const shouldEncrypt = db.encrypted !== false;
         const sanitizedDb = sanitizeDatabaseConfig({
@@ -278,7 +283,7 @@ export function registerConfigHandlers() {
         });
 
         let passwordValue = db.password || '';
-        const detectedUser = await safeResolveLocalUser(sanitizedDb, passwordValue);
+        const detectedUser = isPostgres ? await safeResolveLocalUser(sanitizedDb, passwordValue) : null;
         if (detectedUser) {
             sanitizedDb.user = detectedUser;
             db = { ...db, user: detectedUser };
@@ -286,7 +291,7 @@ export function registerConfigHandlers() {
         // Windows: a database on the local server is saved with its password (the AI
         // assistants read the saved databases), encrypted like any other
         let encrypt = shouldEncrypt;
-        if (!passwordValue) {
+        if (!passwordValue && isPostgres) {
             passwordValue = withLocalServerPassword({ ...sanitizedDb, password: '' }).password || '';
             if (passwordValue) encrypt = true;
         }
@@ -330,6 +335,8 @@ export function registerConfigHandlers() {
                 encrypted: shouldEncrypt,
                 password: passwordToSave,
                 isLocalBbdump: existingDb.isLocalBbdump,
+                // A database never changes engine
+                engine: existingDb.engine,
                 // Not edited in the dialog, which sends only what it edits: kept (an edit
                 // used to drop the last backup date, the masking and the "Update from" source)
                 lastBackup: existingDb.lastBackup,

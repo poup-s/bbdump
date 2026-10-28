@@ -2,6 +2,10 @@ export type SslMode = 'disable' | 'prefer' | 'require' | 'verify-ca' | 'verify-f
 
 export interface Database {
     id: string;
+    /** Absent means PostgreSQL (see DatabaseConfig.engine) */
+    engine?: string;
+    /** MongoDB only (see DatabaseConfig.mongo) */
+    mongo?: { authSource?: string };
     name: string;
     displayName?: string;
     host: string;

@@ -12,6 +12,8 @@ import { toRuntimeDatabase } from './dbSecrets';
 import { listBackupFiles } from './backupLocations';
 import { getConfig, saveConfig } from './ipc/configIpc';
 import type { AppConfig, BackupResult } from '../types/config';
+import { readArchiveEngine } from './backupFormat';
+import { engineOf } from '../shared/engines/features';
 
 export interface BackupEntry {
   filename: string;
@@ -24,6 +26,8 @@ export interface BackupEntry {
   size: number;
   created: string;
   encrypted: boolean;
+  /** Engine that wrote it: only restored into a database of the same engine (undefined: unknown) */
+  engine?: string;
 }
 
 /** Every backup file bbdump knows (all backup folders), newest first; optionally one database's */
@@ -35,6 +39,7 @@ export function listBackupEntries(config: AppConfig, databaseId?: string): Backu
       const prefix = file.replace('.backup', '').split('_')[0] || 'unknown';
       // Match by id first, then by name (files of older versions)
       const matchedDb = config.databases.find(d => d.id === prefix) || config.databases.find(d => d.name === prefix);
+      const encrypted = fileEncryptionManager.isFileEncrypted(filePath);
       return {
         filename: file,
         file: filePath,
@@ -44,7 +49,9 @@ export function listBackupEntries(config: AppConfig, databaseId?: string): Backu
         path: path.relative(pathManager.appDataPath, filePath),
         size: stats.size,
         created: stats.birthtime.toISOString(),
-        encrypted: fileEncryptionManager.isFileEncrypted(filePath),
+        encrypted,
+        // From its database; a file whose database was removed is recognized by its first bytes
+        engine: matchedDb ? engineOf(matchedDb) : (encrypted ? undefined : readArchiveEngine(filePath)),
       };
     })
     .filter(entry => !databaseId || entry.databaseId === databaseId)

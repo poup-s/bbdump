@@ -9,10 +9,13 @@ import { store } from '../../store';
 import { useI18n } from '../../composables/useI18n';
 import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
+import { useFeatures } from '../../composables/useFeatures';
 import { relative } from '../../timeText';
 import type { Database } from '../../types';
 import { useDashboards, type DashboardSummary, type DashboardTemplate } from '../../dashboards/useDashboards';
 import { ipcRenderer } from '../../electron';
+import { programEngine } from '../../dashboards/dashboardProgram';
+import { engineOf } from '../../../../shared/engines/features';
 import AppModal from '../ui/AppModal.vue';
 import FormField from '../ui/FormField.vue';
 import { btnPrimary, btnSecondary, inputClass, selectClass } from '../ui/classes';
@@ -28,6 +31,9 @@ const loaded = ref(false);
 const now = ref(Date.now());
 
 const dbOf = (id: string) => store.databases.find(d => d.id === id);
+const { isEnabled } = useFeatures();
+/** Databases a dashboard can be built on (their engine runs the AI's queries) */
+const boardDatabases = computed(() => store.databases.filter(d => isEnabled(d, 'dashboards')));
 const dbLabel = (db: Database | undefined) => (db ? (db.masked ? '••••••••' : db.displayName || db.name) : '');
 
 async function load() {
@@ -66,7 +72,7 @@ const creating = ref(false);
 const canCreate = computed(() => !!form.value.databaseId && !!form.value.request.trim() && !creating.value);
 
 const openNew = (db?: Database | null) => {
-  form.value = { databaseId: db?.id ?? store.databases[0]?.id ?? '', title: '', request: '' };
+  form.value = { databaseId: db?.id ?? boardDatabases.value[0]?.id ?? '', title: '', request: '' };
   template.value = null;
   showNew.value = true;
 };
@@ -79,6 +85,11 @@ watch(() => store.newDashboardDb, db => {
 
 // --- Import a dashboard file: then the database it goes on ------------------------------------
 const importing = ref<{ template: DashboardTemplate; databaseId: string } | null>(null);
+/** The databases a file can go on: those of the engine its queries are written for */
+const importDatabases = computed(() => {
+  const engine = importing.value ? programEngine(importing.value.template.program ?? '') : null;
+  return boardDatabases.value.filter(d => !engine || engineOf(d) === engine);
+});
 async function importFile() {
   const result = await ipcRenderer.invoke('dashboards-import-file');
   if (!result) return;
@@ -86,7 +97,8 @@ async function importFile() {
     addToast(t('dashboards.importError'), 'error', { detail: result.error });
     return;
   }
-  importing.value = { template: result.dashboard, databaseId: store.databases[0]?.id ?? '' };
+  importing.value = { template: result.dashboard, databaseId: '' };
+  importing.value.databaseId = importDatabases.value[0]?.id ?? '';
 }
 async function acceptImport() {
   const job = importing.value;
@@ -156,11 +168,11 @@ async function submitNew() {
         <h2 class="text-lg font-bold tracking-tight">{{ t('dashboards.title') }}</h2>
         <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{{ t('dashboards.subtitle') }}</p>
       </div>
-      <button v-if="store.databases.length" type="button" :class="btnSecondary" @click="importFile">
+      <button v-if="boardDatabases.length" type="button" :class="btnSecondary" @click="importFile">
         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" /></svg>
         {{ t('dashboards.import') }}
       </button>
-      <button v-if="visible.length" type="button" :class="btnPrimary" :disabled="!store.databases.length" @click="openNew()">
+      <button v-if="visible.length" type="button" :class="btnPrimary" :disabled="!boardDatabases.length" @click="openNew()">
         <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path stroke-linecap="round" d="M12 5v14M5 12h14" /></svg>
         {{ t('dashboards.new') }}
       </button>
@@ -176,7 +188,7 @@ async function submitNew() {
       </div>
       <div class="text-[17px] font-semibold text-gray-900 dark:text-zinc-100">{{ t('dashboards.emptyTitle') }}</div>
       <p class="mt-2 max-w-md text-[13px] leading-relaxed text-gray-500 dark:text-zinc-400">{{ t('dashboards.emptyDesc') }}</p>
-      <button v-if="store.databases.length" type="button" :class="btnPrimary" class="mt-6" @click="openNew()">{{ t('dashboards.new') }}</button>
+      <button v-if="boardDatabases.length" type="button" :class="btnPrimary" class="mt-6" @click="openNew()">{{ t('dashboards.new') }}</button>
       <p v-else class="mt-6 text-[12px] text-gray-400 dark:text-zinc-500">{{ t('dashboards.noDatabase') }}</p>
     </div>
 
@@ -225,9 +237,10 @@ async function submitNew() {
       <p class="mb-3 text-[12px] leading-relaxed text-gray-500 dark:text-zinc-400">{{ t('dashboards.importHint', { title: importing.template.title || t('dashboards.untitled') }) }}</p>
       <FormField :label="t('dashboards.modal.database')">
         <select v-model="importing.databaseId" :class="selectClass">
-          <option v-for="db in store.databases" :key="db.id" :value="db.id">{{ dbLabel(db) }}</option>
+          <option v-for="db in importDatabases" :key="db.id" :value="db.id">{{ dbLabel(db) }}</option>
         </select>
       </FormField>
+      <p v-if="!importDatabases.length" class="mt-2 text-[12px] text-amber-700 dark:text-amber-400">{{ t('dashboards.importNoEngine') }}</p>
       <template #footer>
         <span class="flex-1" />
         <button type="button" :class="btnSecondary" @click="importing = null">{{ t('common.cancel') }}</button>
@@ -247,7 +260,7 @@ async function submitNew() {
       <div class="space-y-4">
         <FormField :label="t('dashboards.modal.database')">
           <select v-model="form.databaseId" :class="selectClass">
-            <option v-for="db in store.databases" :key="db.id" :value="db.id">{{ dbLabel(db) }}</option>
+            <option v-for="db in boardDatabases" :key="db.id" :value="db.id">{{ dbLabel(db) }}</option>
           </select>
         </FormField>
         <FormField :label="t('dashboards.modal.name')">

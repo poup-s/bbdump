@@ -7,6 +7,8 @@
 import { reactive } from 'vue';
 import { createParser } from '@openuidev/lang-core';
 import { ipcRenderer } from '../electron';
+import { store } from '../store';
+import { engineOf } from '../../../shared/engines/features';
 import { applyChatEvent, type ChatEvent, type ChatProviderId, type DatabaseChat } from '../chat/chatEvents';
 import { chatSettings } from '../chat/chatSettings';
 import { dashboardLibrary, dashboardSystemPrompt } from './dashboardLibrary';
@@ -222,7 +224,7 @@ export function useDashboards() {
         databaseId: session.dashboard.databaseId,
         provider: chat.provider,
         message: dashboardRequest(session.dashboard.program, text, focus),
-        systemPrompt: dashboardSystemPrompt(session.databaseLabel),
+        systemPrompt: dashboardSystemPrompt(session.databaseLabel, engineOf(store.databases.find(d => d.id === session.dashboard.databaseId))),
         sessionId: chat.sessionId,
         model: chatSettings.models[chat.provider] || undefined,
       });

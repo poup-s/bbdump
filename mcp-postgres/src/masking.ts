@@ -41,7 +41,7 @@ export function rulesFromFile(content: unknown, databaseIds: string[]): MaskRule
   return rules;
 }
 
-function readFile(): unknown {
+export function readMaskingFile(): unknown {
   const configPath = process.env.BBDUMP_CONFIG_PATH;
   if (!configPath) return null;
   try {
@@ -63,7 +63,7 @@ export function rulesFor(database?: string): MaskRules | null {
     const saved = findDatabase(active.label);
     if (saved) ids.add(saved.id);
   }
-  return ids.size ? rulesFromFile(readFile(), [...ids]) : null;
+  return ids.size ? rulesFromFile(readMaskingFile(), [...ids]) : null;
 }
 
 const md5 = (value: unknown) => createHash('md5').update(

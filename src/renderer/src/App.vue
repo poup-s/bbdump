@@ -16,10 +16,13 @@ import About from './components/About.vue';
 import ToastNotification from './components/ToastNotification.vue';
 import ConfirmModal from './components/ConfirmModal.vue';
 import DatabaseModal from './components/DatabaseModal.vue';
+import MongoDatabaseModal from './components/MongoDatabaseModal.vue';
+import { engineOf } from '../../shared/engines/features';
 import CreateDatabaseModal from './components/CreateDatabaseModal.vue';
 import RestoreBackupModal from './components/RestoreBackupModal.vue';
 import RestoreConfirmModal from './components/RestoreConfirmModal.vue';
 import DbViewer from './components/db-viewer/DbViewer.vue';
+import MongoExplorer from './components/db-viewer/MongoExplorer.vue';
 import Onboarding from './components/Onboarding.vue';
 // Decorative WebGL background: separate chunk, mounted once the UI is idle
 const ThreeBackground = defineAsyncComponent(() => import('./components/ThreeBackground.vue'));
@@ -39,6 +42,8 @@ import AiChatPanel from './components/chat/AiChatPanel.vue';
 import DashboardsPage from './components/dashboards/DashboardsPage.vue';
 
 const { t } = useI18n();
+/** A database is added or edited in its engine's dialog */
+const databaseModalEngine = computed(() => (store.editingDatabase ? engineOf(store.editingDatabase) : store.databaseModalEngine ?? 'postgresql'));
 const isDark = useDark();
 const toggleDark = useToggle(isDark);
 useAppEvents();
@@ -177,7 +182,8 @@ const handleLoaderComplete = () => {
     
     <!-- Modals — mounted on demand via v-if for memory efficiency -->
     <Transition enter-active-class="transition duration-300 ease-out" enter-from-class="opacity-0" enter-to-class="opacity-100" leave-active-class="transition duration-200 ease-in" leave-from-class="opacity-100" leave-to-class="opacity-0">
-      <DatabaseModal v-if="store.showDatabaseModal" />
+      <MongoDatabaseModal v-if="store.showDatabaseModal && databaseModalEngine === 'mongodb'" />
+      <DatabaseModal v-else-if="store.showDatabaseModal" />
     </Transition>
     <Transition enter-active-class="transition duration-300 ease-out" enter-from-class="opacity-0" enter-to-class="opacity-100" leave-active-class="transition duration-200 ease-in" leave-from-class="opacity-100" leave-to-class="opacity-0">
       <CreateDatabaseModal v-if="store.showCreateDatabaseModal" />
@@ -195,6 +201,7 @@ const handleLoaderComplete = () => {
         v-if="store.aiMaskingDb"
         mode="ai"
         :source-id="store.aiMaskingDb.id"
+        :engine="engineOf(store.aiMaskingDb)"
         :source-label="store.aiMaskingDb.masked ? '••••••••' : (store.aiMaskingDb.displayName || store.aiMaskingDb.name)"
         :initial="null"
         @close="store.aiMaskingDb = null"
@@ -204,8 +211,13 @@ const handleLoaderComplete = () => {
     <Transition name="chat" :duration="{ enter: 320, leave: 220 }">
       <AiChatPanel v-if="store.aiChatDb" :key="store.aiChatDb.id" />
     </Transition>
+    <!-- A document database has its own explorer -->
+    <MongoExplorer
+      v-if="store.showDbViewer && engineOf(store.viewerDb) === 'mongodb'"
+      @close="store.showDbViewer = false; store.viewerDb = null"
+    />
     <DbViewer
-      v-if="store.showDbViewer"
+      v-else-if="store.showDbViewer"
       @close="store.showDbViewer = false; store.viewerDb = null"
     />
 

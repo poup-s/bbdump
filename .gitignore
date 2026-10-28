@@ -35,6 +35,8 @@ ai-masking.json.tmp
 backup-history.json
 backup-history.json.tmp
 ssh-tunnels.json
+features.json
+features.json.tmp
 ai-journal/
 
 # Encryption key (CRITICAL - DO NOT COMMIT)
@@ -129,3 +131,6 @@ ai-chat/
 ai-chat-history/
 # Dev app: dashboards
 /dashboards/
+
+# MCP server: helpers copied from src/shared before its build (scripts/copy-mcp-shared.mjs)
+mcp-postgres/src/shared/

@@ -8,12 +8,14 @@
     "mcp-postgres": "./build/index.js"
   },
   "scripts": {
+    "prebuild": "node ../scripts/copy-mcp-shared.mjs",
     "build": "tsc",
     "start": "node build/index.js",
     "dev": "tsc --watch"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",
+    "mongodb": "7.7.0",
     "pg": "^8.16.3",
     "pg-format": "^1.0.4",
     "zod": "^3.25.76"

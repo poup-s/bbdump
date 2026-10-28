@@ -17,6 +17,7 @@ import { getConfig } from './ipc/configIpc';
 import { connectionParamsFor } from './savedConnection';
 import { withConnection } from './dbViewer';
 import { getErrorMessage } from './utils';
+import { requireFeature } from './featureFlags';
 
 export interface UndoTable {
   schema: string;
@@ -30,6 +31,8 @@ export interface JournalEntry {
   version: number;
   id: string;
   createdAt: string;
+  /** Absent: PostgreSQL. mongodb: tables are collections (schema = database), rows documents as canonical Extended JSON keyed by _id */
+  engine?: string;
   client?: string;
   tool: string;
   databaseId?: string;
@@ -140,6 +143,12 @@ export async function previewUndo(id: string) {
   const tables = undoTables(entry);
   const databaseId = resolveDatabaseId(entry);
   if (!databaseId) throw new Error(`The database of this change (${entry.connection.database} on ${entry.connection.host}) is not saved in bbdump`);
+  if (entry.engine === 'mongodb') {
+    requireFeature('mongodb', 'mcp.undo');
+    const { previewMongoUndo } = await import('./mongoUndo');
+    const { payload: _payload, ...summary } = entry;
+    return { entry: summary, databaseId, ...(await previewMongoUndo(databaseId, tables)) };
+  }
   const sample = (rows: string[]) => rows.slice(0, 20).map(r => JSON.parse(r) as Record<string, unknown>);
   const counts = tables.map(t => {
     const keyOf = (row: string) => { const o = JSON.parse(row); return JSON.stringify(t.primaryKey.map(c => o[c])); };
@@ -160,6 +169,14 @@ export async function previewUndo(id: string) {
   return { entry: summary, databaseId, tables: counts, conflicts };
 }
 
+/** MongoDB changes: same journal, undone by mongoUndo.ts */
+async function undoMongo(databaseId: string, tables: UndoTable[]) {
+  requireFeature('mongodb', 'mcp.undo');
+  const { undoMongoChange } = await import('./mongoUndo');
+  const result = await undoMongoChange(databaseId, tables);
+  return { conflicts: result.conflicts, restored: result.restored };
+}
+
 /**
  * Undoes a change in one transaction: rows it inserted are deleted, rows it deleted come
  * back, rows it updated get their previous values. Refused when rows changed since.
@@ -178,7 +195,7 @@ export async function undoChange(id: string): Promise<{ success: boolean; error?
 
   try {
     const tables = undoTables(entry);
-    const outcome = await withConnection(await connectionParamsFor(databaseId), async (client) => {
+    const outcome = entry.engine === 'mongodb' ? await undoMongo(databaseId, tables) : await withConnection(await connectionParamsFor(databaseId), async (client) => {
       await client.query('BEGIN');
       try {
         const conflicts = await findConflicts(client, tables);

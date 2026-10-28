@@ -2,7 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import pg from 'pg';
 import { setActiveConnection, getActiveConnectionInfo, buildSslConfig, explainError } from '../db.js';
-import { isBbdumpConfigured, listConnections, getConnectionParams, type ConnectionParams } from '../connections.js';
+import { isBbdumpConfigured, listConnections, getConnectionParams, getMongoTarget, savedEngine, type ConnectionParams } from '../connections.js';
+import { activeMongo, clearMongo, mongoError, testMongo, useMongo } from '../mongo/client.js';
 import { reachThroughApp } from '../tunnel.js';
 import { jsonResult, errorResult } from '../types.js';
 import { READ, LOCAL } from './common.js';
@@ -55,15 +56,18 @@ export function registerConnectionTools(server: McpServer) {
       if (!isBbdumpConfigured()) return errorResult(NOT_CONFIGURED);
       const connections = listConnections();
       if (!connections) return errorResult('Failed to read the bbdump configuration file.');
+      const mongo = activeMongo();
       const active = getActiveConnectionInfo();
       return jsonResult({
         connections,
         count: connections.length,
-        active_connection: {
-          name: active.label ?? null,
-          target: `${active.user}@${active.host}:${active.port}/${active.database}`,
-          default_schema: active.default_schema,
-        },
+        active_connection: mongo
+          ? { name: mongo.label, engine: 'mongodb', target: `${mongo.hosts}/${mongo.database}` }
+          : {
+            name: active.label ?? null,
+            target: `${active.user}@${active.host}:${active.port}/${active.database}`,
+            default_schema: active.default_schema,
+          },
       });
     }
   );
@@ -80,6 +84,7 @@ export function registerConnectionTools(server: McpServer) {
     },
     async ({ name }) => {
       if (!isBbdumpConfigured()) return errorResult(NOT_CONFIGURED);
+      if (savedEngine(name) === 'mongodb') return useMongoConnection(name);
       let params: ConnectionParams | null;
       try {
         params = getConnectionParams(name);
@@ -91,6 +96,7 @@ export function registerConnectionTools(server: McpServer) {
       try {
         params = await reachThroughApp(params);
         const info = await probe(params);
+        await clearMongo();
         setActiveConnection(params, name);
         return jsonResult({
           switched_to: name,
@@ -119,6 +125,16 @@ export function registerConnectionTools(server: McpServer) {
     },
     async ({ name }) => {
       if (!isBbdumpConfigured()) return errorResult(NOT_CONFIGURED);
+      if (savedEngine(name) === 'mongodb') {
+        let mongo: ReturnType<typeof getMongoTarget> = null;
+        try {
+          mongo = getMongoTarget(name);
+          if (!mongo) return errorResult(`Connection "${name}" not found in bbdump.`);
+          return jsonResult({ reachable: true, engine: 'mongodb', ...(mongo.sshDatabaseId ? { via_ssh: true } : {}), ...(await testMongo(mongo.target, mongo.sshDatabaseId)) });
+        } catch (err) {
+          return jsonResult({ reachable: false, engine: 'mongodb', error: mongoError(err, mongo?.target), connection: name });
+        }
+      }
       try {
         const saved = getConnectionParams(name);
         if (!saved) return errorResult(`Connection "${name}" not found in bbdump. Use list_connections to see the saved databases.`);
@@ -130,4 +146,29 @@ export function registerConnectionTools(server: McpServer) {
       }
     }
   );
+}
+
+/** use_connection on a MongoDB database: the mongo_* tools then work on it */
+async function useMongoConnection(name: string) {
+  let saved: ReturnType<typeof getMongoTarget>;
+  try {
+    saved = getMongoTarget(name);
+  } catch (err: any) {
+    return errorResult(`Cannot read the connection "${name}": ${err.message}`);
+  }
+  if (!saved) return errorResult(`Connection "${name}" not found in bbdump. Use list_connections to see the saved databases.`);
+  try {
+    const info = await useMongo(saved.id, name, saved.target, saved.sshDatabaseId);
+    return jsonResult({
+      switched_to: name,
+      engine: 'mongodb',
+      target: `${info.hosts}/${info.database}`,
+      server_version: info.version,
+      collections: info.collections,
+      size_bytes: info.size_bytes,
+      next: 'MongoDB: mongo_list_collections, then mongo_describe_collection before writing a filter or a pipeline. The PostgreSQL tools do not apply to this database.',
+    });
+  } catch (err) {
+    return errorResult(`"${name}" is not reachable, the active connection is unchanged: ${mongoError(err, saved.target)}`);
+  }
 }

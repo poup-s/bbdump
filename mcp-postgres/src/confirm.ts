@@ -14,6 +14,8 @@ interface ConfirmationDetails {
   schema?: string;
   sql: string;
   description: string;
+  /** Absent: PostgreSQL. mongodb: table is a collection, sql a shell-like command */
+  engine?: string;
 }
 
 export type ConfirmationOutcome =

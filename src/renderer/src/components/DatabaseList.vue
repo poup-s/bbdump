@@ -13,6 +13,8 @@ import ProjectSection from './ProjectSection.vue';
 import ProjectModal from './ProjectModal.vue';
 import AppModal from './ui/AppModal.vue';
 import { btnGhost, btnSecondary } from './ui/classes';
+import { engineOf } from '../../../shared/engines/features';
+import { formatMongoUri } from '../../../shared/engines/mongoUri';
 // ProxyPortModal removed — config is now inline in ProjectSection
 
 const { t } = useI18n();
@@ -136,6 +138,15 @@ const copyConnectionUrl = async (db: Database) => {
   if (db.connectionString) {
     // Use the existing connection string if available
     url = db.connectionString;
+  } else if (engineOf(db) === 'mongodb') {
+    // Without the password, like every copied URL
+    url = formatMongoUri({
+      srv: false,
+      username: db.user || undefined,
+      hosts: [{ host: db.host, port: db.port }],
+      database: db.name,
+      options: db.user ? [['authSource', db.mongo?.authSource || 'admin']] : [],
+    });
   } else if (db.isLocalBbdump && window.electron?.platform === 'linux') {
     // On Linux, local databases use peer auth via Unix socket
     url = `postgresql://${db.user}@/${db.name}?host=/var/run/postgresql&port=${db.port}`;

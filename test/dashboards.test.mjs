@@ -390,3 +390,75 @@ describe('review fixes', () => {
     }
   });
 });
+
+describe('MongoDB dashboards', () => {
+  const mongo = load('src/renderer/src/dashboards/mongoDashboard.ts');
+  const shared = require(path.join(root, 'dist/shared/engines/documents.js'));
+
+  test('a block query: collection and pipeline, refused when it is something else', () => {
+    assert.deepEqual(program.mongoDashboardQuery('{"collection": "orders", "pipeline": [{"$limit": 5}]}'), { collection: 'orders', pipeline: '[{"$limit":5}]' });
+    assert.throws(() => program.mongoDashboardQuery('SELECT 1'), /not valid JSON/);
+    assert.throws(() => program.mongoDashboardQuery('{"pipeline": []}'), /collection/);
+    assert.throws(() => program.mongoDashboardQuery('{"collection": "orders", "pipeline": {}}'), /array/);
+  });
+
+  test('filters become values: dates, text, null for "all", escaped text inside a regex', () => {
+    const text = '{"collection": "o", "pipeline": [{"$match": {"at": {"$gte": "{{from}}", "$lt": "{{to}}"}, "$expr": {"$eq": ["$city", "{{city}}"]}, "name": {"$regex": "(?i){{q}}"}}}]}';
+    const bound = JSON.parse(program.bindMongoFilters(text, { from: '2026-10-01T00:00:00.000Z', to: 'infinity', city: 'Paris "16e"', q: 'a.b*' }));
+    const match = bound.pipeline[0].$match;
+    assert.deepEqual(match.at.$gte, { $date: '2026-10-01T00:00:00.000Z' });
+    assert.deepEqual(match.at.$lt, { $date: { $numberLong: '253402300799999' } });
+    assert.equal(match.$expr.$eq[1], 'Paris "16e"');
+    assert.equal(match.name.$regex, '(?i)a\\.b\\*');
+    const all = JSON.parse(program.bindMongoFilters(text, { from: '-infinity', to: 'infinity', city: null }));
+    assert.equal(all.pipeline[0].$match.$expr.$eq[1], null);
+    assert.equal(all.pipeline[0].$match.name.$regex, '(?i)');
+    assert.deepEqual(all.pipeline[0].$match.at.$gte, { $date: { $numberLong: '-62135596800000' } });
+    // A value cannot add stages or operators: it stays a string
+    const sneaky = JSON.parse(program.bindMongoFilters(text, { city: '"}, {"$out": "x"}, {"a": "' }));
+    assert.equal(sneaky.pipeline.length, 1);
+  });
+
+  test('aggregation results as rows: dates, ObjectIds, numbers, compound group keys', () => {
+    const result = program.toMongoQueryResult({
+      documents: [
+        { _id: { city: 'Paris', year: 2026 }, total: { $numberDecimal: '12.50' }, n: 3, last: { $date: '2026-10-01T00:00:00Z' } },
+        { _id: { city: 'Lyon', year: 2026 }, total: 4, id: { $oid: '6ae12f57004ee79b229bc04b' }, tags: ['a'] },
+      ],
+      truncated: true,
+    });
+    assert.deepEqual(result.columns, ['city', 'year', 'total', 'n', 'last', 'id', 'tags']);
+    assert.equal(result.rows[0].total, 12.5);
+    assert.equal(result.rows[0].last, '2026-10-01');
+    assert.equal(result.rows[1].id, '6ae12f57004ee79b229bc04b');
+    assert.equal(result.rows[1].tags, '["a"]');
+    assert.equal(result.rows[1].n, null);
+    assert.equal(result.truncated, true);
+  });
+
+  test('the examples shown to the AI are valid: every query reads, binds and passes the read-only check', () => {
+    for (const example of [mongo.MONGO_EXAMPLE, mongo.MONGO_EXAMPLE_LINKED]) {
+      const statements = edit.parseStatements(example);
+      const queries = statements.filter(s => /^Query\("mongo"/.test(s.expr.trim()));
+      assert.ok(queries.length >= 3);
+      for (const q of queries) {
+        const text = edit.querySql(example, q.name);
+        const { pipeline } = program.mongoDashboardQuery(program.bindMongoFilters(text, { from: '2026-10-01T00:00:00Z', to: '2026-11-01T00:00:00Z', city: null, user: null, q: '' }));
+        assert.equal(shared.pipelineProblem(JSON.parse(pipeline)), undefined, q.name);
+        // Fields written as expressions ("status": "$status"): the columns follow the labels' order
+        for (const stage of JSON.parse(pipeline).filter(st => st.$project)) {
+          for (const [field, value] of Object.entries(stage.$project)) if (field !== '_id') assert.notEqual(value, 1, `${q.name}.${field}`);
+        }
+      }
+    }
+    assert.equal(mongo.MONGO_TOOL.name, 'mongo');
+  });
+});
+
+describe('the engine of a dashboard program', () => {
+  test('from its queries; none yet: any database', () => {
+    assert.equal(program.programEngine('root = Dashboard([a])\nq = Query("mongo", {query: "{}"}, {columns: [], rows: []})'), 'mongodb');
+    assert.equal(program.programEngine('q = Query("sql", {query: "SELECT 1"}, {columns: [], rows: []})'), 'postgresql');
+    assert.equal(program.programEngine('root = Dashboard([t])\nt = Heading("Sales")'), null);
+  });
+});

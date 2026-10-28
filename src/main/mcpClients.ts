@@ -29,9 +29,11 @@ export interface McpClientContext {
     claudeCli?: string | null;
     /** $CODEX_HOME (defaults to ~/.codex) */
     codexHome?: string;
+    /** $VIBE_HOME (defaults to ~/.vibe) */
+    vibeHome?: string;
 }
 
-export type McpClientId = 'claude-desktop' | 'claude-code' | 'codex' | 'cursor' | 'windsurf' | 'devin' | 'vscode' | 'opencode';
+export type McpClientId = 'claude-desktop' | 'claude-code' | 'codex' | 'cursor' | 'windsurf' | 'devin' | 'vscode' | 'opencode' | 'vibe';
 
 export type McpInstallState = 'not-installed' | 'installed' | 'outdated';
 
@@ -55,8 +57,8 @@ const isJsonObject = (value: unknown): value is Json => !!value && typeof value 
 interface ClientDef {
     id: McpClientId;
     name: string;
-    /** Config file format; 'toml' clients are handled by the TOML helpers below. */
-    format?: 'json' | 'toml';
+    /** Config file format; 'toml' (Codex) and 'vibe-toml' clients are handled by the TOML helpers below. */
+    format?: 'json' | 'toml' | 'vibe-toml';
     /** macOS app bundles of the client, by preference (for its icon) */
     apps?: string[];
     configPath(ctx: McpClientContext): string;
@@ -276,6 +278,89 @@ function parseOwnTomlEntry(ownLines: string[]): McpLaunchSpec | null {
     return entry;
 }
 
+// ---------------------------------------------------------------------------
+// Mistral Vibe: ~/.vibe/config.toml, an array of tables [[mcp_servers]] with name = "…"
+// ---------------------------------------------------------------------------
+//
+// Our server is the [[mcp_servers]] element whose name is ours, with any [mcp_servers.<sub>]
+// table that follows it (auth…). Everything else is kept byte for byte.
+
+const VIBE_SERVER_HEADER = /^\s*\[\[\s*mcp_servers\s*\]\]\s*(#.*)?$/;
+const VIBE_SUB_HEADER = /^\s*\[\s*mcp_servers\s*\.[^\]]*\]\s*(#.*)?$/;
+const VIBE_OWN_NAME = new RegExp(`^\\s*name\\s*=\\s*(["'])${MCP_SERVER_NAME}\\1\\s*(#.*)?$`);
+
+function splitVibeServers(text: string): { own: string[]; rest: string[] } {
+    const own: string[] = [];
+    const rest: string[] = [];
+    let block: string[] = [];
+    let isServer = false;
+    const flush = () => {
+        (isServer && block.some(l => VIBE_OWN_NAME.test(l)) ? own : rest).push(...block);
+        block = [];
+    };
+    for (const line of text.split('\n')) {
+        if (TOML_TABLE_HEADER.test(line) || VIBE_SERVER_HEADER.test(line)) {
+            if (!(isServer && VIBE_SUB_HEADER.test(line))) {
+                flush();
+                isServer = VIBE_SERVER_HEADER.test(line);
+            }
+        }
+        block.push(line);
+    }
+    flush();
+    return { own, rest };
+}
+
+function vibeBlock(spec: McpLaunchSpec): string {
+    const env = Object.entries(spec.env).map(([k, v]) => `${tomlString(k)} = ${tomlString(v)}`).join(', ');
+    return [
+        '[[mcp_servers]]',
+        `name = ${tomlString(MCP_SERVER_NAME)}`,
+        'transport = "stdio"',
+        `command = ${tomlString(spec.command)}`,
+        `args = [${spec.args.map(tomlString).join(', ')}]`,
+        ...(env ? [`env = { ${env} }`] : []),
+    ].join('\n') + '\n';
+}
+
+/** Reads back what we wrote; a hand-edited entry reads as a different one (outdated) */
+function parseVibeEntry(ownLines: string[]): McpLaunchSpec | null {
+    if (!ownLines.length) return null;
+    const entry: McpLaunchSpec = { command: '', args: [], env: {} };
+    for (const line of ownLines) {
+        const kv = line.match(/^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$/);
+        if (!kv) continue;
+        try {
+            if (kv[1] === 'command') entry.command = String(JSON.parse(kv[2]));
+            else if (kv[1] === 'args') entry.args = (JSON.parse(kv[2]) as unknown[]).map(String);
+            else if (kv[1] === 'env') {
+                for (const m of kv[2].matchAll(/("(?:[^"\\]|\\.)*")\s*=\s*("(?:[^"\\]|\\.)*")/g)) entry.env[JSON.parse(m[1])] = JSON.parse(m[2]);
+            }
+        } catch {
+            // not one of ours: compared as is
+        }
+    }
+    return entry;
+}
+
+function vibeStatusState(configPath: string, spec: McpLaunchSpec): McpInstallState {
+    const entry = parseVibeEntry(splitVibeServers(readTextIfExists(configPath)).own);
+    if (!entry) return 'not-installed';
+    return sameEntry(entry, spec) ? 'installed' : 'outdated';
+}
+
+function installVibe(configPath: string, spec: McpLaunchSpec): void {
+    const kept = splitVibeServers(readTextIfExists(configPath)).rest.join('\n').replace(/\s+$/, '');
+    writeTextAtomic(configPath, (kept ? kept + '\n\n' : '') + vibeBlock(spec));
+}
+
+function uninstallVibe(configPath: string): void {
+    const { own, rest } = splitVibeServers(readTextIfExists(configPath));
+    if (!own.length) return;
+    const kept = rest.join('\n').replace(/\s+$/, '');
+    writeTextAtomic(configPath, kept ? kept + '\n' : '');
+}
+
 function readTextIfExists(filePath: string): string {
     return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : '';
 }
@@ -449,6 +534,18 @@ const CLIENTS: ClientDef[] = [
         toEntry: (spec) => stdioEntry(spec, false),
     },
     {
+        // Mistral Vibe: TOML config, [[mcp_servers]] with name / transport / command / args / env
+        id: 'vibe',
+        name: 'Mistral Vibe',
+        format: 'vibe-toml',
+        configPath: (ctx) => path.join(ctx.vibeHome || path.join(ctx.home, '.vibe'), 'config.toml'),
+        detect: (ctx) => exists(ctx.vibeHome || path.join(ctx.home, '.vibe'))
+            || [path.join(ctx.home, '.local', 'bin', ctx.platform === 'win32' ? 'vibe.exe' : 'vibe'), '/opt/homebrew/bin/vibe', '/usr/local/bin/vibe'].some(exists),
+        // Unused for TOML clients (see installVibe / vibeStatusState)
+        container: () => undefined,
+        toEntry: (spec) => stdioEntry(spec, false),
+    },
+    {
         id: 'cursor',
         name: 'Cursor',
         apps: ['Cursor.app'],
@@ -548,8 +645,8 @@ export function getClientStatus(id: McpClientId, ctx: McpClientContext, spec: Mc
         appPath: def.apps ? findMacApp(ctx, def.apps) : undefined,
     };
     try {
-        if (def.format === 'toml') {
-            const state = tomlStatusState(configPath, spec);
+        if (def.format === 'toml' || def.format === 'vibe-toml') {
+            const state = def.format === 'toml' ? tomlStatusState(configPath, spec) : vibeStatusState(configPath, spec);
             return { ...base, state, installed: state !== 'not-installed' };
         }
         const config = readConfig(configPath);
@@ -584,6 +681,10 @@ export function installClient(id: McpClientId, ctx: McpClientContext, spec: McpL
         installToml(configPath, spec);
         return configPath;
     }
+    if (def.format === 'vibe-toml') {
+        installVibe(configPath, spec);
+        return configPath;
+    }
     const entry = def.toEntry(spec);
 
     // Claude Code rewrites ~/.claude.json while it runs: prefer its own CLI, which
@@ -613,6 +714,10 @@ export function uninstallClient(id: McpClientId, ctx: McpClientContext): string 
 
     if (def.format === 'toml') {
         uninstallToml(configPath);
+        return configPath;
+    }
+    if (def.format === 'vibe-toml') {
+        uninstallVibe(configPath);
         return configPath;
     }
 

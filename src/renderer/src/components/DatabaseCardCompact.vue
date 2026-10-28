@@ -5,6 +5,10 @@ import { store, isRemoteOnly } from '../store';
 import { useConfirm } from '../composables/useConfirm';
 import { computed } from 'vue';
 import ActionMenu, { type ActionMenuItem } from './ActionMenu.vue';
+import FeatureGate from './ui/FeatureGate.vue';
+import { useFeatures } from '../composables/useFeatures';
+import { engineOf, type FeatureKey } from '../../../shared/engines/features';
+import { manifestFor } from '../../../shared/engines/manifests';
 
 const props = defineProps<{
   db: Database;
@@ -74,7 +78,29 @@ const projectSiblings = computed(() => {
   return (project?.databaseIds ?? []).filter(id => id !== props.db.id && store.databases.some(d => d.id === id)).length;
 });
 
-const menuItems = computed<ActionMenuItem[]>(() => [
+const { isEnabled, feature } = useFeatures();
+const engine = computed(() => engineOf(props.db));
+const engineLabel = computed(() => manifestFor(engine.value)?.label ?? engine.value);
+const engineBeta = computed(() => feature(props.db, 'connection.test').beta);
+const canExplore = computed(() => isEnabled(props.db, 'explorer.browse') || isEnabled(props.db, 'explorer.documents'));
+
+/** Menu entries that depend on what the database's engine can do */
+const MENU_FEATURE: Partial<Record<string, FeatureKey>> = {
+  duplicate: 'database.duplicate',
+  addons: 'local.server',
+  sync: 'sync.fromSource',
+  dashboard: 'dashboards',
+  'ai-journal': 'mcp.undo',
+  'ai-masking': 'mask.fields',
+  'proxy-target': 'proxy.tcp',
+};
+
+const menuItems = computed<ActionMenuItem[]>(() => allMenuItems.value.filter(item => {
+  const feature = MENU_FEATURE[item.key];
+  return !feature || isEnabled(props.db, feature);
+}));
+
+const allMenuItems = computed<ActionMenuItem[]>(() => [
   // Behind SSH there is no URL another app could use (the project proxy is the way)
   ...(props.db.ssh ? [] : [{ key: 'copy-url', label: t('databases.copyUrl'), icon: ICONS.url }]),
   // Duplicate to a local database (needs a local server)
@@ -158,6 +184,15 @@ const onDragStart = (event: DragEvent) => {
       <span v-else class="text-[9px] px-1 py-0.5 bg-gray-100 dark:bg-zinc-700 text-gray-500 dark:text-gray-400 rounded font-medium shrink-0">
         external
       </span>
+      <!-- Another engine than PostgreSQL: named, with its beta badge -->
+      <span
+        v-if="engine !== 'postgresql'"
+        class="text-[9px] px-1 py-0.5 rounded font-medium shrink-0 bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400"
+      >{{ engineLabel }}</span>
+      <span
+        v-if="engineBeta"
+        class="text-[9px] px-1 py-0.5 rounded font-medium shrink-0 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400"
+      >{{ t('common.beta') }}</span>
       <!-- The project proxy routes here -->
       <span
         v-if="proxyEnabled && isProxyTarget"
@@ -197,45 +232,52 @@ const onDragStart = (event: DragEvent) => {
 
     <!-- Actions: the two frequent ones stay visible, the rest is in the ⋯ menu -->
     <div class="flex items-center gap-0.5 shrink-0">
-      <button
-        @click.stop="handleBackupClick"
-        class="card-backup px-1.5 py-1 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-400 hover:text-foreground transition-colors flex items-center gap-1"
-        :title="t('cardAction.backup')"
-      >
-        <svg class="card-backup-icon w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3" />
-          <!-- The arrow drops into the tray on hover -->
-          <path class="card-backup-arrow" stroke-linecap="round" stroke-linejoin="round" d="M15 11l-3 3m0 0l-3-3m3 3V4" />
-        </svg>
-        <span class="text-[9px] font-medium">{{ t('cardAction.backup') }}</span>
-      </button>
-      <button
-        @click.stop="emit('view', db)"
-        class="card-view px-1.5 py-1 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-400 hover:text-foreground transition-colors flex items-center gap-1"
-        :title="t('cardAction.view')"
-      >
-        <!-- The eye blinks on hover -->
-        <svg class="card-view-icon w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <g class="card-view-eye">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-          </g>
-        </svg>
-        <span class="text-[9px] font-medium">{{ t('cardAction.view') }}</span>
-      </button>
+      <FeatureGate :db="db" feature="backup.run">
+        <button
+          @click.stop="handleBackupClick"
+          class="card-backup px-1.5 py-1 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-400 hover:text-foreground transition-colors flex items-center gap-1"
+          :title="t('cardAction.backup')"
+        >
+          <svg class="card-backup-icon w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3" />
+            <!-- The arrow drops into the tray on hover -->
+            <path class="card-backup-arrow" stroke-linecap="round" stroke-linejoin="round" d="M15 11l-3 3m0 0l-3-3m3 3V4" />
+          </svg>
+          <span class="text-[9px] font-medium">{{ t('cardAction.backup') }}</span>
+        </button>
+      </FeatureGate>
+      <!-- Tables or documents: each engine its explorer -->
+      <template v-if="canExplore">
+        <button
+          @click.stop="emit('view', db)"
+          class="card-view px-1.5 py-1 rounded-lg hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-400 hover:text-foreground transition-colors flex items-center gap-1"
+          :title="t('cardAction.view')"
+        >
+          <!-- The eye blinks on hover -->
+          <svg class="card-view-icon w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <g class="card-view-eye">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+            </g>
+          </svg>
+          <span class="text-[9px] font-medium">{{ t('cardAction.view') }}</span>
+        </button>
+      </template>
       <!-- Ask the AI about this database (read only) -->
-      <button
-        @click.stop="store.aiChatDb = db"
-        class="card-ai px-1.5 py-1 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors flex items-center gap-1"
-        :title="t('chat.menu')"
-      >
-        <svg class="card-ai-icon w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <!-- A messenger bubble with its three dots -->
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 20.25c4.97 0 9-3.694 9-8.25s-4.03-8.25-9-8.25S3 7.444 3 12c0 2.104.859 4.023 2.273 5.48.432.447.74 1.04.586 1.641a4.483 4.483 0 01-.923 1.785A5.969 5.969 0 006 21c1.282 0 2.47-.402 3.445-1.087.81.22 1.668.337 2.555.337z" />
-          <path class="card-ai-dots" stroke-linecap="round" stroke-width="2.6" d="M8.25 12h.01M12 12h.01M15.75 12h.01" />
-        </svg>
-        <span class="text-[9px] font-medium">{{ t('cardAction.ai') }}</span>
-      </button>
+      <FeatureGate :db="db" feature="chat">
+        <button
+          @click.stop="store.aiChatDb = db"
+          class="card-ai px-1.5 py-1 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors flex items-center gap-1"
+          :title="t('chat.menu')"
+        >
+          <svg class="card-ai-icon w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <!-- A messenger bubble with its three dots -->
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 20.25c4.97 0 9-3.694 9-8.25s-4.03-8.25-9-8.25S3 7.444 3 12c0 2.104.859 4.023 2.273 5.48.432.447.74 1.04.586 1.641a4.483 4.483 0 01-.923 1.785A5.969 5.969 0 006 21c1.282 0 2.47-.402 3.445-1.087.81.22 1.668.337 2.555.337z" />
+            <path class="card-ai-dots" stroke-linecap="round" stroke-width="2.6" d="M8.25 12h.01M12 12h.01M15.75 12h.01" />
+          </svg>
+          <span class="text-[9px] font-medium">{{ t('cardAction.ai') }}</span>
+        </button>
+      </FeatureGate>
       <ActionMenu :items="menuItems" :label="t('cardAction.more')" @select="onMenu" />
     </div>
   </div>

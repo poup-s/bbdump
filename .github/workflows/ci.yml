@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [dev, main]
+    # engines-ci: dev squashed onto main, pushed to test new database engines before a release
+    branches: [dev, main, engines-ci]
   pull_request:
     branches: [dev, main]
 
@@ -50,6 +51,51 @@ jobs:
 
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
+
+  # MongoDB on a real server: explorer, document edits, aggregations, dashboards, backup and restore
+  mongodb:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:8
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 }).ok'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mcp-postgres/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the main process
+        run: npx tsc
+
+      # The server's image ships the MongoDB Database Tools: the same version as the server
+      - name: mongodump and mongorestore from the server's image
+        run: |
+          mkdir -p "$RUNNER_TEMP/mongo-bin"
+          docker cp ${{ job.services.mongo.id }}:/usr/bin/mongodump "$RUNNER_TEMP/mongo-bin/"
+          docker cp ${{ job.services.mongo.id }}:/usr/bin/mongorestore "$RUNNER_TEMP/mongo-bin/"
+          echo "$RUNNER_TEMP/mongo-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/mongo-bin/mongodump" --version
+
+      - name: Tests on MongoDB 8
+        env:
+          BBDUMP_TEST_MONGO: 127.0.0.1:27017
+          BBDUMP_TEST_MONGO_TOOLS: required
+        run: node --test test/mongoLive.test.mjs
 
   # Windows (beta): build, tests, the installer, and a start of the packaged app
   windows:

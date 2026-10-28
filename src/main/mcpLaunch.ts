@@ -95,6 +95,7 @@ export function getMcpClientContext(): McpClientContext {
         appData: process.env.APPDATA,
         xdgConfigHome: process.env.XDG_CONFIG_HOME,
         codexHome: process.env.CODEX_HOME,
+        vibeHome: process.env.VIBE_HOME,
         claudeCli: findClaudeCli(home, process.platform),
     };
 }

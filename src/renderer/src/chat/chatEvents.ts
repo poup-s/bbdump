@@ -12,6 +12,8 @@ export interface DiscloseBlock {
   id: string;
   rows: number;
   sql?: string;
+  /** MongoDB: fields and documents; the fields chosen in bbdump stay anonymized */
+  engine?: 'mongodb';
   columns: DisclosedColumn[];
   status: 'pending' | 'sent' | 'masked' | 'blocked' | 'timeout';
   askedAt: number;
@@ -42,7 +44,7 @@ export type ChatEvent =
   | { chatId: string; type: 'text'; text: string; append: boolean }
   | { chatId: string; type: 'tool'; id: string; name: string; input?: unknown; status: ToolBlock['status']; output?: string; masked?: string[] }
   | { chatId: string; type: 'error'; message: string }
-  | { chatId: string; type: 'disclose'; requestId: string; rows: number; sql?: string; columns: DisclosedColumn[] }
+  | { chatId: string; type: 'disclose'; requestId: string; rows: number; sql?: string; engine?: 'mongodb'; columns: DisclosedColumn[] }
   | { chatId: string; type: 'disclose-timeout'; requestId: string }
   | { chatId: string; type: 'done' };
 
@@ -83,7 +85,7 @@ export function applyChatEvent(chat: DatabaseChat, event: ChatEvent): void {
       answer.error = event.message;
       break;
     case 'disclose':
-      answer.blocks.push({ type: 'disclose', id: event.requestId, rows: event.rows, sql: event.sql, columns: event.columns, status: 'pending', askedAt: Date.now() });
+      answer.blocks.push({ type: 'disclose', id: event.requestId, rows: event.rows, sql: event.sql, ...(event.engine ? { engine: event.engine } : {}), columns: event.columns, status: 'pending', askedAt: Date.now() });
       chat.newBlock = true;
       break;
     case 'disclose-timeout': {

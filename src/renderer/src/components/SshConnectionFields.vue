@@ -4,12 +4,14 @@
  * whose keys and agent bbdump's `ssh` uses as is), PostgreSQL as seen from the server,
  * and the credentials, read from an env file on the server or from a pasted URL.
  * The test checks SSH first (and offers to trust an unknown server, fingerprint shown),
- * then PostgreSQL through the tunnel.
+ * then PostgreSQL through the tunnel. engine "mongodb": the same for a MongoDB database
+ * (one server, a mongodb:// URL; mongodb+srv and several hosts cannot go through one tunnel).
  */
 import { ref, computed, onMounted, watch } from 'vue';
 import { useI18n } from '../composables/useI18n';
 import { ipcRenderer, isWindows } from '../electron';
 import { parsePgUrl } from '../pgUrl';
+import { mongoOption, parseMongoUri } from '../../../shared/engines/mongoUri';
 import type { Database } from '../types';
 import FormField from './ui/FormField.vue';
 import { btnSecondary, inputClass, monoInputClass, panelClass } from './ui/classes';
@@ -17,10 +19,17 @@ import { btnSecondary, inputClass, monoInputClass, panelClass } from './ui/class
 type Ssh = NonNullable<Database['ssh']>;
 type SshFailure = { success: false; code: string; error: string; fingerprints?: string[] };
 
-const props = defineProps<{ editing: boolean; databaseId?: string; attempted: boolean }>();
+const props = withDefaults(defineProps<{ editing: boolean; databaseId?: string; attempted: boolean; engine?: 'postgresql' | 'mongodb' }>(), { engine: 'postgresql' });
 const form = defineModel<Database>('form', { required: true });
 const ssh = defineModel<Ssh>('ssh', { required: true });
 const { t } = useI18n();
+/** MongoDB: the database holding the user (from the URL) */
+const authSource = defineModel<string>('authSource', { default: 'admin' });
+const isMongo = props.engine === 'mongodb';
+const defaultPort = isMongo ? 27017 : 5432;
+const defaultVar = isMongo ? 'MONGODB_URI' : 'DATABASE_URL';
+/** A text, its MongoDB wording when there is one */
+const tx = (key: string, params?: Record<string, unknown>) => t(isMongo ? `ssh.mongo.${key}` : `ssh.${key}`, params);
 
 const hosts = ref<string[]>([]);
 onMounted(async () => {
@@ -37,13 +46,13 @@ watch(() => ssh.value.host, (host) => {
   resolvedHost.value = '';
   form.value.host = host;
 });
-watch(() => ssh.value.remotePort, (port) => { form.value.port = Number(port) || 5432; }, { immediate: true });
+watch(() => ssh.value.remotePort, (port) => { form.value.port = Number(port) || defaultPort; }, { immediate: true });
 
-/** An emptied number field is "": no SSH port means the one of ~/.ssh/config, no database port 5432 */
+/** An emptied number field is "": no SSH port means the one of ~/.ssh/config, no database port the default one */
 const sshPayload = () => ({
   ...ssh.value,
   port: Number(ssh.value.port) || undefined,
-  remotePort: Number(ssh.value.remotePort) || 5432,
+  remotePort: Number(ssh.value.remotePort) || defaultPort,
 });
 
 // --- Credentials ----------------------------------------------------------------
@@ -62,7 +71,32 @@ const remoteHostFor = (host: string) => {
   return { host: 'localhost', container: host };
 };
 
+/** A mongodb:// URL with one host: the only kind one tunnel can carry */
+const mongoUrl = (url: string) => {
+  const parsed = parseMongoUri(url);
+  return parsed && !parsed.srv && parsed.hosts.length === 1 && parsed.database ? parsed : null;
+};
+
+const applyMongoUrl = (url: string) => {
+  const parsed = mongoUrl(url);
+  if (!parsed) return false;
+  form.value.name = parsed.database!;
+  form.value.user = parsed.username ?? '';
+  if (parsed.password) form.value.password = parsed.password;
+  // MongoDB's rule: without authSource, the user is looked up in the URL's database
+  authSource.value = mongoOption(parsed, 'authSource') ?? (parsed.username ? parsed.database! : 'admin');
+  const tls = mongoOption(parsed, 'tls') ?? mongoOption(parsed, 'ssl');
+  form.value.sslMode = tls === 'true' ? 'require' : 'disable';
+  const remote = remoteHostFor(parsed.hosts[0].host);
+  ssh.value.remoteHost = remote.host;
+  ssh.value.remotePort = parsed.hosts[0].port || defaultPort;
+  containerName.value = remote.container ?? '';
+  if (!form.value.displayName?.trim()) form.value.displayName = parsed.database!;
+  return true;
+};
+
 const applyUrl = (url: string) => {
+  if (isMongo) return applyMongoUrl(url);
   const parsed = parsePgUrl(url);
   if (!parsed?.database) return false;
   form.value.name = parsed.database;
@@ -72,7 +106,7 @@ const applyUrl = (url: string) => {
   form.value.sslMode = !parsed.sslMode ? 'disable' : parsed.sslMode === 'verify-full' ? 'verify-ca' : parsed.sslMode;
   const remote = remoteHostFor(parsed.host);
   ssh.value.remoteHost = remote.host;
-  ssh.value.remotePort = parsed.port || 5432;
+  ssh.value.remotePort = parsed.port || defaultPort;
   containerName.value = remote.container ?? '';
   if (!form.value.displayName?.trim()) form.value.displayName = parsed.database;
   return true;
@@ -90,7 +124,7 @@ const findEnv = async () => {
   found.value = null;
   findError.value = null;
   try {
-    const result = await ipcRenderer.invoke('ssh-find-env', sshPayload()) as { success: true; files: EnvFileMatch[] } | SshFailure;
+    const result = await ipcRenderer.invoke('ssh-find-env', sshPayload(), props.engine) as { success: true; files: EnvFileMatch[] } | SshFailure;
     if (!result.success) {
       findError.value = result;
       if (result.code === 'unknown-host') sshFailure.value = result;
@@ -115,7 +149,7 @@ const readEnv = async () => {
   readError.value = null;
   readOk.value = false;
   try {
-    const result = await ipcRenderer.invoke('ssh-read-env', sshPayload(), ssh.value.envFile.trim(), ssh.value.envVar || 'DATABASE_URL') as { success: true; value: string } | SshFailure;
+    const result = await ipcRenderer.invoke('ssh-read-env', sshPayload(), ssh.value.envFile.trim(), ssh.value.envVar || defaultVar) as { success: true; value: string } | SshFailure;
     if (!result.success) {
       readError.value = result;
       if (result.code === 'unknown-host') sshFailure.value = result;
@@ -132,7 +166,7 @@ const readEnv = async () => {
 };
 
 watch(pastedUrl, (url) => { if (url.trim()) applyUrl(url.trim()); });
-const pastedInvalid = computed(() => !!pastedUrl.value.trim() && !parsePgUrl(pastedUrl.value.trim())?.database);
+const pastedInvalid = computed(() => !!pastedUrl.value.trim() && !(isMongo ? mongoUrl(pastedUrl.value.trim()) : parsePgUrl(pastedUrl.value.trim())?.database));
 
 // --- Test -----------------------------------------------------------------------
 
@@ -152,7 +186,7 @@ watch(() => [ssh.value.host, ssh.value.user, ssh.value.port, ssh.value.remoteHos
 const sshErrorText = (failure: SshFailure) => {
   const known = ['auth', 'unknown-host', 'host-changed', 'dns', 'timeout', 'unreachable', 'not-found', 'not-url'];
   if (!known.includes(failure.code)) return t('ssh.errors.other');
-  const text = t(`ssh.errors.${failure.code}`, { host: ssh.value.host, file: ssh.value.envFile ?? '', variable: ssh.value.envVar || 'DATABASE_URL' });
+  const text = t(`ssh.errors.${failure.code}`, { host: ssh.value.host, file: ssh.value.envFile ?? '', variable: ssh.value.envVar || defaultVar });
   // Windows: a key with a passphrase needs the ssh-agent service, off by default
   return failure.code === 'auth' && isWindows ? `${text} ${t('ssh.errors.authWindows')}` : text;
 };
@@ -177,12 +211,13 @@ const runTest = async () => {
     const result = await ipcRenderer.invoke('test-database-connection', {
       id: props.editing ? props.databaseId : undefined,
       host: form.value.host,
-      port: Number(ssh.value.remotePort) || 5432,
+      port: Number(ssh.value.remotePort) || defaultPort,
       user: form.value.user,
       password: form.value.password,
       database: form.value.name,
       sslMode: form.value.sslMode,
       ssh: sshPayload(),
+      ...(isMongo ? { engine: 'mongodb', mongo: form.value.user ? { authSource: authSource.value || 'admin' } : undefined } : {}),
     }) as { version: string; tables: number };
     pgStep.value = { state: 'ok', detail: t('dbModal.testOk', { version: result.version, tables: result.tables }) };
   } catch (error) {
@@ -249,13 +284,13 @@ const stepMark = (state: Step['state']) => (state === 'ok' ? '✓' : state === '
 
     <!-- 2. PostgreSQL on the server -->
     <section>
-      <div :class="sectionLabel">{{ t('ssh.sectionRemote') }}</div>
+      <div :class="sectionLabel">{{ tx('sectionRemote') }}</div>
       <div class="grid grid-cols-[minmax(0,1fr)_7rem] gap-3">
-        <FormField :label="t('database.host')" for="ssh-remote-host" :hint="t('ssh.remoteHint')">
+        <FormField :label="t('database.host')" for="ssh-remote-host" :hint="tx('remoteHint')">
           <input id="ssh-remote-host" v-model.trim="ssh.remoteHost" type="text" spellcheck="false" :class="monoInputClass" placeholder="localhost" />
         </FormField>
         <FormField :label="t('database.port')" for="ssh-remote-port">
-          <input id="ssh-remote-port" v-model.number="ssh.remotePort" type="number" min="1" max="65535" :class="monoInputClass" placeholder="5432" />
+          <input id="ssh-remote-port" v-model.number="ssh.remotePort" type="number" min="1" max="65535" :class="monoInputClass" :placeholder="String(defaultPort)" />
         </FormField>
       </div>
     </section>
@@ -282,7 +317,7 @@ const stepMark = (state: Step['state']) => (state === 'ok' ? '✓' : state === '
             <input id="ssh-env-file" v-model.trim="ssh.envFile" type="text" spellcheck="false" :class="monoInputClass" placeholder="/srv/app/.env.production" />
           </FormField>
           <FormField :label="t('ssh.envVar')" for="ssh-env-var">
-            <input id="ssh-env-var" v-model.trim="ssh.envVar" type="text" spellcheck="false" :class="monoInputClass" placeholder="DATABASE_URL" />
+            <input id="ssh-env-var" v-model.trim="ssh.envVar" type="text" spellcheck="false" :class="monoInputClass" :placeholder="defaultVar" />
           </FormField>
           <button type="button" :class="btnSecondary" :disabled="reading || !ssh.host || !ssh.envFile" @click="readEnv">
             {{ reading ? t('ssh.reading') : t('ssh.read') }}
@@ -299,10 +334,10 @@ const stepMark = (state: Step['state']) => (state === 'ok' ? '✓' : state === '
             <svg v-else class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" stroke-linecap="round" /></svg>
             {{ searching ? t('ssh.findingEnv') : t('ssh.findEnv') }}
           </button>
-          <span class="text-[11.5px] leading-snug text-gray-500 dark:text-zinc-400 pt-px">{{ t('ssh.findEnvHint') }}</span>
+          <span class="text-[11.5px] leading-snug text-gray-500 dark:text-zinc-400 pt-px">{{ tx('findEnvHint') }}</span>
         </div>
         <div v-if="found" :class="panelClass" class="mt-2 p-1 max-h-56 overflow-y-auto" role="listbox" :aria-label="t('ssh.findEnv')">
-          <p v-if="!found.length" class="px-2.5 py-2 text-[12px] text-gray-500 dark:text-zinc-400">{{ t('ssh.findEnvNone') }}</p>
+          <p v-if="!found.length" class="px-2.5 py-2 text-[12px] text-gray-500 dark:text-zinc-400">{{ tx('findEnvNone') }}</p>
           <template v-for="match in found" :key="match.file">
             <button
               v-for="variable in match.variables"
@@ -324,18 +359,18 @@ const stepMark = (state: Step['state']) => (state === 'ok' ? '✓' : state === '
           {{ sshErrorText(findError) }}
           <span v-if="findError.error && findError.code !== 'unknown-host'" class="block mt-0.5 font-mono text-[11px] text-gray-500 dark:text-zinc-400 break-words">{{ findError.error }}</span>
         </p>
-        <p v-if="readOk" class="mt-2 text-[12px] text-emerald-700 dark:text-emerald-400" role="status">{{ t('ssh.readOk', { variable: ssh.envVar || 'DATABASE_URL' }) }}</p>
+        <p v-if="readOk" class="mt-2 text-[12px] text-emerald-700 dark:text-emerald-400" role="status">{{ t('ssh.readOk', { variable: ssh.envVar || defaultVar }) }}</p>
         <p v-else-if="readError" class="mt-2 text-[12px] text-red-600 dark:text-red-400" role="alert">
           {{ sshErrorText(readError) }}
           <span v-if="readError.error && !['not-url', 'unknown-host'].includes(readError.code)" class="block mt-0.5 font-mono text-[11px] text-gray-500 dark:text-zinc-400 break-words">{{ readError.error }}</span>
         </p>
       </template>
-      <FormField v-else :label="t('database.connectionUrlLabel')" for="ssh-url" :error="pastedInvalid ? t('dbModal.urlInvalid') : undefined" :hint="t('ssh.urlHint')">
-        <input id="ssh-url" v-model="pastedUrl" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" placeholder="postgresql://user:password@localhost:5432/app" />
+      <FormField v-else :label="t('database.connectionUrlLabel')" for="ssh-url" :error="pastedInvalid ? (isMongo ? t('ssh.mongo.urlInvalid') : t('dbModal.urlInvalid')) : undefined" :hint="tx('urlHint')">
+        <input id="ssh-url" v-model="pastedUrl" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" :placeholder="isMongo ? 'mongodb://user:password@localhost:27017/app' : 'postgresql://user:password@localhost:5432/app'" />
       </FormField>
 
       <div v-if="containerName" class="mt-3 px-3 py-2.5 rounded-lg border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 text-[12px] text-amber-900 dark:text-amber-200" role="alert">
-        {{ t('ssh.containerHint', { name: containerName }) }}
+        {{ tx('containerHint', { name: containerName }) }}
       </div>
 
       <div class="mt-3 grid grid-cols-3 gap-3">
@@ -384,7 +419,7 @@ const stepMark = (state: Step['state']) => (state === 'ok' ? '✓' : state === '
         <div v-if="pgStep.state !== 'idle'" class="flex items-start gap-2">
           <span class="mt-0.5 font-mono text-[11px] w-4" :class="stepClass(pgStep.state)">{{ stepMark(pgStep.state) }}</span>
           <div class="min-w-0 flex-1">
-            <div class="text-gray-800 dark:text-zinc-100">{{ t('ssh.test.postgres', { target: `${ssh.remoteHost}:${ssh.remotePort}` }) }}</div>
+            <div class="text-gray-800 dark:text-zinc-100">{{ tx(isMongo ? 'test' : 'test.postgres', { target: `${ssh.remoteHost}:${ssh.remotePort}` }) }}</div>
             <div v-if="pgStep.detail" class="text-[11.5px] break-words" :class="pgStep.state === 'error' ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-zinc-400'">{{ pgStep.detail }}</div>
           </div>
         </div>

@@ -31,6 +31,8 @@ export const store = reactive({
     restoreBackupFile: null as string | null,
     restoreTargetDb: null as RestoreTarget | null,
     editingDatabase: null as Database | null,
+    /** Engine of the database being added, when it is not PostgreSQL (its own dialog) */
+    databaseModalEngine: null as string | null,
     modalTargetSection: null as 'schedule' | null,
     showBackupModal: false,
     showExtensionsModal: false,

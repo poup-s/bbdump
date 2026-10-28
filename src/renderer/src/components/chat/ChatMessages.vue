@@ -147,7 +147,7 @@ const workingLabel = (blocks: Array<{ type: string; status?: string }>) =>
                   <span v-if="block.status === 'pending'" class="text-[11px] tabular-nums text-gray-400 dark:text-zinc-500">{{ secondsLeft(block) }} s</span>
                 </div>
                 <p class="mt-0.5 text-[12px] leading-relaxed text-gray-500 dark:text-zinc-400">
-                  {{ block.status === 'pending' ? t('chat.disclose.question', { rows: block.rows }) : t(`chat.disclose.done.${block.status}`, { count: maskedIn(block).size }) }}
+                  {{ block.status === 'pending' ? t(block.engine === 'mongodb' ? 'chat.disclose.questionMongo' : 'chat.disclose.question', { rows: block.rows }) : t(block.engine === 'mongodb' && (block.status === 'masked' || block.status === 'timeout') ? `chat.disclose.doneMongo.${block.status}` : `chat.disclose.done.${block.status}`, { count: maskedIn(block).size }) }}
                 </p>
               </div>
             </div>
@@ -159,8 +159,10 @@ const workingLabel = (blocks: Array<{ type: string; status?: string }>) =>
                     <span class="font-mono text-[12px] font-medium text-gray-900 dark:text-zinc-100 truncate">{{ c.name }}</span>
                     <span v-if="c.origin === 'rule'" class="shrink-0 px-1.5 py-px rounded-md text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">{{ t('chat.disclose.rule') }}</span>
                     <span v-else-if="c.origin === 'unknown'" class="shrink-0 px-1.5 py-px rounded-md text-[10px] bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400">{{ t('chat.disclose.unknown') }}</span>
+                    <!-- MongoDB: a field chosen in bbdump stays anonymized -->
+                    <span v-if="block.engine === 'mongodb' && c.origin === 'rule'" class="ml-auto shrink-0 text-[11px] text-emerald-700 dark:text-emerald-400">{{ t('chat.disclose.always') }}</span>
                     <!-- Anonymized or as is, for this column -->
-                    <span class="ml-auto shrink-0 inline-flex p-0.5 rounded-lg bg-gray-100 dark:bg-zinc-800" role="radiogroup" :aria-label="c.name">
+                    <span v-else class="ml-auto shrink-0 inline-flex p-0.5 rounded-lg bg-gray-100 dark:bg-zinc-800" role="radiogroup" :aria-label="c.name">
                       <button
                         type="button"
                         role="radio"
@@ -199,7 +201,7 @@ const workingLabel = (blocks: Array<{ type: string; status?: string }>) =>
                   :class="maskedIn(block).size ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-amber-600 hover:bg-amber-700'"
                   @click="answerDisclose(block, 'send')"
                 >
-                  {{ maskedIn(block).size ? t('chat.disclose.sendMasked', { count: maskedIn(block).size }) : t('chat.disclose.sendRaw') }}
+                  {{ maskedIn(block).size ? t(block.engine === 'mongodb' ? 'chat.disclose.sendMaskedMongo' : 'chat.disclose.sendMasked', { count: maskedIn(block).size }) : t('chat.disclose.sendRaw') }}
                   <svg class="chat-arrow w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14m-6-6l6 6-6 6" /></svg>
                 </button>
               </div>

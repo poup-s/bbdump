@@ -276,6 +276,9 @@ test('columns anonymized in a result are read from the MCP answer (JSON and Mark
   assert.deepEqual(providers.maskedColumnsIn('{"row_count":2,"masked_columns":["email","name"],"masking":"…","rows":[]}'), ['email', 'name']);
   assert.deepEqual(providers.maskedColumnsIn('row_count: 2 · truncated: false · masked_columns: email,name · masking: Some values…\n\n| a |'), ['email', 'name']);
   assert.equal(providers.maskedColumnsIn('row_count: 2 · truncated: false'), undefined);
+  // MongoDB results say masked_fields (paths), as JSON or in the Markdown header
+  assert.deepEqual(providers.maskedColumnsIn('{"collection":"users","masked_fields":["email","customer.email"],"documents":[]}'), ['email', 'customer.email']);
+  assert.deepEqual(providers.maskedColumnsIn('collection: users\nmasked_fields: ["email","phone"]\nreturned: 2\n\n| email |'), ['email', 'phone']);
   assert.deepEqual(providers.masks('{"masked_columns":[]}'), {});
   const event = providers.chatParser('claude')(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't', content: [{ type: 'text', text: 'row_count: 1 · masked_columns: email · masking: x\n\n| email |' }] }] } }))[0];
   assert.deepEqual(event.masked, ['email']);
@@ -287,7 +290,9 @@ test('a question about what may reach the AI shows in the chat, and ends when th
   const block = chat.messages[1].blocks[0];
   assert.equal(block.type, 'disclose');
   assert.equal(block.status, 'pending');
-  applyChatEvent(chat, { chatId: 'c', type: 'disclose', requestId: 'r2', rows: 1, columns: [] });
+  applyChatEvent(chat, { chatId: 'c', type: 'disclose', requestId: 'r2', rows: 1, engine: 'mongodb', columns: [] });
+  assert.equal(chat.messages[1].blocks[1].engine, 'mongodb', 'a MongoDB question says so (fields, documents)');
+  assert.equal(block.engine, undefined);
   applyChatEvent(chat, { chatId: 'c', type: 'disclose-timeout', requestId: 'r1' });
   assert.equal(block.status, 'timeout');
   applyChatEvent(chat, { chatId: 'c', type: 'done' });

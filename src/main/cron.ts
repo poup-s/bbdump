@@ -4,6 +4,8 @@ import { backupManager } from './backup';
 import { logger } from './logger';
 import { BrowserWindow, Notification } from 'electron';
 import { previousRun } from './cronSchedule';
+import { featureState } from './featureFlags';
+import { engineOf } from '../shared/engines/features';
 
 interface ScheduledTask {
   databaseId: string;
@@ -30,6 +32,9 @@ export class CronManager {
     if (this.tasks.has(db.id)) {
       this.cancelBackup(db.id);
     }
+
+    // An engine without scheduled backups (or turned off) is never scheduled
+    if (!featureState(engineOf(db), 'backup.schedule').enabled) return;
 
     // If scheduled tasks are disabled for this DB, do nothing
     if (db.enabled === false) {
@@ -131,6 +136,7 @@ export class CronManager {
   async catchUpMissedBackups(databases: DatabaseConfig[], now: Date = new Date()): Promise<void> {
     for (const db of databases || []) {
       if (db.enabled === false || !db.cron || !cron.validate(db.cron)) continue;
+      if (!featureState(engineOf(db), 'backup.schedule').enabled) continue;
       let lastExpected: Date | null;
       try {
         lastExpected = previousRun(db.cron, now);

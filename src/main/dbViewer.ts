@@ -30,7 +30,9 @@ class ConnectionPoolManager {
 
   constructor() {
     // Clean up unused pools periodically
+    // unref: housekeeping never keeps a process alive (tests load this module and exit)
     this.cleanupTimer = setInterval(() => this.cleanup(), this.CLEANUP_INTERVAL);
+    this.cleanupTimer.unref?.();
   }
 
   private getKey(params: ConnectionParams): string {

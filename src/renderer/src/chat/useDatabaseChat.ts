@@ -76,7 +76,7 @@ export function useDatabaseChat() {
   };
 
   /** Sends a question; returns an error code when the tool did not start ('not_installed'…) */
-  const send = async (chat: DatabaseChat, text: string, databaseLabel: string): Promise<string | null> => {
+  const send = async (chat: DatabaseChat, text: string, databaseLabel: string, engine = 'postgresql'): Promise<string | null> => {
     const message = text.trim();
     if (!message || chat.busy) return null;
     chat.messages.push({ role: 'user', text: message });
@@ -93,7 +93,7 @@ export function useDatabaseChat() {
         databaseId: chat.databaseId,
         provider: chat.provider,
         message,
-        systemPrompt: chatSystemPrompt(databaseLabel),
+        systemPrompt: chatSystemPrompt(databaseLabel, engine),
         sessionId: chat.sessionId,
         // The model chosen for this tool in the chat settings ('' = the tool's default)
         model: chatSettings.models[chat.provider] || undefined,

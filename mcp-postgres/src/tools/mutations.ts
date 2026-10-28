@@ -9,6 +9,7 @@ import { requestConfirmation, refusalMessage, appApi } from '../confirm.js';
 import { recordQuery } from '../history.js';
 import { statementCount, findWriteKeyword } from '../sql.js';
 import { findDatabase } from '../connections.js';
+import { activeMongo } from '../mongo/client.js';
 import { journalAvailable, listEntries, writeEntry, MAX_UNDO_ROWS, type UndoTable } from '../journal.js';
 import {
   primaryKey, selectForUndo, captureDelete, modifiedTable, snapshotTable, diffSnapshots, touchedRows, startTriggerCapture, UndoUnavailable,
@@ -44,6 +45,8 @@ async function returned(client: Client, result: pg.QueryResult, database: string
 let clientName: () => string | undefined = () => undefined;
 /** The AI client's name (Claude, Cursor…), for the journal */
 export function setClientNameSource(source: () => string | undefined) { clientName = source; }
+/** The AI client's name, for the MongoDB changes' journal */
+export const currentClientName = () => clientName();
 
 /** BEGIN … COMMIT around a write and its undo capture; ROLLBACK on any error */
 async function inWriteTransaction<T>(client: Client, timeoutMs: number | undefined, fn: () => Promise<T>): Promise<T> {
@@ -424,7 +427,8 @@ export function registerMutationTools(server: McpServer) {
     async ({ all_databases, limit }) => {
       if (!journalAvailable()) return errorResult('The change journal needs the MCP server set up by bbdump (Settings → MCP).');
       const active = getActiveConnectionInfo();
-      const saved = active.label ? findDatabase(active.label) : null;
+      const mongo = activeMongo();
+      const saved = mongo ? { id: mongo.id } : active.label ? findDatabase(active.label) : null;
       const entries = listEntries(all_databases ? {} : saved ? { databaseId: saved.id } : { database: active.database }, limit);
       return jsonResult({
         changes: entries.map(e => ({

@@ -57,7 +57,7 @@ export type ChatEvent =
   | { type: 'tool'; id: string; name: string; input?: unknown; status: 'running' | 'done' | 'error'; output?: string; masked?: string[] }
   | { type: 'error'; message: string }
   /** bbdump asks the user before a result of unknown origin reaches the AI ("Anonymize for AI") */
-  | { type: 'disclose'; requestId: string; rows: number; sql?: string; columns: Array<{ name: string; origin: string; source?: string; samples: string[]; anonymized?: string[] }> }
+  | { type: 'disclose'; requestId: string; rows: number; sql?: string; engine?: 'mongodb'; columns: Array<{ name: string; origin: string; source?: string; samples: string[]; anonymized?: string[] }> }
   | { type: 'disclose-timeout'; requestId: string }
   | { type: 'done' };
 
@@ -75,7 +75,8 @@ const clip = (value: unknown, max = 2000): string => {
  */
 export function maskedColumnsIn(text: string | undefined): string[] | undefined {
   if (!text) return undefined;
-  const json = /"masked_columns"\s*:\s*(\[[^\]]*\])/.exec(text);
+  // masked_fields: MongoDB results (fields by path)
+  const json = /"masked_(?:columns|fields)"\s*:\s*(\[[^\]]*\])/.exec(text);
   if (json) {
     try {
       const list = JSON.parse(json[1]);
@@ -84,7 +85,15 @@ export function maskedColumnsIn(text: string | undefined): string[] | undefined 
       // fall through
     }
   }
-  const plain = /(?:^|[\s·])masked_columns: ([^·\n]+)/.exec(text);
+  const plain = /(?:^|[\s·])masked_(?:columns|fields): ([^·\n]+)/.exec(text);
+  if (plain?.[1].trim().startsWith('[')) {
+    try {
+      const list = JSON.parse(plain[1].trim());
+      if (Array.isArray(list) && list.length) return list.map(String);
+    } catch {
+      // fall through
+    }
+  }
   const list = plain?.[1].split(',').map(c => c.trim()).filter(Boolean);
   return list?.length ? list : undefined;
 }

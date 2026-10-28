@@ -18,6 +18,9 @@ import { SslSettings, libpqSslEnv, toNodePgSsl, stripSslParams } from './sslConf
 import * as Electron from 'electron';
 import { defaultWhich } from './platform/probe';
 import { windowsPgTool } from './platform/windowsPg';
+import { engineOf } from '../shared/engines/features';
+import { manifestFor } from '../shared/engines/manifests';
+import { readArchiveEngine } from './backupFormat';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -1069,7 +1072,12 @@ apt-get install -y postgresql-client-${majorVersion}
     }
   }
 
-  private async verifyDiskSpace(db: DatabaseConfig, outputPath: string): Promise<{ valid: boolean; error?: string }> {
+  private async verifyDiskSpace(
+    db: DatabaseConfig,
+    outputPath: string,
+    /** Size of the database in bytes, null when unknown (each engine has its own way) */
+    estimate: () => Promise<number | null> = () => this.estimateDatabaseSize(db),
+  ): Promise<{ valid: boolean; error?: string }> {
     try {
       // Check available disk space
       const diskSpace = await this.checkDiskSpace(outputPath);
@@ -1083,7 +1091,7 @@ apt-get install -y postgresql-client-${majorVersion}
       logger.info(`Disk space available: ${this.formatBytes(diskSpace.available)} / ${this.formatBytes(diskSpace.total)}`, db.name);
 
       // Try to estimate the database size
-      const estimatedSize = await this.estimateDatabaseSize(db);
+      const estimatedSize = await estimate();
 
       if (estimatedSize) {
         logger.info(`Estimated database size: ${this.formatBytes(estimatedSize)}`, db.name);
@@ -1337,6 +1345,109 @@ apt-get install -y postgresql-client-${majorVersion}
       };
     }
 
+    // Where it goes: `<id>_<timestamp>.backup` in the database's folder, with room for it
+    const prepared = await this.prepareBackupFile(db, timestamp, () => this.estimateDatabaseSize(db));
+    if ('failure' in prepared) return prepared.failure;
+    const timestampedPath = prepared.file;
+
+    // Default configuration
+    const compressionLevel = db.compressionLevel ?? 6;
+    const jobs = db.jobs ?? 1;
+
+    // Trouver le pg_dump compatible avec la version du serveur
+    const compatiblePgDump = await this.findCompatiblePgDump(db);
+
+    // Check the pg_dump version to ensure it matches
+    try {
+      const { stdout } = await execFileAsync(compatiblePgDump, ['--version'], { windowsHide: true });
+      const versionMatch = stdout.match(/(\d+\.\d+)/);
+      if (versionMatch) {
+        const pgDumpVersion = versionMatch[1];
+        logger.info(`Using pg_dump version: ${pgDumpVersion}`, db.name);
+      }
+    } catch (error) {
+      logger.warn(`Could not verify pg_dump version: ${getErrorMessage(error)}`, db.name);
+    }
+
+    // Build the pg_dump arguments
+    const args = [
+      '--no-password', // fail instead of prompting when the server wants a password
+      '-F', 'c',
+      '-b',
+      '-v',
+      '-f', timestampedPath,
+    ];
+    if (options.schemaOnly) args.push('--schema-only');
+
+    // If a connection string is provided, use it
+    if (db.connectionString) {
+      const cleanedConnectionString = this.cleanConnectionString(db.connectionString);
+      args.push('-d', cleanedConnectionString);
+    } else {
+      const isLinux = process.platform === 'linux';
+      const isLocalHost = !db.viaTunnel && (db.host === 'localhost' || db.host === '127.0.0.1');
+      const hasPassword = db.password && db.password.trim().length > 0;
+
+      // On Linux with local host and no password, use Unix socket (peer auth)
+      // pg_dump -h /var/run/postgresql uses peer auth, avoiding SCRAM password issues
+      if (isLinux && isLocalHost && !hasPassword) {
+        args.push('-h', '/var/run/postgresql');
+      } else {
+        args.push('-h', db.host);
+      }
+      args.push('-p', db.port.toString());
+      args.push('-U', db.user);
+      args.push(db.name);
+    }
+
+    // Add the compression level if > 0
+    if (compressionLevel > 0) {
+      args.push('-Z', compressionLevel.toString());
+    }
+
+    // pg_dump only supports --jobs with the directory format (-F d); with -F c it
+    // refuses to run, so every backup configured with jobs > 1 used to fail.
+    if (jobs > 1) {
+      logger.warn(`Parallel jobs (${jobs}) ignored: not supported with the custom backup format`, db.name);
+    }
+
+    logger.info(`Command: ${compatiblePgDump} ${args.join(' ')}`, db.name);
+
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      LC_ALL: 'C',
+      LANG: 'C',
+      // PGSSLMODE / PGSSLROOTCERT (the former PGSSLCERT='disable' was not a valid value:
+      // PGSSLCERT is a client certificate path)
+      ...libpqSslEnv(db)
+    };
+
+    // Add PGPASSWORD only if not using a connection string and if a password is provided
+    // For local databases (isLocalBbdump), the password can be empty (peer/ident authentication)
+    if (!db.connectionString && db.password && db.password.trim().length > 0) {
+      env.PGPASSWORD = db.password;
+    }
+
+    return this.runDumpProcess(db, {
+      command: compatiblePgDump,
+      label: 'pg_dump',
+      args,
+      env,
+      file: timestampedPath,
+      timestamp,
+      verify: file => this.verifyDump(file, db),
+    });
+  }
+
+  /**
+   * The file a backup is written to: `<id>_<timestamp>.backup` in the database's folder
+   * (created if needed), once the disk has room for it. The same for every engine.
+   */
+  async prepareBackupFile(
+    db: DatabaseConfig,
+    timestamp: string,
+    estimate: () => Promise<number | null>,
+  ): Promise<{ file: string } | { failure: BackupResult }> {
     // Build the output path
     // If db.output is not defined or empty, use the default path
     let outputPath: string;
@@ -1374,16 +1485,11 @@ apt-get install -y postgresql-client-${majorVersion}
     }
 
     // Check available disk space
-    const diskSpaceCheck = await this.verifyDiskSpace(db, outputPath);
+    const diskSpaceCheck = await this.verifyDiskSpace(db, outputPath, estimate);
     if (!diskSpaceCheck.valid) {
       const errorMsg = diskSpaceCheck.error || 'Disk space verification failed';
       logger.error(errorMsg, db.name);
-      return {
-        success: false,
-        database: db.name,
-        timestamp,
-        error: errorMsg
-      };
+      return { failure: { success: false, database: db.name, timestamp, error: errorMsg } };
     }
 
     // Add a timestamp to the filename
@@ -1395,26 +1501,26 @@ apt-get install -y postgresql-client-${majorVersion}
       `${basename}_${new Date().toISOString().replace(/[:.]/g, '-')}${ext}`
     );
 
-    // Default configuration
-    const compressionLevel = db.compressionLevel ?? 6;
-    const jobs = db.jobs ?? 1;
+    return { file: timestampedPath };
+  }
+
+  /**
+   * Runs a dump tool that writes `run.file`, then reads it back (`run.verify`) and encrypts it
+   * when the database asks for it. Timeouts, signals and cleanup are the same for every
+   * engine: a failed run never leaves a partial file that looks restorable.
+   */
+  runDumpProcess(db: DatabaseConfig, run: {
+    command: string;
+    /** Tool name in messages (pg_dump, mongodump…) */
+    label: string;
+    args: string[];
+    env: NodeJS.ProcessEnv;
+    file: string;
+    timestamp: string;
+    verify?: (file: string) => Promise<{ valid: boolean; error?: string }>;
+  }): Promise<BackupResult> {
+    const { file: timestampedPath, timestamp } = run;
     const timeout = db.backupTimeout ?? 30 * 60 * 1000; // 30 minutes by default
-
-    // Trouver le pg_dump compatible avec la version du serveur
-    const compatiblePgDump = await this.findCompatiblePgDump(db);
-
-    // Check the pg_dump version to ensure it matches
-    try {
-      const { stdout } = await execFileAsync(compatiblePgDump, ['--version'], { windowsHide: true });
-      const versionMatch = stdout.match(/(\d+\.\d+)/);
-      if (versionMatch) {
-        const pgDumpVersion = versionMatch[1];
-        logger.info(`Using pg_dump version: ${pgDumpVersion}`, db.name);
-      }
-    } catch (error) {
-      logger.warn(`Could not verify pg_dump version: ${getErrorMessage(error)}`, db.name);
-    }
-
     return new Promise((resolvePromise) => {
       // Any failed run must not leave a truncated file that looks restorable
       const resolve = (result: BackupResult) => {
@@ -1433,67 +1539,8 @@ apt-get install -y postgresql-client-${majorVersion}
         resolvePromise(result);
       };
 
-      // Build the pg_dump arguments
-      const args = [
-        '--no-password', // fail instead of prompting when the server wants a password
-        '-F', 'c',
-        '-b',
-        '-v',
-        '-f', timestampedPath,
-      ];
-      if (options.schemaOnly) args.push('--schema-only');
-
-      // If a connection string is provided, use it
-      if (db.connectionString) {
-        const cleanedConnectionString = this.cleanConnectionString(db.connectionString);
-        args.push('-d', cleanedConnectionString);
-      } else {
-        const isLinux = process.platform === 'linux';
-        const isLocalHost = !db.viaTunnel && (db.host === 'localhost' || db.host === '127.0.0.1');
-        const hasPassword = db.password && db.password.trim().length > 0;
-
-        // On Linux with local host and no password, use Unix socket (peer auth)
-        // pg_dump -h /var/run/postgresql uses peer auth, avoiding SCRAM password issues
-        if (isLinux && isLocalHost && !hasPassword) {
-          args.push('-h', '/var/run/postgresql');
-        } else {
-          args.push('-h', db.host);
-        }
-        args.push('-p', db.port.toString());
-        args.push('-U', db.user);
-        args.push(db.name);
-      }
-
-      // Add the compression level if > 0
-      if (compressionLevel > 0) {
-        args.push('-Z', compressionLevel.toString());
-      }
-
-      // pg_dump only supports --jobs with the directory format (-F d); with -F c it
-      // refuses to run, so every backup configured with jobs > 1 used to fail.
-      if (jobs > 1) {
-        logger.warn(`Parallel jobs (${jobs}) ignored: not supported with the custom backup format`, db.name);
-      }
-
-      logger.info(`Command: ${compatiblePgDump} ${args.join(' ')}`, db.name);
-
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        LC_ALL: 'C',
-        LANG: 'C',
-        // PGSSLMODE / PGSSLROOTCERT (the former PGSSLCERT='disable' was not a valid value:
-        // PGSSLCERT is a client certificate path)
-        ...libpqSslEnv(db)
-      };
-
-      // Add PGPASSWORD only if not using a connection string and if a password is provided
-      // For local databases (isLocalBbdump), the password can be empty (peer/ident authentication)
-      if (!db.connectionString && db.password && db.password.trim().length > 0) {
-        env.PGPASSWORD = db.password;
-      }
-
-      const pgDump = spawn(compatiblePgDump, args, { env, windowsHide: true });
-      this.activeProcesses.add(pgDump);
+      const child = spawn(run.command, run.args, { env: run.env, windowsHide: true });
+      this.activeProcesses.add(child);
 
       let errorOutput = '';
       let isTimedOut = false;
@@ -1504,7 +1551,7 @@ apt-get install -y postgresql-client-${majorVersion}
       const cleanup = () => {
         if (cleanedUp) return;
         cleanedUp = true;
-        this.activeProcesses.delete(pgDump);
+        this.activeProcesses.delete(child);
         clearTimeout(timeoutHandle);
         clearTimeout(safetyTimeoutHandle);
         process.removeListener('SIGTERM', signalHandler);
@@ -1513,15 +1560,15 @@ apt-get install -y postgresql-client-${majorVersion}
 
       // Gestionnaire de signaux pour le processus parent
       const signalHandler = (signal: NodeJS.Signals) => {
-        if (!pgDump.killed) {
+        if (!child.killed) {
           isSignalKilled = true;
-          logger.warn(`Received ${signal}, killing pg_dump gracefully...`, db.name);
-          pgDump.kill('SIGTERM');
+          logger.warn(`Received ${signal}, killing ${run.label} gracefully...`, db.name);
+          child.kill('SIGTERM');
 
           setTimeout(() => {
-            if (!pgDump.killed) {
+            if (!child.killed) {
               logger.warn(`SIGTERM failed, using SIGKILL...`, db.name);
-              pgDump.kill('SIGKILL');
+              child.kill('SIGKILL');
             }
           }, 5000);
         }
@@ -1529,16 +1576,16 @@ apt-get install -y postgresql-client-${majorVersion}
 
       // Gestionnaire de timeout
       const timeoutHandle = setTimeout(() => {
-        if (!pgDump.killed) {
+        if (!child.killed) {
           isTimedOut = true;
-          logger.warn(`Backup timeout reached (${timeout}ms), killing pg_dump...`, db.name);
-          pgDump.kill('SIGTERM');
+          logger.warn(`Backup timeout reached (${timeout}ms), killing ${run.label}...`, db.name);
+          child.kill('SIGTERM');
 
           // If SIGTERM doesn't work after 5 seconds, use SIGKILL
           setTimeout(() => {
-            if (!pgDump.killed) {
+            if (!child.killed) {
               logger.warn(`SIGTERM failed, using SIGKILL...`, db.name);
-              pgDump.kill('SIGKILL');
+              child.kill('SIGKILL');
             }
           }, 5000);
         }
@@ -1549,8 +1596,8 @@ apt-get install -y postgresql-client-${majorVersion}
         if (!cleanedUp) {
           logger.warn(`Safety timeout: cleaning up signal handlers for backup of ${db.name}`);
           cleanup();
-          if (!pgDump.killed) {
-            pgDump.kill('SIGKILL');
+          if (!child.killed) {
+            child.kill('SIGKILL');
           }
           resolve({
             success: false,
@@ -1565,19 +1612,19 @@ apt-get install -y postgresql-client-${majorVersion}
       process.on('SIGTERM', signalHandler);
       process.on('SIGINT', signalHandler);
 
-      pgDump.stderr.on('data', (data) => {
+      child.stderr.on('data', (data) => {
         const message = data.toString();
         errorOutput += message;
         logger.info(message.trim(), db.name);
       });
 
-      pgDump.stdout.on('data', (data) => {
+      child.stdout.on('data', (data) => {
         logger.info(data.toString().trim(), db.name);
       });
 
-      pgDump.on('error', (error) => {
+      child.on('error', (error) => {
         cleanup();
-        const errorMsg = `Error launching pg_dump: ${error.message}`;
+        const errorMsg = `Error launching ${run.label}: ${error.message}`;
         logger.error(errorMsg, db.name);
         resolve({
           success: false,
@@ -1587,7 +1634,7 @@ apt-get install -y postgresql-client-${majorVersion}
         });
       });
 
-      pgDump.on('close', async (code) => {
+      child.on('close', async (code) => {
         cleanup();
 
         // Check if the process was killed by timeout or signal
@@ -1617,8 +1664,8 @@ apt-get install -y postgresql-client-${majorVersion}
 
         if (code === 0) {
           // Read the whole archive back before trusting it (and before encrypting it)
-          if (db.verifyBackups !== false) {
-            const verification = await this.verifyDump(timestampedPath, db);
+          if (db.verifyBackups !== false && run.verify) {
+            const verification = await run.verify(timestampedPath);
             if (!verification.valid) {
               const errorMsg = `Backup verification failed: ${verification.error}`;
               logger.error(errorMsg, db.name);
@@ -1702,7 +1749,7 @@ apt-get install -y postgresql-client-${majorVersion}
             });
           }
         } else {
-          const errorMsg = `pg_dump failed with code ${code}\n${errorOutput}`;
+          const errorMsg = `${run.label} failed with code ${code}\n${errorOutput}`;
           logger.error(errorMsg, db.name);
           resolve({
             success: false,
@@ -1778,8 +1825,13 @@ apt-get install -y postgresql-client-${majorVersion}
     this.running.add(db.id);
     let result: BackupResult;
     try {
+      // The dump itself belongs to the database's engine (feature flag checked first);
+      // tunnel, retention and history below are the same for every engine.
+      // Loaded here: the registry reaches back to this module through the PostgreSQL driver.
+      const { facetFor } = await import('./engines/registry');
+      const engineBackup = await facetFor(engineOf(db), 'backup.run', 'backup');
       // A database on a server is reached through its SSH tunnel, kept open for the whole dump
-      result = await withTunnel(db, reached => this.executeBackup(reached));
+      result = await withTunnel(db, reached => engineBackup.dump(reached));
       if (result.success && result.filePath) {
         this.applyRetention(db, result.filePath);
       }
@@ -1893,6 +1945,80 @@ apt-get install -y postgresql-client-${majorVersion}
   }
 
   /**
+   * The backup file ready to read: found (absolute path or name in the internal folder),
+   * decrypted to a temporary file when needed, and checked to come from `engine` (a
+   * PostgreSQL dump is never handed to mongorestore, nor the other way round). `cleanup`
+   * removes the temporary file. The same for every engine.
+   */
+  async openBackupForRestore(
+    backupFile: string,
+    targetName: string,
+    engine: string,
+    timestamp: string,
+  ): Promise<{ file: string; cleanup: () => void } | { failure: BackupResult }> {
+    // Accept both absolute paths and filenames (relative to backupsPath)
+    const backupPath = path.isAbsolute(backupFile) ? backupFile : path.join(pathManager.backupsPath, backupFile);
+
+    // Check that the file exists
+    if (!fs.existsSync(backupPath)) {
+      const errorMsg = `Backup file not found: ${backupPath}`;
+      logger.error(errorMsg, targetName);
+      return { failure: { success: false, database: targetName, timestamp, error: errorMsg } };
+    }
+
+    // Check if the file is encrypted and decrypt it if needed
+    let actualBackupPath = backupPath;
+    let tempDecryptedPath: string | null = null;
+
+    if (fileEncryptionManager.isFileEncrypted(backupPath)) {
+      try {
+        logger.info(`Decrypting backup file...`, targetName);
+        tempDecryptedPath = path.join(pathManager.backupsPath, `temp_decrypt_${Date.now()}.backup`);
+        await fileEncryptionManager.decryptFile(backupPath, tempDecryptedPath);
+        actualBackupPath = tempDecryptedPath;
+        logger.info(`File temporarily decrypted: ${tempDecryptedPath}`, targetName);
+      } catch (decryptError) {
+        const errorMsg = `Error during decryption: ${decryptError}`;
+        logger.error(errorMsg, targetName);
+
+        // Clean up the partial temporary file if needed
+        if (tempDecryptedPath && fs.existsSync(tempDecryptedPath)) {
+          try {
+            fs.unlinkSync(tempDecryptedPath);
+            logger.info(`Cleaned up partial decrypted file: ${tempDecryptedPath}`, targetName);
+          } catch (cleanupError) {
+            logger.warn(`Failed to cleanup partial decrypted file: ${cleanupError}`, targetName);
+          }
+        }
+
+        return { failure: { success: false, database: targetName, timestamp, error: errorMsg } };
+      }
+    }
+
+    // Centralized cleanup function for the temporary file
+    const cleanupTempFile = () => {
+      if (tempDecryptedPath && fs.existsSync(tempDecryptedPath)) {
+        try {
+          fs.unlinkSync(tempDecryptedPath);
+          logger.info(`Temporary decrypted file deleted: ${tempDecryptedPath}`, targetName);
+        } catch (cleanupError) {
+          logger.warn(`Unable to delete temporary file: ${cleanupError}`, targetName);
+        }
+      }
+    };
+
+    const found = readArchiveEngine(actualBackupPath);
+    if (found && found !== engine) {
+      cleanupTempFile();
+      const kind = manifestFor(found)?.label ?? found;
+      const errorMsg = `This backup comes from a ${kind} database: it can only be restored into a ${kind} database`;
+      logger.error(errorMsg, targetName);
+      return { failure: { success: false, database: targetName, timestamp, error: errorMsg } };
+    }
+    return { file: actualBackupPath, cleanup: cleanupTempFile };
+  }
+
+  /**
    * Restores a backup into an existing database, replacing its content: the schemas the
    * backup contains are emptied first (all or nothing, see restorePlan.ts). `replace:
    * false` keeps the old behaviour (load over what is there), for a database just created.
@@ -1910,66 +2036,11 @@ apt-get install -y postgresql-client-${majorVersion}
     const timestamp = new Date().toISOString();
     logger.info(`Starting restore of ${backupFile} to ${target.name}`, target.name);
 
-    // Accept both absolute paths and filenames (relative to backupsPath)
-    const backupPath = path.isAbsolute(backupFile) ? backupFile : path.join(pathManager.backupsPath, backupFile);
-
-    // Check that the file exists
-    if (!fs.existsSync(backupPath)) {
-      const errorMsg = `Backup file not found: ${backupPath}`;
-      logger.error(errorMsg, target.name);
-      return {
-        success: false,
-        database: target.name,
-        timestamp,
-        error: errorMsg
-      };
-    }
-
-    // Check if the file is encrypted and decrypt it if needed
-    let actualBackupPath = backupPath;
-    let tempDecryptedPath: string | null = null;
-
-    if (fileEncryptionManager.isFileEncrypted(backupPath)) {
-      try {
-        logger.info(`Decrypting backup file...`, target.name);
-        tempDecryptedPath = path.join(pathManager.backupsPath, `temp_decrypt_${Date.now()}.backup`);
-        await fileEncryptionManager.decryptFile(backupPath, tempDecryptedPath);
-        actualBackupPath = tempDecryptedPath;
-        logger.info(`File temporarily decrypted: ${tempDecryptedPath}`, target.name);
-      } catch (decryptError) {
-        const errorMsg = `Error during decryption: ${decryptError}`;
-        logger.error(errorMsg, target.name);
-
-        // Clean up the partial temporary file if needed
-        if (tempDecryptedPath && fs.existsSync(tempDecryptedPath)) {
-          try {
-            fs.unlinkSync(tempDecryptedPath);
-            logger.info(`Cleaned up partial decrypted file: ${tempDecryptedPath}`, target.name);
-          } catch (cleanupError) {
-            logger.warn(`Failed to cleanup partial decrypted file: ${cleanupError}`, target.name);
-          }
-        }
-
-        return {
-          success: false,
-          database: target.name,
-          timestamp,
-          error: errorMsg
-        };
-      }
-    }
-
-    // Centralized cleanup function for the temporary file
-    const cleanupTempFile = () => {
-      if (tempDecryptedPath && fs.existsSync(tempDecryptedPath)) {
-        try {
-          fs.unlinkSync(tempDecryptedPath);
-          logger.info(`Temporary decrypted file deleted: ${tempDecryptedPath}`, target.name);
-        } catch (cleanupError) {
-          logger.warn(`Unable to delete temporary file: ${cleanupError}`, target.name);
-        }
-      }
-    };
+    // The file, decrypted when needed, and a PostgreSQL dump (not another engine's archive)
+    const opened = await this.openBackupForRestore(backupFile, target.name, 'postgresql', timestamp);
+    if ('failure' in opened) return opened.failure;
+    const actualBackupPath = opened.file;
+    const cleanupTempFile = opened.cleanup;
 
     try {
       // Build common pg_restore args (without --section and backup file — added per section)

@@ -16,6 +16,8 @@ import { availableExtensionNames, dropDatabase, getExtensionServerInfo } from '.
 import { missingExtensions } from '../extensionCatalog';
 import { readCatalog } from '../sync/catalog';
 import { onSource } from '../sync/syncEngine';
+import { engineOf } from '../../shared/engines/features';
+import { requireFeature } from '../featureFlags';
 import { buildAnonymizePlan, copyAnonymized, resolveAnonymization, type AnonymizeChoices } from '../sync/anonymizedCopy';
 
 // Define explicit types for database objects to avoid TS errors
@@ -149,6 +151,13 @@ export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWin
     // Tables and columns of a database, with what can be anonymized: for the duplicate dialog
     ipcMain.handle('duplicate-anonymize-plan', async (_, sourceId: string) => {
         try {
+            // MongoDB: fields of sampled documents, for the anonymization for AI
+            const saved = getConfig().databases.find(d => d.id === sourceId);
+            if (engineOf(saved) === 'mongodb') {
+                requireFeature('mongodb', 'mask.fields');
+                const { buildMongoMaskingPlan } = await import('../mongoMasking');
+                return { success: true, plan: await buildMongoMaskingPlan(sourceId) };
+            }
             const plan = await onSource(sourceId, async src => {
                 const catalog = await readCatalog(src);
                 // Statistics may be missing on small or fresh tables: count those

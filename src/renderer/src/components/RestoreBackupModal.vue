@@ -7,6 +7,9 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { store, isRemoteOnly } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
+import { useFeatures } from '../composables/useFeatures';
+import { ipcRenderer } from '../electron';
+import { engineOf } from '../../../shared/engines/features';
 import type { RestoreTarget } from '../types';
 import AppModal from './ui/AppModal.vue';
 import ModalHeading from './ui/ModalHeading.vue';
@@ -20,7 +23,14 @@ const COUNTDOWN_SECONDS = 5;
 const { t } = useI18n();
 const { addToast } = useToast();
 
-const databases = computed(() => store.databases || []);
+const { isEnabled } = useFeatures();
+/** Engine that wrote the backup (from its database, else its first bytes); null when unknown */
+const fileEngine = ref<string | null>(null);
+/** Targets: databases of the backup's engine that can restore (the main process checks again) */
+const databases = computed(() => (store.databases || []).filter(db =>
+  isEnabled(db, 'restore.replace') && (!fileEngine.value || engineOf(db) === fileEngine.value)));
+/** A new local database is a PostgreSQL one: not for another engine's backup */
+const canCreate = computed(() => !isRemoteOnly() && fileEngine.value !== 'mongodb');
 const selectedDb = ref<string>('');
 const restoreMode = ref<'existing' | 'new'>('existing');
 const newDbName = ref('');
@@ -78,6 +88,12 @@ onMounted(() => {
       || databases.value[0]?.id || '';
   }
   startCountdown();
+  // Then narrow the targets to the backup's engine
+  ipcRenderer.invoke('backup-engine', store.restoreBackupFile).then((engine: string | null) => {
+    fileEngine.value = engine;
+    if (!canCreate.value) restoreMode.value = 'existing';
+    if (!databases.value.some(db => db.id === selectedDb.value)) selectedDb.value = databases.value[0]?.id || '';
+  }).catch(() => { /* unknown: every target stays, the main process refuses a mismatch */ });
 });
 onUnmounted(stopCountdown);
 
@@ -141,7 +157,7 @@ const selected = computed(() => databases.value.find(db => db.id === selectedDb.
         <div class="font-mono text-[12px] text-gray-800 dark:text-zinc-200 overflow-hidden text-ellipsis whitespace-nowrap" :title="store.restoreBackupFile || undefined">{{ backupName }}</div>
       </div>
 
-      <SegmentedControl v-if="!isRemoteOnly()" v-model="restoreMode" :options="modeOptions" :label="t('modal.restoreWhere')" />
+      <SegmentedControl v-if="canCreate" v-model="restoreMode" :options="modeOptions" :label="t('modal.restoreWhere')" />
 
       <FormField v-if="restoreMode === 'existing'" :label="t('modal.restoreTarget')" for="restore-target">
         <select id="restore-target" v-model="selectedDb" :class="selectClass">

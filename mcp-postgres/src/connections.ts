@@ -1,6 +1,8 @@
 import * as crypto from 'crypto';
 import { databaseAllowed } from './chatScope.js';
 import * as fs from 'fs';
+import { mongoToolsEnabled } from './mongo/features.js';
+import { MONGO_DEFAULT_PORT, isMongoUri, mongoOption, parseMongoUri, type MongoTarget } from './shared/mongoUri.js';
 
 const ALGORITHM = 'aes-256-gcm';
 
@@ -25,6 +27,10 @@ interface BbdumpDatabaseConfig {
   lastBackup?: string;
   /** Reached through an SSH tunnel the bbdump app opens */
   ssh?: { host?: string };
+  /** Absent means PostgreSQL; MongoDB databases are offered when MongoDB is on in bbdump */
+  engine?: string;
+  /** MongoDB, entered field by field */
+  mongo?: { authSource?: string };
 }
 
 interface BbdumpConfig {
@@ -47,6 +53,8 @@ export interface ConnectionInfo {
   via_ssh?: string;
   default_schema?: string;
   last_backup?: string;
+  /** Only for databases other than PostgreSQL */
+  engine?: string;
 }
 
 export interface ConnectionParams {
@@ -144,7 +152,7 @@ export function parseConnectionString(connectionString: string): ParsedUrl {
   return result;
 }
 
-function decryptPassword(encryptedText: string, key: Buffer): string {
+export function decryptPassword(encryptedText: string, key: Buffer): string {
   const parts = encryptedText.split(':');
   if (parts.length !== 3) {
     throw new Error('Invalid encrypted password format: expected iv:authTag:ciphertext');
@@ -171,13 +179,17 @@ function loadEncryptionKey(): Buffer | null {
   }
 }
 
-function loadBbdumpConfig(): BbdumpConfig | null {
+/** Every saved database this server may reach: PostgreSQL ones, and MongoDB ones when it is on */
+function loadAllDatabases(): BbdumpConfig | null {
   const configPath = process.env.BBDUMP_CONFIG_PATH;
   if (!configPath) return null;
   try {
     const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8')) as BbdumpConfig;
+    const mongo = mongoToolsEnabled();
     // A chat on one database sees that database only
-    const databases = Array.isArray(parsed.databases) ? parsed.databases.filter((d) => databaseAllowed(d.id)) : [];
+    const databases = Array.isArray(parsed.databases)
+      ? parsed.databases.filter((d) => databaseAllowed(d.id) && (isPostgres(d) || (mongo && d.engine === 'mongodb')))
+      : [];
     return { ...parsed, databases };
   } catch (err: any) {
     console.error(`Failed to read bbdump config: ${err.message}`);
@@ -185,12 +197,60 @@ function loadBbdumpConfig(): BbdumpConfig | null {
   }
 }
 
+const isPostgres = (db: BbdumpDatabaseConfig) => !db.engine || db.engine === 'postgresql';
+
+/** The PostgreSQL databases only: what every tool but the mongo_* ones works on */
+function loadBbdumpConfig(): BbdumpConfig | null {
+  const config = loadAllDatabases();
+  return config && { ...config, databases: config.databases.filter(isPostgres) };
+}
+
+/** The saved database for an id, name or display name (id wins), whatever its engine */
+function findSaved(databases: BbdumpDatabaseConfig[], identifier: string): BbdumpDatabaseConfig | undefined {
+  return databases.find((d) => d.id === identifier)
+    || databases.find((d) => d.name === identifier || d.displayName === identifier);
+}
+
+/** Engine of a saved database: 'postgresql', 'mongodb', or null when unknown here */
+export function savedEngine(identifier: string): string | null {
+  const db = findSaved(loadAllDatabases()?.databases ?? [], identifier);
+  return db ? db.engine || 'postgresql' : null;
+}
+
+/** A saved MongoDB database: what mongoConnection() needs, password decrypted (memory only) */
+export function getMongoTarget(identifier: string): { id: string; label: string; target: MongoTarget; sshDatabaseId?: string } | null {
+  const db = findSaved(loadAllDatabases()?.databases ?? [], identifier);
+  if (!db || db.engine !== 'mongodb') return null;
+  let password = db.password;
+  if (db.encrypted !== false && password) {
+    const key = loadEncryptionKey();
+    if (!key) throw new Error('Encryption key not available; cannot decrypt password');
+    password = decryptPassword(password, key);
+  }
+  return {
+    id: db.id,
+    label: db.displayName || db.name,
+    sshDatabaseId: db.ssh ? db.id : undefined,
+    target: {
+      connectionString: db.connectionString,
+      host: db.host,
+      port: db.port,
+      user: db.user,
+      password: password || undefined,
+      database: db.name,
+      sslMode: db.sslMode || (db.ssl ? 'require' : undefined),
+      sslRootCert: db.sslRootCert,
+      mongo: db.mongo,
+    },
+  };
+}
+
 export function isBbdumpConfigured(): boolean {
   return !!(process.env.BBDUMP_CONFIG_PATH && process.env.BBDUMP_KEY_PATH);
 }
 
 export function listConnections(): ConnectionInfo[] | null {
-  const bbdumpConfig = loadBbdumpConfig();
+  const bbdumpConfig = loadAllDatabases();
   if (!bbdumpConfig) return null;
 
   const projectOf = new Map<string, string>();
@@ -199,6 +259,7 @@ export function listConnections(): ConnectionInfo[] | null {
   }
 
   return bbdumpConfig.databases.map((db) => {
+    if (db.engine === 'mongodb') return mongoConnectionInfo(db, projectOf.get(db.id));
     const uri = db.connectionString ? parseConnectionString(db.connectionString) : {};
     const sslMode = db.sslMode || uri.sslMode || (db.ssl ? 'require' : undefined);
     return {
@@ -217,6 +278,27 @@ export function listConnections(): ConnectionInfo[] | null {
       last_backup: db.lastBackup,
     };
   });
+}
+
+/** A MongoDB database in list_connections: hosts and database, never the password */
+function mongoConnectionInfo(db: BbdumpDatabaseConfig, project: string | undefined): ConnectionInfo {
+  const parsed = db.connectionString && isMongoUri(db.connectionString) ? parseMongoUri(db.connectionString) : null;
+  const first = parsed?.hosts[0];
+  return {
+    id: db.id,
+    name: db.name,
+    displayName: db.displayName,
+    project,
+    engine: 'mongodb',
+    host: parsed ? parsed.hosts.map((h) => (h.port ? `${h.host}:${h.port}` : h.host)).join(',') : db.host,
+    port: first?.port || db.port || MONGO_DEFAULT_PORT,
+    user: parsed?.username || db.user,
+    database: db.name,
+    ssl: parsed ? mongoOption(parsed, 'tls') === 'true' || mongoOption(parsed, 'ssl') === 'true' || parsed.srv : !!db.sslMode && db.sslMode !== 'disable' && db.sslMode !== 'prefer',
+    local: false,
+    ...(db.ssh ? { via_ssh: db.ssh.host } : {}),
+    last_backup: db.lastBackup,
+  };
 }
 
 /** Ids of the saved databases with this database name (any server) */

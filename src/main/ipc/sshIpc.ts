@@ -51,10 +51,11 @@ export function registerSshHandlers() {
   });
 
   /** The env files on the server holding a PostgreSQL URL: paths and variable names, no values */
-  ipcMain.handle('ssh-find-env', async (_e, ssh: SshSettings) => {
+  ipcMain.handle('ssh-find-env', async (_e, ssh: SshSettings, engine?: unknown) => {
     try {
-      const files = await findRemoteEnvFiles(ssh);
-      logger.info(`SSH ${ssh.host}: ${files.length} env file(s) with a PostgreSQL URL found`);
+      const kind = engine === 'mongodb' ? 'mongodb' as const : 'postgresql' as const;
+      const files = await findRemoteEnvFiles(ssh, kind);
+      logger.info(`SSH ${ssh.host}: ${files.length} env file(s) with a ${kind === 'mongodb' ? 'MongoDB' : 'PostgreSQL'} URL found`);
       return { success: true, files };
     } catch (error) {
       return failure(error, ssh);

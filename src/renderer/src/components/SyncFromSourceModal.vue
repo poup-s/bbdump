@@ -7,6 +7,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
+import { useFeatures } from '../composables/useFeatures';
 import { ipcRenderer } from '../electron';
 import { getErrorMessage } from '../utils';
 import AppModal from './ui/AppModal.vue';
@@ -40,7 +41,8 @@ const { addToast } = useToast();
 const target = computed(() => store.syncTargetDb);
 /** Sources: the other databases of the target's project */
 const project = computed(() => store.projects.find(p => target.value && p.databaseIds?.includes(target.value.id)) ?? null);
-const sources = computed(() => store.databases.filter(d => d.id !== target.value?.id && !!project.value?.databaseIds?.includes(d.id)));
+const { isEnabled } = useFeatures();
+const sources = computed(() => store.databases.filter(d => d.id !== target.value?.id && !!project.value?.databaseIds?.includes(d.id) && isEnabled(d, 'sync.fromSource')));
 const sourceId = ref('');
 const step = ref(0);
 const analysis = ref<Analysis | null>(null);

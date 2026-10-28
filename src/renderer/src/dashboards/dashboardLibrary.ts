@@ -11,6 +11,7 @@ import { createLibrary, defineComponent as defineUi, useOpenUI, type RenderNodeR
 import { useI18n } from '../composables/useI18n';
 import { markdownLite, type Inline } from '../chat/markdownLite';
 import { PERIODS } from './dashboardProgram';
+import { MONGO_EXAMPLE, MONGO_EXAMPLE_LINKED, MONGO_TOOL } from './mongoDashboard';
 import { change, formatLabel, formatValue } from './valueFormat';
 
 type Render<P> = (p: { props: P; renderNode: (value: unknown) => RenderNodeResult }) => VNode;
@@ -903,36 +904,70 @@ weekChart = StackedBarChart(perWeek.rows.week, [{label: "Paid", values: perWeek.
 goodToKnow = Markdown("**Cancelled** orders are refunded within 7 days.", "Good to know")
 latest = Table(recent.columns, recent.rows, "Latest orders", ["Order", "Customer", "Status", "Total", "Date"], ["integer", "text", "text", "money:EUR", "datetime"])`;
 
+
 const LANGUAGE_NAMES: Record<string, string> = { en: 'English', fr: 'French' };
 
+/** How a PostgreSQL dashboard reads its data */
+const SQL_RULES = {
+  app: 'a PostgreSQL desktop app',
+  learn: 'Learn the schema with get_schema_overview, then test every SELECT with check_query before putting it in the dashboard (it returns the columns and the row count, no values). Use execute_query only when you must see values (e.g. the distinct values of a status column).',
+  query: 'Query("sql", {query: "SELECT …"}, {columns: [], rows: []})',
+  rules: [
+    'SQL: one SELECT per Query, no semicolon, with LIMIT for lists (50 rows for tables, 20 bars at most). Cast counts and sums with ::int or ::float8. Return dates and timestamps as they are (no to_char): bbdump formats them in the user\'s language. Group by time with date_trunc(…)::date.',
+    'Keep queries light: they run on every refresh. Prefer one query per block, aggregate in SQL, avoid scanning big tables without a date condition.',
+    'Filters: when the user wants to filter (a period, a category), add Filters([…]) at the top and use the placeholders in EVERY relevant query: created_at >= {{from}} AND created_at < {{to}} for the period, ({{name}} IS NULL OR col = {{name}}) for a SelectFilter. bbdump binds them as parameters, as text: compare ids with col::text = {{name}}. Do not use $variables, Select, Input, forms, buttons or the Query refresh interval.',
+    'Search: to find people or things by typing, use SearchFilter (never a SelectFilter of hundreds of emails): ({{q}} IS NULL OR name ILIKE \'%\' || {{q}} || \'%\' OR email ILIKE …).',
+    'Linked blocks (master and detail): when the user wants to look at one record and what belongs to it, list the records in a Table with select {filter: "x", column: "id", label: "email"} (hide the id column with an empty label ""); a click sets {{x}}. Show the record with Record (its query returns the row WHERE id::text = {{x}}, nothing while {{x}} is NULL) and filter the related blocks with ({{x}} IS NULL OR fk::text = {{x}}). Do not filter the list itself by {{x}}, so the user can pick another one.',
+    'Charts by category (BarChart, DonutChart) can drive the dashboard too: give them select {filter: "status"} and filter the other blocks with ({{status}} IS NULL OR col = {{status}}), the chart itself staying unfiltered.',
+    'When asked to explain a block, answer in plain words for someone who does not know SQL: what is counted, what is left out, the period, the tables it comes from. No SQL, no code, no change to the dashboard.',
+    'Column aliases in charts and Kpis are plucked (q.rows.alias): simple lowercase ascii aliases. Table headers in the user\'s language go in labels; formats (money:EUR, percent, integer, duration, bytes, date, datetime, text) in formats.',
+  ],
+  tool: SQL_TOOL,
+  examples: [EXAMPLE, EXAMPLE_LINKED],
+};
+
+/** How a MongoDB dashboard reads its data */
+const MONGO_RULES = {
+  app: 'a database desktop app; this database is MongoDB',
+  learn: 'Learn the collections with mongo_list_collections and mongo_describe_collection (fields from a sample, their types), then test every pipeline with mongo_aggregate (limit 5, placeholders replaced by real values) before putting it in the dashboard. Only the mongo_* tools work on this database.',
+  query: 'Query("mongo", {query: "{\\"collection\\": \\"orders\\", \\"pipeline\\": [ … ]}"}, {columns: [], rows: []})',
+  rules: [
+    'Queries: the query is a JSON text {"collection": "…", "pipeline": [stages]}, written inside the OpenUI string with its quotes escaped (\\"), as in the examples. Read only: $out, $merge, $where, $function and $accumulator are refused. Join collections with $lookup.',
+    'End every pipeline with $project giving flat fields with simple lowercase ascii names (no nested objects or arrays: they show as JSON), _id: 0 unless you need it. Write every field as an expression ("status": "$status", never "status": 1): the columns then come in the order you write them, which Table labels and formats follow. Ids as text with {"$toString": "$_id"}. Use $limit for lists (50 rows for tables, 20 bars at most). Return dates as dates (no $dateToString): bbdump formats them in the user\'s language. Group by time with {"$dateTrunc": {"date": "$field", "unit": "week"}}.',
+    'Keep pipelines light: they run on every refresh. $match first (on indexed fields when you can), one pipeline per block, avoid reading a whole big collection without a date condition.',
+    'Filters: when the user wants to filter (a period, a category), add Filters([…]) at the top and use the placeholders in EVERY relevant pipeline, always as whole JSON strings: {"$match": {"created_at": {"$gte": "{{from}}", "$lt": "{{to}}"}}} for the period (bbdump puts dates there), {"$match": {"$expr": {"$or": [{"$eq": ["{{name}}", null]}, {"$eq": ["$field", "{{name}}"]}]}}} for a SelectFilter (null means all). Values are text: compare ids and numbers with {"$toString": "$field"}. Do not use $variables, Select, Input, forms, buttons or the Query refresh interval.',
+    'Search: to find people or things by typing, use SearchFilter (never a SelectFilter of hundreds of emails) with {"$regex": "(?i){{q}}"} on each field searched (inside a longer string bbdump inserts the text escaped, and nothing when the search is empty).',
+    'Linked blocks (master and detail): when the user wants to look at one record and what belongs to it, list the records in a Table with select {filter: "x", column: "id", label: "email"} (id from {"$toString": "$_id"}, hidden with an empty label ""); a click sets {{x}}. Show the record with Record (its pipeline matches {"$expr": {"$eq": [{"$toString": "$_id"}, "{{x}}"]}}, nothing while {{x}} is null) and filter the related blocks with {"$expr": {"$or": [{"$eq": ["{{x}}", null]}, {"$eq": [{"$toString": "$fk"}, "{{x}}"]}]}}. Do not filter the list itself by {{x}}, so the user can pick another one.',
+    'Charts by category (BarChart, DonutChart) can drive the dashboard too: give them select {filter: "status"} and filter the other blocks on "{{status}}" the same way, the chart itself staying unfiltered.',
+    'When asked to explain a block, answer in plain words for someone who does not know MongoDB: what is counted, what is left out, the period, the collections it comes from. No pipeline, no code, no change to the dashboard.',
+    'Field names in charts and Kpis are plucked (q.rows.name): the $project names. Table headers in the user\'s language go in labels; formats (money:EUR, percent, integer, duration, bytes, date, datetime, text) in formats.',
+  ],
+  tool: MONGO_TOOL,
+  examples: [MONGO_EXAMPLE, MONGO_EXAMPLE_LINKED],
+};
+
 /** What the AI is told: who it is, how a dashboard gets its data, how to edit one */
-export function dashboardSystemPrompt(database: string): string {
+export function dashboardSystemPrompt(database: string, engine = 'postgresql'): string {
   const language = LANGUAGE_NAMES[lang()] ?? 'English';
+  const how = engine === 'mongodb' ? MONGO_RULES : SQL_RULES;
   const preamble = [
-    `You are the assistant built into bbdump, a PostgreSQL desktop app. You build and edit a live dashboard for one database: "${database}".`,
+    `You are the assistant built into bbdump, ${how.app}. You build and edit a live dashboard for one database: "${database}".`,
     'It is already the active connection of the bbdump MCP tools (do not call use_connection or list_connections). You can only read: never claim you changed the data.',
-    'Learn the schema with get_schema_overview, then test every SELECT with check_query before putting it in the dashboard (it returns the columns and the row count, no values). Use execute_query only when you must see values (e.g. the distinct values of a status column).',
-    'The dashboard holds NO data: every value comes from Query("sql", {query: "SELECT …"}, {columns: [], rows: []}), which bbdump runs each time the dashboard opens or refreshes, or when a filter changes. Never copy values you read into the program.',
+    how.learn,
+    `The dashboard holds NO data: every value comes from ${how.query}, which bbdump runs each time the dashboard opens or refreshes, or when a filter changes. Never copy values you read into the program.`,
     'The dashboard shows the real data to the user. The anonymization of what you read applies to you only: never mention it in the dashboard.',
     'Each message gives you the current program (or says the dashboard is empty) and the request, sometimes aimed at one block.',
     `Language: write every sentence in ${language}, the language of the app, unless the request is clearly written in another one: the short notes between tool calls, and the labels and titles of the dashboard, included. Never switch to the language the data or the schema happen to be in. In French, address the user with "tu". Be brief: one or two sentences about what you did.`,
   ].join('\n');
   return dashboardLibrary.prompt({
     preamble,
-    tools: [SQL_TOOL],
+    tools: [how.tool],
     editMode: true,
     inlineMode: true,
-    toolExamples: [EXAMPLE, EXAMPLE_LINKED],
+    toolExamples: how.examples,
     additionalRules: [
       'Query defaults are always exactly {columns: [], rows: []}: no sample data.',
-      'SQL: one SELECT per Query, no semicolon, with LIMIT for lists (50 rows for tables, 20 bars at most). Cast counts and sums with ::int or ::float8. Return dates and timestamps as they are (no to_char): bbdump formats them in the user\'s language. Group by time with date_trunc(…)::date.',
-      'Keep queries light: they run on every refresh. Prefer one query per block, aggregate in SQL, avoid scanning big tables without a date condition.',
-      'Filters: when the user wants to filter (a period, a category), add Filters([…]) at the top and use the placeholders in EVERY relevant query: created_at >= {{from}} AND created_at < {{to}} for the period, ({{name}} IS NULL OR col = {{name}}) for a SelectFilter. bbdump binds them as parameters, as text: compare ids with col::text = {{name}}. Do not use $variables, Select, Input, forms, buttons or the Query refresh interval.',
-      'Search: to find people or things by typing, use SearchFilter (never a SelectFilter of hundreds of emails): ({{q}} IS NULL OR name ILIKE \'%\' || {{q}} || \'%\' OR email ILIKE …).',
-      'Linked blocks (master and detail): when the user wants to look at one record and what belongs to it, list the records in a Table with select {filter: "x", column: "id", label: "email"} (hide the id column with an empty label ""); a click sets {{x}}. Show the record with Record (its query returns the row WHERE id::text = {{x}}, nothing while {{x}} is NULL) and filter the related blocks with ({{x}} IS NULL OR fk::text = {{x}}). Do not filter the list itself by {{x}}, so the user can pick another one.',
-      'Charts by category (BarChart, DonutChart) can drive the dashboard too: give them select {filter: "status"} and filter the other blocks with ({{status}} IS NULL OR col = {{status}}), the chart itself staying unfiltered.',
-      'When asked to explain a block, answer in plain words for someone who does not know SQL: what is counted, what is left out, the period, the tables it comes from. No SQL, no code, no change to the dashboard.',
-      'Column aliases in charts and Kpis are plucked (q.rows.alias): simple lowercase ascii aliases. Table headers in the user\'s language go in labels; formats (money:EUR, percent, integer, duration, bytes, date, datetime, text) in formats.',
+      ...how.rules,
       'Key figures: one Kpis block per figure, side by side in a Row (figures = Row([ordersKpi, revenueKpi])), so the user can move and resize each one.',
       'Key figures: add previous (the same measure over the previous period, with the same filters) when it helps, format, and trend (a short series) for the main ones. Several values over time: MultiLineChart, MultiBarChart or StackedBarChart, never several charts or a table instead.',
       'A request the components cannot do exactly: build the closest thing, then say in one sentence what differs. Do not refuse.',

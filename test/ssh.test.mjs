@@ -61,6 +61,27 @@ describe('finding the env file on the server', () => {
   });
 });
 
+describe('MongoDB URLs on the server', () => {
+  test('the search finds MongoDB URLs (names only), MONGODB_URI / MONGO_URL first', { skip: process.platform === 'win32' }, () => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bbdump-envsearch-mongo-'));
+    const write = (rel, text) => { fs.mkdirSync(path.dirname(path.join(home, rel)), { recursive: true }); fs.writeFileSync(path.join(home, rel), text); };
+    write('apps/api/.env', 'APP_DB=mongodb://app:s3cret@localhost:27017/shop?authSource=admin\nMONGODB_URI="mongodb+srv://u:pw@cluster0.x.mongodb.net/shop"\nDATABASE_URL=postgresql://a:b@localhost/c\n');
+    try {
+      const out = execFileSync('sh', ['-s'], { input: ssh.envSearchScript('mongodb'), env: { ...process.env, HOME: home }, encoding: 'utf8', timeout: 60000 });
+      assert.ok(!out.includes('s3cret') && !out.includes('pw@'), 'no secret leaves the server');
+      const mine = ssh.parseEnvSearch(out, 'mongodb').filter(m => m.file.startsWith(home));
+      assert.deepEqual(mine.map(m => [path.relative(home, m.file), m.variables]), [['apps/api/.env', ['MONGODB_URI', 'APP_DB']]]);
+      // The PostgreSQL search is unchanged
+      const pg = execFileSync('sh', ['-s'], { input: ssh.ENV_SEARCH_SCRIPT, env: { ...process.env, HOME: home }, encoding: 'utf8', timeout: 60000 });
+      assert.deepEqual(ssh.parseEnvSearch(pg).filter(m => m.file.startsWith(home)).map(m => m.variables), [['DATABASE_URL']]);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('ports as the form sends them', () => {
   test('an emptied SSH port is left out, so the alias decides (Port 4022 in ~/.ssh/config)', () => {
     const n = ssh.normalizeSshPorts({ host: 'my-vps', port: '', remoteHost: 'localhost', remotePort: 5432 });

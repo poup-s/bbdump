@@ -6,6 +6,7 @@ import { config, errorResult, MAX_TIMEOUT_MS, type ToolResult } from './types.js
 import type { ConnectionParams } from './connections.js';
 import { reachThroughApp } from './tunnel.js';
 import { chatScope } from './chatScope.js';
+import { activeMongo, clearMongo } from './mongo/client.js';
 
 const { Pool } = pg;
 
@@ -100,6 +101,11 @@ function newPool(database: string, ssl: tls.ConnectionOptions | undefined, key: 
 }
 
 export function getPool(database?: string): pg.Pool {
+  // Otherwise the previous PostgreSQL connection would be read without the AI knowing
+  const mongo = activeMongo();
+  if (mongo) {
+    throw new Error(`The active connection is the MongoDB database "${mongo.label}": use the mongo_* tools, or use_connection on a PostgreSQL database.`);
+  }
   const db = database || activeConnection.database;
   // A chat on one database cannot read the other databases of its server
   if (chatScope.databaseId && db !== activeConnection.database) {
@@ -147,6 +153,9 @@ export async function getClient(database?: string): Promise<PoolClient> {
 /** A tip for errors a model can fix by itself (wrong connection, missing table…) */
 export function explainError(err: any): string {
   const message: string = err?.message || String(err);
+  // A failed switch away from MongoDB: the PostgreSQL connection below is not the active one
+  const mongo = activeMongo();
+  if (mongo) return message.includes('MongoDB') ? message : `${message}. The active connection is still the MongoDB database "${mongo.label}".`;
   const code: string | undefined = err?.code;
   if (/role ".*" does not exist|password authentication failed|no pg_hba.conf entry/.test(message)) {
     return `${message}. The active connection is ${activeConnection.user}@${activeConnection.host}:${activeConnection.port}/${activeConnection.database}: use list_connections then use_connection to pick a database saved in bbdump.`;
@@ -253,6 +262,7 @@ export async function executeDryRun(
 }
 
 export async function closeAll(): Promise<void> {
+  await clearMongo();
   for (const [key, pool] of Array.from(pools.entries())) {
     console.error(`Closing pool: ${key}`);
     await pool.end().catch((e) => console.error(`Failed to close pool ${key}:`, (e as Error).message));

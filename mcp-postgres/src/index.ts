@@ -4,13 +4,21 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createServer } from './server.js';
 import { closeAll, setActiveConnection } from './db.js';
 import { chatScope } from './chatScope.js';
-import { findDatabase, getConnectionParams } from './connections.js';
+import { findDatabase, getConnectionParams, getMongoTarget, savedEngine } from './connections.js';
+import { useMongo } from './mongo/client.js';
 import { reachThroughApp } from './tunnel.js';
 
 /** A chat on one database: connected to it before the first call */
 async function connectChatDatabase(): Promise<void> {
   if (!chatScope.databaseId) return;
   try {
+    // MongoDB: only while the AI may read it (otherwise the database is not offered at all)
+    if (savedEngine(chatScope.databaseId) === 'mongodb') {
+      const mongo = getMongoTarget(chatScope.databaseId);
+      if (!mongo) throw new Error('saved database not found');
+      await useMongo(mongo.id, mongo.label, mongo.target, mongo.sshDatabaseId);
+      return;
+    }
     const params = getConnectionParams(chatScope.databaseId);
     if (!params) throw new Error('saved database not found');
     const saved = findDatabase(chatScope.databaseId);

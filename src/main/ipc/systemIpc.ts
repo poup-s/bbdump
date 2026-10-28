@@ -5,6 +5,8 @@ import * as path from 'path';
 import { logger } from '../logger';
 import { pathManager } from '../paths';
 import { backupManager } from '../backup';
+import { facetFor } from '../engines/registry';
+import { engineOf } from '../../shared/engines/features';
 import { checkForUpdates, downloadUpdate, quitAndInstall, supportsAutoInstall } from '../updateChecker';
 import { toRuntimeDatabase } from '../dbSecrets';
 import { listBackupEntries, runBackupNow } from '../backupActions';
@@ -125,12 +127,16 @@ export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null
                     password: runtime.password,
                     connectionString: runtime.connectionString ?? target.connectionString,
                     ssl: saved.ssl, sslMode: saved.sslMode, sslRootCert: saved.sslRootCert,
+                    // MongoDB: the authentication database of a database entered field by field
+                    mongo: saved.mongo,
                 };
             }
+            // Restored by the target's engine (feature flag checked first)
+            const engineRestore = await facetFor(engineOf(saved), 'restore.replace', 'restore');
             // A database on a server: through its SSH tunnel, kept open for the whole restore
             const merged = { ...target, ...fromSaved, ssh: saved?.ssh };
             // The target's content is replaced unless the caller says otherwise
-            return await withTunnel(merged, reached => backupManager.restoreBackup(backupFile, reached, { replace: payload.replace !== false }));
+            return await withTunnel(merged, reached => engineRestore.restore(backupFile, reached, { replace: payload.replace !== false }));
         } catch (error) {
             logger.error(`Error during restore: ${error}`);
             return {
@@ -152,6 +158,12 @@ export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null
             logger.error(`Error retrieving backups: ${error}`);
             return { backups: [], stats: { total: 0, totalSize: 0 } };
         }
+    });
+
+    /** Which engine a backup file comes from (its database, else its first bytes); null when unknown */
+    ipcMain.handle('backup-engine', async (_, filename: string) => {
+        const entry = listBackupEntries(getConfig()).find(e => e.file === filename || e.filename === filename);
+        return entry?.engine ?? null;
     });
 
     ipcMain.handle('delete-backup', async (_, filename: string) => {

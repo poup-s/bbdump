@@ -9,6 +9,7 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
+import { useFeatures } from '../composables/useFeatures';
 import { ipcRenderer } from '../electron';
 import { getErrorMessage } from '../utils';
 import { describeCron } from '../cronText';
@@ -55,7 +56,9 @@ const load = async () => {
   }
 };
 
-const dbOf = (id: string) => store.databases.find(d => d.id === id);
+const { isEnabled } = useFeatures();
+/** Only databases whose engine runs scheduled backups have a task */
+const dbOf = (id: string) => store.databases.find(d => d.id === id && isEnabled(d, 'backup.schedule'));
 const nameOf = (id: string) => { const db = dbOf(id); return db ? db.displayName || db.name : id; };
 
 /**

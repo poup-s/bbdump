@@ -1,5 +1,13 @@
 export interface DatabaseConfig {
   id: string;
+  /**
+   * Engine of the database (v1.5): absent means PostgreSQL, so configs written before stay
+   * valid. Kept as written even when unknown (saved by a newer bbdump): such a database is
+   * listed but every feature is off, it never falls back to PostgreSQL.
+   */
+  engine?: string;
+  /** MongoDB only, for a database entered field by field (a URL carries its own options) */
+  mongo?: MongoSettings;
   isLocalBbdump?: boolean;
   name: string;
   displayName?: string;
@@ -37,13 +45,18 @@ export interface DatabaseConfig {
   viaTunnel?: boolean;
 }
 
+export interface MongoSettings {
+  /** Database holding the user (MongoDB's default: admin when a user is given) */
+  authSource?: string;
+}
+
 export interface SshSettings {
   /** Alias from ~/.ssh/config, or host name / address */
   host: string;
   /** Only when the alias does not set them */
   user?: string;
   port?: number;
-  /** PostgreSQL as seen from the server (usually localhost:5432) */
+  /** The database as seen from the server (usually localhost:5432, or :27017 for MongoDB) */
   remoteHost: string;
   remotePort: number;
   /** Where the credentials were read on the server, to read them again */

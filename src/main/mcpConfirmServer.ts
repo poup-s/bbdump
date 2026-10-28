@@ -261,11 +261,13 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse) {
       }
       if (summary.undoneAt) return reply({ success: false, error: `Already undone on ${summary.undoneAt}` });
       if (!summary.undo.available) return reply({ success: false, error: `This change has no undo point: ${summary.undo.reason ?? 'not captured'}` });
+      const items = summary.engine === 'mongodb' ? 'document(s)' : 'row(s)';
       const answer = await askUser({
         tool: 'undo_change',
         database: summary.connection.label ?? summary.connection.database,
         sql: summary.sql,
-        description: `UNDO ${summary.tool} of ${new Date(summary.createdAt).toLocaleString()}: ${summary.description}. The ${summary.undo.rows} row(s) it touched get their previous state back.`,
+        ...(summary.engine ? { engine: summary.engine } : {}),
+        description: `UNDO ${summary.tool} of ${new Date(summary.createdAt).toLocaleString()}: ${summary.description}. The ${summary.undo.rows} ${items} it touched get their previous state back.`,
       });
       if (!answer.approved) return reply({ success: false, refused: answer.reason !== 'timeout' && answer.reason !== 'no_window', error: answer.reason ?? 'refused' });
       return reply(await journal.undoChange(changeId));

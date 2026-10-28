@@ -2,8 +2,10 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { ipcRenderer } from '../electron';
 import { useI18n } from '../composables/useI18n';
+import { useFeatures } from '../composables/useFeatures';
 
 const { t, setLanguage } = useI18n();
+const { isEnabled } = useFeatures();
 
 interface TrayDatabase {
   id: string;
@@ -51,6 +53,8 @@ interface McpConfirmRequest {
   schema?: string;
   sql: string;
   description?: string;
+  /** Absent: PostgreSQL. mongodb: a collection and a shell-like command */
+  engine?: string;
   rows?: number;
   columns?: DisclosedColumn[];
 }
@@ -179,7 +183,8 @@ const loadData = async () => {
   try {
     const config = await ipcRenderer.invoke('get-config');
     if (config?.language) setLanguage(config.language);
-    databases.value = (config?.databases || []).map((db: TrayDatabase) => ({
+    // The popup backs databases up: only engines that do
+    databases.value = (config?.databases || []).filter((db: { engine?: string }) => isEnabled(db, 'backup.run')).map((db: TrayDatabase) => ({
       id: db.id,
       name: db.name,
       displayName: db.displayName,
@@ -312,16 +317,16 @@ onUnmounted(() => {
             </div>
             <div class="flex items-center justify-between gap-2">
               <span class="text-[10px] text-zinc-500 font-mono">{{ mcpConfirm.tool }}</span>
-              <span class="text-[11px] text-zinc-300">{{ t('mcp.discloseRows', { count: mcpConfirm.rows ?? 0 }) }}</span>
+              <span class="text-[11px] text-zinc-300">{{ t(mcpConfirm.engine === 'mongodb' ? 'mcp.discloseDocuments' : 'mcp.discloseRows', { count: mcpConfirm.rows ?? 0 }) }}</span>
             </div>
           </div>
 
           <div>
-            <div class="text-[10px] text-zinc-500 mb-1">{{ t('mcp.discloseColumns') }}</div>
+            <div class="text-[10px] text-zinc-500 mb-1">{{ t(mcpConfirm.engine === 'mongodb' ? 'mcp.discloseFields' : 'mcp.discloseColumns') }}</div>
             <ul class="rounded-lg border border-zinc-800 divide-y divide-zinc-800">
               <li v-for="c in mcpConfirm.columns" :key="c.name">
                 <label class="flex items-start gap-2 px-2 py-1.5 cursor-pointer">
-                  <input type="checkbox" class="mt-0.5 accent-sky-500" :checked="discloseMask.has(c.name)" @change="toggleDisclosed(c.name)" />
+                  <input type="checkbox" class="mt-0.5 accent-sky-500" :checked="discloseMask.has(c.name)" :disabled="mcpConfirm.engine === 'mongodb' && c.origin === 'rule'" @change="toggleDisclosed(c.name)" />
                   <span class="min-w-0 flex-1">
                     <span class="flex items-center gap-1.5">
                       <span class="text-[11px] font-mono text-white truncate">{{ c.name }}</span>
@@ -337,12 +342,12 @@ onUnmounted(() => {
           </div>
 
           <details>
-            <summary class="text-[10px] text-zinc-500 cursor-pointer">{{ t('mcp.sql') }}</summary>
+            <summary class="text-[10px] text-zinc-500 cursor-pointer">{{ mcpConfirm.engine === 'mongodb' ? t('mcp.command') : t('mcp.sql') }}</summary>
             <pre class="mt-1 p-2 bg-black rounded-lg text-[10px] text-emerald-400 font-mono max-h-[100px] overflow-y-auto whitespace-pre-wrap break-all border border-zinc-800">{{ mcpConfirm.sql }}</pre>
           </details>
 
           <div class="flex items-center gap-2">
-            <span class="text-[10px] text-amber-400">{{ t('mcp.discloseTimeout', { seconds: countdown }) }}</span>
+            <span class="text-[10px] text-amber-400">{{ t(mcpConfirm.engine === 'mongodb' ? 'mcp.discloseTimeoutFields' : 'mcp.discloseTimeout', { seconds: countdown }) }}</span>
             <div class="flex-1 h-1 bg-zinc-800 rounded-full overflow-hidden">
               <div class="h-full bg-amber-500 rounded-full transition-all duration-1000 ease-linear" :style="{ width: `${(countdown / 60) * 100}%` }"></div>
             </div>
@@ -388,7 +393,7 @@ onUnmounted(() => {
               <span class="text-[11px] font-semibold text-white font-mono">{{ mcpConfirm.database }}</span>
             </div>
             <div v-if="mcpConfirm.table" class="flex items-center justify-between">
-              <span class="text-[10px] text-zinc-500">{{ t('mcp.table') }}</span>
+              <span class="text-[10px] text-zinc-500">{{ mcpConfirm.engine === 'mongodb' ? t('mcp.collection') : t('mcp.table') }}</span>
               <span class="text-[11px] font-semibold text-white font-mono">
                 {{ mcpConfirm.schema ? `${mcpConfirm.schema}.` : '' }}{{ mcpConfirm.table }}
               </span>
@@ -402,7 +407,7 @@ onUnmounted(() => {
 
           <!-- SQL Preview -->
           <div>
-            <div class="text-[10px] text-zinc-500 mb-1">{{ t('mcp.sql') }}</div>
+            <div class="text-[10px] text-zinc-500 mb-1">{{ mcpConfirm.engine === 'mongodb' ? t('mcp.command') : t('mcp.sql') }}</div>
             <pre class="p-2 bg-black rounded-lg text-[10px] text-emerald-400 font-mono overflow-x-auto max-h-[120px] overflow-y-auto whitespace-pre-wrap break-all border border-zinc-800">{{ mcpConfirm.sql }}</pre>
           </div>
 

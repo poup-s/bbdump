@@ -1,5 +1,60 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **AI assistants (MCP):** Mistral Vibe joins the clients bbdump connects in one click: an entry
+  is added to `~/.vibe/config.toml` (or `$VIBE_HOME`), the rest of the file staying as it was.
+  Vibe then reaches bbdump's tools from its own sessions; every change still asks you first in
+  bbdump.
+- **MongoDB databases.** **Add an external connection** offers MongoDB: a `mongodb://` or
+  `mongodb+srv://` URL (Atlas, several hosts, options) or the address field by field, with TLS and
+  the authentication database, and a connection test. A MongoDB database is listed with its size
+  and a MongoDB badge, and is backed up like a PostgreSQL one: now or on a schedule, into its
+  folder, with retention, encryption and verification (one compressed `mongodump` archive per
+  backup, read back to its end by bbdump). Restoring checks the archive first (a damaged one is
+  refused before anything changes), then replaces the collections the backup holds, into the same
+  database or another one; a MongoDB backup is only offered for MongoDB databases, and a
+  PostgreSQL one for PostgreSQL. Needs the MongoDB Database Tools (`mongodump`, `mongorestore`); the error says how
+  to install them. **View** opens an explorer made for documents: the
+  collections and views with their size, the documents in a table or as JSON (a JSON filter, with
+  Extended JSON for ObjectIds and dates, sort, pages), one document in full, which you can edit as
+  JSON or delete, and **Add a document**. A change is refused when the document changed since you
+  read it, and the types you did not touch (dates, longs, doubles, ObjectIds) stay as they were; a
+  view cannot be edited. An **Aggregation** tab runs a pipeline on the collection (up to 500
+  results, as a table or JSON; `$out`, `$merge` and server JavaScript are refused), and a **Schema and
+  indexes** tab with the fields found in 500 documents picked at random (how often each is present,
+  its types, nested fields and arrays) and the indexes (unique, partial, TTL…). Filters that would
+  run JavaScript on the server are refused. AI assistants connected to bbdump (MCP) work on
+  MongoDB databases too: they appear in the list of connections, and tools list the collections,
+  describe one (fields from a sample, indexes), find and count documents and run aggregations
+  (those that write, `$out` and `$merge`, and server JavaScript are refused). They can also insert,
+  update and delete documents: each change waits for your approval in bbdump, showing the
+  collection and the command, and keeps the documents before and after (encrypted) so it can be
+  undone, by the assistant or from the AI journal of the database. Undoing refuses when the
+  documents changed since and shows which; types (dates, integers, ObjectIds…) come back exactly.
+  **Anonymize for AI** works on MongoDB databases too: it lists the fields found in a sample of
+  each collection (nested ones and array items included, such as `customer.email` or
+  `items[].email`), the ones that look personal already chosen, with the same replacements as
+  for PostgreSQL. Those fields reach the AI anonymized; a result that may carry them under another
+  name (an aggregation or a projection that reads them, a view) is shown to you first, and you
+  choose what is anonymized, or block it. The
+  **database chat** opens on MongoDB databases too, read only like for PostgreSQL: the AI uses
+  the MongoDB tools, the suggestions speak of collections and documents, and a result that may
+  carry anonymized fields is asked about in the chat itself. A MongoDB database on a server can
+  also be reached **through SSH**, like a PostgreSQL one: bbdump finds its URL in the server's
+  `.env` files (or you paste it), then goes through your `ssh` for the explorer, backups,
+  restores, the AI assistants and the chat. One server is reached directly (a `mongodb+srv://`
+  URL or several hosts cannot go through a tunnel). **Dashboards** work on MongoDB databases
+  too: the AI reads the collections, tries each aggregation, then builds the dashboard; every block
+  is a read-only aggregation that bbdump runs like the SQL ones (filters by period, by value,
+  search, linked blocks, refresh, exports). **Edit the query** shows a block's aggregation laid
+  out, to try and change by hand. A dashboard file or a copy only goes on a database of the same
+  kind (PostgreSQL or MongoDB).
+  As for PostgreSQL, a password pasted in the URL is taken out of it and kept encrypted; the tools
+  get the connection from a temporary file only you can read, never on their command line.
+
 ## 1.4.0 — 2026-10-22
 
 ### Added
