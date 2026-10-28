@@ -50,6 +50,8 @@ fs.writeFileSync(path.join(outDir, 'package.json'), JSON.stringify(stagedPkg, nu
 fs.copyFileSync(path.join(mcpDir, 'package-lock.json'), path.join(outDir, 'package-lock.json'));
 
 execSync('npm ci --omit=dev --ignore-scripts --no-audit --no-fund', { cwd: outDir, stdio: 'inherit' });
+// Type declarations only, installed as peer dependencies (mysql2 asks for @types/node): no runtime code
+fs.rmSync(path.join(outDir, 'node_modules', '@types'), { recursive: true, force: true });
 
 // Sanity checks: no dev-only packages, entry point present.
 for (const devDep of Object.keys(pkg.devDependencies || {})) {
