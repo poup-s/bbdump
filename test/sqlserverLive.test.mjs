@@ -179,7 +179,8 @@ describe('SQL Server for real', { skip: server ? false : 'BBDUMP_TEST_SQLSERVER 
     assert.deepEqual([capped.rows.length, capped.truncated], [25, true]);
     const started = Date.now();
     await assert.rejects(
-      query.run(ids.source, { sql: 'SELECT COUNT_BIG(*) AS n FROM sys.all_objects a CROSS JOIN sys.all_objects b CROSS JOIN sys.all_objects c', timeoutMs: 1500 }),
+      // A recursion the server cannot shortcut (it counts a cross join of catalogs at once)
+      query.run(ids.source, { sql: 'WITH c AS (SELECT CAST(1 AS bigint) AS x UNION ALL SELECT x + 1 FROM c WHERE x < 100000000) SELECT COUNT_BIG(*) AS n FROM c OPTION (MAXRECURSION 0)', timeoutMs: 1500 }),
       /stopped/);
     assert.ok(Date.now() - started < 6000, `${Date.now() - started} ms`);
     assert.equal(Number((await query.run(ids.source, { sql: 'SELECT COUNT(*) AS n FROM orders' })).rows[0].n), 12);
