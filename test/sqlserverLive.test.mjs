@@ -317,8 +317,9 @@ describe('SQL Server for real', { skip: server ? false : 'BBDUMP_TEST_SQLSERVER 
       await assert.rejects(client.readQuery('SELECT 1 AS x DELETE FROM orders'), /allowed/);
       assert.throws(() => client.sqlActive('mcp.write'), /read-only/);
       assert.ok((await client.explainSqlServer('SELECT * FROM orders WHERE id = 1')).rows.length > 0);
-      await client.clearSql();
     } finally {
+      // An open pool keeps the process alive
+      await client.clearSql();
       if (saved === undefined) delete process.env.BBDUMP_CONFIG_PATH;
       else process.env.BBDUMP_CONFIG_PATH = saved;
     }

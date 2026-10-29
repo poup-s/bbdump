@@ -236,7 +236,7 @@ describe('MCP server', { skip: built ? false : 'mcp-postgres is not built (npm r
   });
 
   test('the helpers copied from src/shared are those of this build', () => {
-    for (const file of ['mongoUri.ts', 'documents.ts', 'duckdbCli.ts']) {
+    for (const file of ['mongoUri.ts', 'documents.ts', 'duckdbCli.ts', 'sqlserverUri.ts']) {
       const copy = path.join(process.cwd(), 'mcp-postgres', 'src', 'shared', file);
       if (!fs.existsSync(copy)) continue;
       const source = fs.readFileSync(path.join(process.cwd(), 'src', 'shared', 'engines', file), 'utf8');

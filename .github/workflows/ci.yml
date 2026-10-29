@@ -171,7 +171,7 @@ jobs:
         env:
           BBDUMP_TEST_SQLSERVER: 127.0.0.1:1433
           BBDUMP_TEST_SQLSERVER_PASSWORD: Ci-Sql-Pw-2026!
-        run: node --test test/sqlserverLive.test.mjs
+        run: node --test --test-timeout=180000 test/sqlserverLive.test.mjs
 
       # The project proxy (an app's login answered by bbdump) and the local server (account, databases)
       - name: Project proxy and local server on the three servers

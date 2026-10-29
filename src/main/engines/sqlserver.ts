@@ -684,8 +684,18 @@ export function createIndexSql(line: Extract<Line, { t: 'index' }>): string {
 
 const SPATIAL = ['geography', 'geometry', 'hierarchyid'];
 
-/** Inserts one `rows` line: at most 2100 parameters and 1000 rows per statement */
-async function insertRows(tx: Transaction, table: string, line: Extract<Line, { t: 'rows' }>, columns: DumpColumn[]): Promise<void> {
+/** A batch of its own (not through sp_executesql): its SET options stay for the session */
+async function runBatch(tx: Transaction, sql: string): Promise<void> {
+    const types = await mssql();
+    await new types.Request(tx).batch(sql);
+}
+
+/**
+ * Inserts one `rows` line: at most 2100 parameters and 1000 rows per statement. With an identity
+ * column, IDENTITY_INSERT is turned on in the same request: parameterized requests run through
+ * sp_executesql, where a SET only lasts for that request.
+ */
+async function insertRows(tx: Transaction, table: string, line: Extract<Line, { t: 'rows' }>, columns: DumpColumn[], identity: boolean): Promise<void> {
     const types = await mssql();
     const kinds = line.columns.map(name => columns.find(c => c.name === name));
     const perStatement = Math.max(1, Math.min(1000, Math.floor(2000 / Math.max(1, line.columns.length))));
@@ -700,7 +710,8 @@ async function insertRows(tx: Transaction, table: string, line: Extract<Line, { 
             const base = kinds[i]?.base ?? '';
             return SPATIAL.includes(base) ? `CAST(@${name} AS ${base})` : `@${name}`;
         }).join(', ')})`);
-        await request.query(`INSERT INTO ${table} (${line.columns.map(q).join(', ')}) VALUES ${values.join(', ')}`);
+        const insert = `INSERT INTO ${table} (${line.columns.map(q).join(', ')}) VALUES ${values.join(', ')};`;
+        await request.query(identity ? `SET IDENTITY_INSERT ${table} ON; ${insert} SET IDENTITY_INSERT ${table} OFF;` : insert);
     }
 }
 
@@ -713,12 +724,6 @@ async function replayBackup(tx: Transaction, file: string): Promise<{ tables: nu
     let rows = 0;
     let tables = 0;
     let skipped: string[] = [];
-    let identityOn: string | null = null;
-    const identityOff = async () => {
-        if (!identityOn) return;
-        await run(tx, `SET IDENTITY_INSERT ${identityOn} OFF`);
-        identityOn = null;
-    };
     for await (const line of readBackup(file)) {
         switch (line.t) {
             case 'header':
@@ -733,7 +738,6 @@ async function replayBackup(tx: Transaction, file: string): Promise<{ tables: nu
                 break;
             }
             case 'table':
-                await identityOff();
                 await run(tx, createTableSql(line));
                 tableColumns.set(`${line.schema}.${line.name}`, line.columns);
                 if (line.identity) identities.set(`${line.schema}.${line.name}`, line.identity.last);
@@ -742,30 +746,21 @@ async function replayBackup(tx: Transaction, file: string): Promise<{ tables: nu
             case 'rows': {
                 const key = `${line.schema}.${line.name}`;
                 const table = qualified(line.schema, line.name);
-                if (identities.has(key) && identityOn !== table) {
-                    await identityOff();
-                    await run(tx, `SET IDENTITY_INSERT ${table} ON`);
-                    identityOn = table;
-                }
-                await insertRows(tx, table, line, tableColumns.get(key) ?? []);
+                await insertRows(tx, table, line, tableColumns.get(key) ?? [], identities.has(key));
                 rows += line.rows.length;
                 filled.add(key);
                 break;
             }
             case 'index':
-                await identityOff();
                 await run(tx, createIndexSql(line));
                 break;
             case 'check':
-                await identityOff();
                 await run(tx, `ALTER TABLE ${qualified(line.schema, line.table)} WITH ${line.trusted ? 'CHECK' : 'NOCHECK'} ADD CONSTRAINT ${q(line.name)} CHECK ${line.definition}`);
                 break;
             case 'fk':
-                await identityOff();
                 await run(tx, `ALTER TABLE ${qualified(line.schema, line.table)} WITH ${line.trusted ? 'CHECK' : 'NOCHECK'} ADD CONSTRAINT ${q(line.name)} FOREIGN KEY (${line.columns.map(q).join(', ')}) REFERENCES ${qualified(line.refSchema, line.refTable)} (${line.refColumns.map(q).join(', ')}) ON DELETE ${line.onDelete} ON UPDATE ${line.onUpdate}`);
                 break;
             case 'module':
-                await identityOff();
                 modules.push(line);
                 break;
             case 'end':
@@ -773,7 +768,6 @@ async function replayBackup(tx: Transaction, file: string): Promise<{ tables: nu
                 break;
         }
     }
-    await identityOff();
     // Identities go on where the source was (rows deleted there do not give their ids again)
     for (const [key, last] of identities) {
         if (last === null || !filled.has(key)) continue;
@@ -788,16 +782,17 @@ async function replayBackup(tx: Transaction, file: string): Promise<{ tables: nu
         for (const module of left) {
             await run(tx, 'SAVE TRANSACTION bbdump_module');
             try {
-                // CREATE VIEW / PROCEDURE… must be alone in its batch; its SET options are its own
-                await run(tx, `SET QUOTED_IDENTIFIER ${module.quotedIdentifier ? 'ON' : 'OFF'}; SET ANSI_NULLS ${module.ansiNulls ? 'ON' : 'OFF'};`);
-                await run(tx, module.definition);
+                // Its SET options as it was created with (a batch of its own, so they last), then
+                // CREATE VIEW / PROCEDURE… alone in its batch
+                await runBatch(tx, `SET QUOTED_IDENTIFIER ${module.quotedIdentifier ? 'ON' : 'OFF'}; SET ANSI_NULLS ${module.ansiNulls ? 'ON' : 'OFF'};`);
+                await runBatch(tx, module.definition);
             } catch (error) {
                 if (await transactionState(tx) !== 1) throw error;
                 await run(tx, 'ROLLBACK TRANSACTION bbdump_module');
                 lastError = getErrorMessage(error);
                 failed.push(module);
             } finally {
-                await run(tx, 'SET QUOTED_IDENTIFIER ON; SET ANSI_NULLS ON;').catch(() => {});
+                await runBatch(tx, 'SET QUOTED_IDENTIFIER ON; SET ANSI_NULLS ON;').catch(() => {});
             }
         }
         if (failed.length === left.length) throw new Error(`${failed.map(m => `${m.schema}.${m.name}`).join(', ')} could not be created: ${lastError}`);
