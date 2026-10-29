@@ -22,8 +22,9 @@ export const qi = (name: string) => {
 
 // --- DuckDB --------------------------------------------------------------------------------------
 
-const DUCK_OBJECTS = `SELECT schema_name AS s, table_name AS n, 'table' AS kind, estimated_size AS estimate FROM duckdb_tables() WHERE database_name = current_database() AND NOT internal
-  UNION ALL SELECT schema_name, view_name, 'view', NULL FROM duckdb_views() WHERE database_name = current_database() AND NOT internal
+// DuckDB 1.x orders a UNION by its columns only: the order goes outside it
+const DUCK_OBJECTS = `SELECT * FROM (SELECT schema_name AS s, table_name AS n, 'table' AS kind, estimated_size AS estimate FROM duckdb_tables() WHERE database_name = current_database() AND NOT internal
+  UNION ALL SELECT schema_name, view_name, 'view', NULL FROM duckdb_views() WHERE database_name = current_database() AND NOT internal) objects
   ORDER BY s = 'main' DESC, s, n`;
 const duckName = (row: Row) => (row.s === 'main' ? String(row.n) : `${row.s}.${row.n}`);
 

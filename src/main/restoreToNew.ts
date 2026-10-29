@@ -18,6 +18,7 @@ import { withSavedMongo } from './engines/mongodb';
 import { toRuntimeDatabase } from './dbSecrets';
 import { withTunnel } from './sshTunnel';
 import { listBackupEntries } from './backupActions';
+import { readArchiveEngine } from './backupFormat';
 import { logger } from './logger';
 import { getErrorMessage } from './utils';
 
@@ -109,9 +110,10 @@ export async function restoreToNewDatabase(params: RestoreToNewParams): Promise<
     const backupEngine = listBackupEntries(config).find(e => e.file === params.backupFile || e.filename === params.backupFile)?.engine;
 
     if (params.file !== undefined) {
-      // A file engine: SQLite or DuckDB, as the backup says
-      const fileEngine = backupEngine === 'duckdb' || params.engine === 'duckdb' ? 'duckdb' : 'sqlite';
-      if (backupEngine && backupEngine !== fileEngine) throw new Error(`This backup is not a ${fileEngine === 'duckdb' ? 'DuckDB' : 'SQLite'} one`);
+      // A file engine: SQLite or DuckDB, as the backup says (its listing, the dialog, else its first bytes), else the new file's name
+      const known = backupEngine ?? params.engine ?? (path.isAbsolute(params.backupFile) ? readArchiveEngine(params.backupFile) : undefined);
+      const fileEngine = known === 'duckdb' || (!known && /\.(duckdb|ddb)$/i.test(String(params.file))) ? 'duckdb' : 'sqlite';
+      if (known && known !== fileEngine) throw new Error(`This backup is not a ${fileEngine === 'duckdb' ? 'DuckDB' : 'SQLite'} one`);
       const pattern = fileEngine === 'duckdb' ? DUCKDB_FILE : SQLITE_FILE;
       const file = path.resolve(String(params.file));
       if (!pattern.test(file)) throw new Error(fileEngine === 'duckdb' ? 'Choose a .duckdb file' : 'Choose a .sqlite or .db file');

@@ -80,6 +80,15 @@ before(() => {
       'CREATE SEQUENCE id_seq;',
       ...schemaSql("DEFAULT nextval('id_seq')", 'TIMESTAMP').map(sql => `${sql};`),
       ...seedStatements().map(([sql, values]) => `${bindDuckdb(sql, values)};`),
+      // What else a DuckDB file holds, in another schema
+      'CREATE SCHEMA sales;',
+      "CREATE TYPE sales.mood AS ENUM ('ok', 'bad');",
+      'CREATE SEQUENCE sales.n START 100;',
+      "CREATE TABLE sales.notes (id INTEGER DEFAULT nextval('sales.n') PRIMARY KEY, mood sales.mood, body VARCHAR);",
+      'CREATE INDEX notes_body ON sales.notes (body);',
+      "INSERT INTO sales.notes (mood, body) VALUES ('ok', 'first');",
+      'CREATE VIEW sales.recent AS SELECT * FROM sales.notes;',
+      'CREATE MACRO sales.twice(x) AS x * 2;',
     ].join('\n');
     const env = { ...process.env, AI_AGENT: '', CLAUDECODE: '' };
     execFileSync('duckdb', [duckFile], { input: script, env });
@@ -234,7 +243,8 @@ for (const label of ['SQLite', 'MySQL', 'MariaDB', 'DuckDB']) {
       assert.equal(dumped.success, true, dumped.error);
       const { readArchiveEngine } = require(path.join(root, 'dist/main/backupFormat.js'));
       assert.equal(readArchiveEngine(dumped.filePath), e.engine);
-      if (e.engine !== 'sqlite' && password) assert.ok(!zlib.gunzipSync(fs.readFileSync(dumped.filePath)).toString().includes(password));
+      // A MySQL / MariaDB dump (gzip) never holds the password; SQLite and DuckDB have none
+      if (!['sqlite', 'duckdb'].includes(e.engine) && password) assert.ok(!zlib.gunzipSync(fs.readFileSync(dumped.filePath)).toString().includes(password));
       const target = config.databases.find(d => d.id === e.copy);
       const records = await registry.facetForDb(e.copy, 'explorer.browse', 'records');
       for (let round = 0; round < 2; round++) {
@@ -245,6 +255,16 @@ for (const label of ['SQLite', 'MySQL', 'MariaDB', 'DuckDB']) {
       const catalog = await registry.facetForDb(e.copy, 'explorer.browse', 'catalog');
       const schema = (await catalog.listNamespaces(e.copy)).schemas[0].name;
       assert.deepEqual((await catalog.listEntities(e.copy, schema)).tables.map(x => x.name), ['customers', 'orders', 'users']);
+      if (e.engine === 'duckdb') {
+        // Another schema, its ENUM type, sequence (at its next value), index, view and macro came along
+        const query = await registry.facetForDb(e.copy, 'explorer.query', 'query');
+        const one = async (sql) => (await query.run(e.copy, { sql })).rows[0];
+        assert.deepEqual(await one("SELECT count(*) AS n, min(mood::VARCHAR) AS mood FROM sales.notes"), { n: 1, mood: 'ok' });
+        assert.equal(Number((await one("SELECT start_value AS s FROM duckdb_sequences() WHERE sequence_name = 'n'")).s), 101);
+        assert.equal(Number((await one("SELECT count(*) AS n FROM duckdb_indexes() WHERE index_name = 'notes_body'")).n), 1);
+        assert.equal(Number((await one('SELECT count(*) AS n FROM sales.recent')).n), 1);
+        assert.equal(Number((await one('SELECT sales.twice(21) AS n')).n), 42);
+      }
     });
 
     test('backup restored into a new database, saved in bbdump; a failed one leaves nothing', async (t) => {

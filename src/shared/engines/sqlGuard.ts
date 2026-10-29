@@ -1,10 +1,11 @@
 /**
- * Read-only SQL for MySQL, MariaDB and SQLite (pure: app, MCP server and tests). The engines
- * refuse writes themselves (a READ ONLY transaction, a read-only SQLite connection); this check
- * comes first because MySQL commits DDL on its own, before the transaction could refuse it.
+ * Read-only SQL for MySQL, MariaDB, SQLite, DuckDB and SQL Server (pure: app, MCP server and
+ * tests). The engines refuse writes themselves (a READ ONLY transaction, a read-only
+ * connection, a SQL Server transaction always rolled back); this check comes first because
+ * MySQL commits DDL on its own, before the transaction could refuse it.
  */
 
-export type SqlDialect = 'mysql' | 'sqlite' | 'duckdb';
+export type SqlDialect = 'mysql' | 'sqlite' | 'duckdb' | 'tsql';
 
 /**
  * The SQL without comments and literals (strings become '', quoted identifiers ""), so that a
@@ -35,7 +36,7 @@ export function stripSql(sql: string, dialect: SqlDialect): string {
             i = end === -1 ? text.length : end + 2;
             continue;
         }
-        if (c === "'" || c === '"' || c === '`' || (c === '[' && dialect === 'sqlite')) {
+        if (c === "'" || c === '"' || c === '`' || (c === '[' && (dialect === 'sqlite' || dialect === 'tsql'))) {
             const close = c === '[' ? ']' : c;
             let j = i + 1;
             while (j < text.length) {
@@ -74,7 +75,15 @@ const READ_STARTS: Record<SqlDialect, string[]> = {
     sqlite: ['SELECT', 'WITH', 'EXPLAIN', 'VALUES', '(', 'PRAGMA'],
     // DuckDB also starts queries with FROM, and describes with DESCRIBE / SUMMARIZE / SHOW (the connection is read-only too)
     duckdb: ['SELECT', 'WITH', 'FROM', 'EXPLAIN', 'VALUES', '(', 'DESCRIBE', 'DESC', 'SUMMARIZE', 'SHOW', 'TABLE', 'PIVOT', 'UNPIVOT'],
+    tsql: ['SELECT', 'WITH', '('],
 };
+
+/**
+ * T-SQL needs no ";" between statements ("SELECT 1 DELETE FROM t COMMIT" is three): a reading
+ * one has none of these words outside strings and [names]. All are reserved in T-SQL, so a
+ * column of that name is always quoted, never refused by mistake.
+ */
+const TSQL_WRITES = /\b(INSERT|UPDATE|DELETE|MERGE|TRUNCATE|DROP|CREATE|ALTER|EXEC|EXECUTE|COMMIT|ROLLBACK|SAVE|BEGIN|GRANT|REVOKE|DENY|BACKUP|RESTORE|SHUTDOWN|KILL|DBCC|BULK|WAITFOR|USE|SET|DECLARE|INTO|OPENROWSET|OPENDATASOURCE|OPENQUERY|RECONFIGURE|CHECKPOINT|UPDATETEXT|WRITETEXT|READTEXT)\b/;
 
 /** Why this SQL is not a single reading statement, or null when it is */
 export function readOnlyProblem(sql: string, dialect: SqlDialect): string | null {
@@ -90,12 +99,63 @@ export function readOnlyProblem(sql: string, dialect: SqlDialect): string | null
     if (first === 'WITH' && /\b(INSERT|UPDATE|DELETE|REPLACE)\b/.test(upper)) return 'Only reading statements are allowed here';
     // DuckDB: COPY … TO and the file functions write or read files outside the database
     if (dialect === 'duckdb' && /\b(COPY|EXPORT|ATTACH|INSTALL|LOAD|CALL)\b/.test(upper)) return 'Only reading statements are allowed here';
+    if (dialect === 'tsql') {
+        const found = upper.match(TSQL_WRITES)?.[1];
+        if (found) return `Only one reading statement is allowed here (${found} is not one)`;
+    }
     return null;
 }
 
-/** Quotes an identifier: backticks for MySQL / MariaDB, double quotes for SQLite */
+/**
+ * Each ? outside strings, quoted names and comments replaced by what `next` returns for it (its
+ * index from 0): T-SQL takes @p1, @p2… where the other dialects take ?.
+ */
+export function replacePlaceholders(sql: string, dialect: SqlDialect, next: (index: number) => string): string {
+    const text = String(sql);
+    let out = '';
+    let i = 0;
+    let count = 0;
+    while (i < text.length) {
+        const c = text[i];
+        const n = text[i + 1];
+        if ((c === '-' && n === '-') || (c === '#' && dialect === 'mysql')) {
+            const end = text.indexOf('\n', i);
+            const stop = end === -1 ? text.length : end;
+            out += text.slice(i, stop);
+            i = stop;
+            continue;
+        }
+        if (c === '/' && n === '*') {
+            const end = text.indexOf('*/', i + 2);
+            const stop = end === -1 ? text.length : end + 2;
+            out += text.slice(i, stop);
+            i = stop;
+            continue;
+        }
+        if (c === "'" || c === '"' || c === '`' || (c === '[' && (dialect === 'sqlite' || dialect === 'tsql'))) {
+            const close = c === '[' ? ']' : c;
+            let j = i + 1;
+            while (j < text.length) {
+                if (text[j] === '\\' && dialect === 'mysql' && c !== '`') { j += 2; continue; }
+                if (text[j] === close) {
+                    if (c !== '[' && text[j + 1] === close) { j += 2; continue; }
+                    break;
+                }
+                j++;
+            }
+            out += text.slice(i, j + 1);
+            i = j + 1;
+            continue;
+        }
+        out += c === '?' ? next(count++) : c;
+        i++;
+    }
+    return out;
+}
+
+/** Quotes an identifier: backticks for MySQL / MariaDB, [brackets] for SQL Server, double quotes for SQLite and DuckDB */
 export function quoteIdent(name: string, dialect: SqlDialect): string {
-    return dialect === 'mysql'
-        ? '`' + String(name).replace(/`/g, '``') + '`'
-        : '"' + String(name).replace(/"/g, '""') + '"';
+    if (dialect === 'mysql') return '`' + String(name).replace(/`/g, '``') + '`';
+    if (dialect === 'tsql') return '[' + String(name).replace(/\]/g, ']]') + ']';
+    return '"' + String(name).replace(/"/g, '""') + '"';
 }

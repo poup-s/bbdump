@@ -5,8 +5,8 @@
  *
  * Queries written by someone (SQL editor, dashboards, the AI) run with file access turned off
  * (`enable_external_access`): a SELECT cannot read other files of this computer. Backups and
- * restores attach the backup file themselves (DuckDB's COPY FROM DATABASE: tables, views,
- * sequences, macros and types).
+ * restores attach the backup file themselves and copy its schemas, types, sequences, tables
+ * (referenced ones first), indexes, views and macros, in one transaction.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -141,6 +141,59 @@ async function checkBackup(file: string, timeoutMs: number): Promise<{ valid: bo
     } catch (error) {
         return { valid: false, error: getErrorMessage(error) };
     }
+}
+
+/** Tables in an order where each comes after the ones its foreign keys reference (a cycle: as listed) */
+export function referencedFirst<T extends Row>(tables: T[], keys: Row[]): T[] {
+    const key = (s: unknown, n: unknown) => `${String(s)}.${String(n)}`;
+    const needs = keys.filter(k => k.r && k.r !== k.n).map(k => ({ from: key(k.s, k.n), to: key(k.s, k.r) }));
+    const ordered: T[] = [];
+    let left = tables;
+    while (left.length) {
+        const pending = new Set(left.map(t => key(t.s, t.n)));
+        const ready = left.filter(t => !needs.some(e => e.from === key(t.s, t.n) && pending.has(e.to)));
+        const next = ready.length ? ready : left;
+        ordered.push(...next);
+        const done = new Set(next.map(t => key(t.s, t.n)));
+        left = left.filter(t => !done.has(key(t.s, t.n)));
+    }
+    return ordered;
+}
+
+/**
+ * The statements that copy the database of `sourceFile` (attached as `from`) into the default
+ * database of the session: its schemas, ENUM types, sequences (at their next value), tables
+ * (referenced ones first, their rows in that order), indexes, views and macros. DuckDB's own
+ * COPY FROM DATABASE fills tables in any order before 2.0, which foreign keys refuse.
+ */
+async function copyStatements(sourceFile: string, from: string): Promise<string[]> {
+    const [schemas = [], types = [], sequences = [], tables = [], keys = [], indexes = [], views = [], macros = []] = await runDuckdb(sourceFile, [
+        "SELECT schema_name AS s FROM duckdb_schemas() WHERE database_name = current_database() AND NOT internal AND schema_name <> 'main'",
+        "SELECT schema_name AS s, type_name AS n, labels FROM duckdb_types() WHERE database_name = current_database() AND NOT internal AND logical_type = 'ENUM' AND labels IS NOT NULL",
+        'SELECT schema_name AS s, sequence_name AS n, start_value, min_value, max_value, increment_by, cycle, last_value FROM duckdb_sequences() WHERE database_name = current_database() AND NOT temporary',
+        'SELECT schema_name AS s, table_name AS n, sql FROM duckdb_tables() WHERE database_name = current_database() AND NOT internal AND NOT temporary ORDER BY table_oid',
+        "SELECT schema_name AS s, table_name AS n, referenced_table AS r FROM duckdb_constraints() WHERE database_name = current_database() AND constraint_type = 'FOREIGN KEY'",
+        'SELECT sql FROM duckdb_indexes() WHERE database_name = current_database() AND sql IS NOT NULL',
+        'SELECT sql FROM duckdb_views() WHERE database_name = current_database() AND NOT internal AND NOT temporary ORDER BY view_oid',
+        "SELECT schema_name AS s, function_name AS n, function_type AS kind, macro_definition AS body, parameters FROM duckdb_functions() WHERE database_name = current_database() AND NOT internal AND function_type IN ('macro', 'table_macro')",
+    ].map(sql => `${sql};`).join('\n'), { readOnly: true });
+    const name = (row: Row) => `${q(String(row.s))}.${q(String(row.n))}`;
+    const ordered = referencedFirst(tables, keys);
+    return [
+        // A restore empties the target's schemas without removing them
+        ...schemas.map(row => `CREATE SCHEMA IF NOT EXISTS ${q(String(row.s))};`),
+        ...types.map(row => `CREATE TYPE ${name(row)} AS ENUM (${(row.labels as unknown[]).map(lit).join(', ')});`),
+        ...sequences.map(row => {
+            // Where the source is: the next value it would give
+            const next = row.last_value === null || row.last_value === undefined ? row.start_value : BigInt(String(row.last_value)) + BigInt(String(row.increment_by));
+            return `CREATE SEQUENCE ${name(row)} INCREMENT BY ${row.increment_by} MINVALUE ${row.min_value} MAXVALUE ${row.max_value} START ${next} ${row.cycle ? 'CYCLE' : 'NO CYCLE'};`;
+        }),
+        ...ordered.map(row => `${String(row.sql).replace(/;\s*$/, '')};`),
+        ...ordered.map(row => `INSERT INTO ${name(row)} SELECT * FROM ${q(from)}.${name(row)};`),
+        ...indexes.map(row => `${String(row.sql).replace(/;\s*$/, '')};`),
+        ...views.map(row => `${String(row.sql).replace(/;\s*$/, '')};`),
+        ...macros.map(row => `CREATE MACRO ${name(row)}(${(row.parameters as unknown[]).map(p => q(String(p))).join(', ')}) AS ${row.kind === 'table_macro' ? 'TABLE ' : ''}${row.body};`),
+    ];
 }
 
 /** What a restore drops in the target first: its views, macros, tables, sequences and types */
@@ -389,7 +442,7 @@ export const duckdbDriver: EngineDriver = {
     },
 
     backup: {
-        /** DuckDB's COPY FROM DATABASE into a new file: the whole database, consistent (one transaction) */
+        /** The whole database copied into a new file, consistent (one transaction) */
         dump: async db => {
             const timestamp = new Date().toISOString();
             const fail = (error: string): BackupResult => {
@@ -404,10 +457,16 @@ export const duckdbDriver: EngineDriver = {
             try {
                 // DuckDB writes a database into a file that does not exist yet
                 fs.rmSync(prepared.file, { force: true });
+                const copy = await copyStatements(file, 'bbdump_source');
                 await runDuckdb(':memory:', [
                     `ATTACH ${lit(path.resolve(file))} AS bbdump_source (READ_ONLY);`,
                     `ATTACH ${lit(prepared.file)} AS bbdump_backup;`,
-                    'COPY FROM DATABASE bbdump_source TO bbdump_backup;',
+                    'USE bbdump_backup;',
+                    'BEGIN;',
+                    ...copy,
+                    'COMMIT;',
+                    'CHECKPOINT bbdump_backup;',
+                    'USE memory;',
                     'DETACH bbdump_backup;',
                 ].join('\n'), { sandbox: false, timeoutMs: db.backupTimeout ?? 30 * 60 * 1000 });
                 logger.info(`DuckDB backup of ${file}`, db.name);
@@ -444,13 +503,17 @@ export const duckdbDriver: EngineDriver = {
                 if (!checked.valid) return fail(`This backup cannot be restored: ${checked.error}. Nothing was changed`);
                 // A new file is created by DuckDB itself; an existing one is emptied first
                 const drops = fs.existsSync(file) ? await objectsToDrop(file) : [];
+                const copy = await copyStatements(opened.file, 'bbdump_source');
                 await runDuckdb(':memory:', [
                     `ATTACH ${lit(opened.file)} AS bbdump_source (READ_ONLY);`,
                     `ATTACH ${lit(path.resolve(file))} AS tgt;`,
+                    'USE tgt;',
                     'BEGIN;',
                     ...drops,
-                    'COPY FROM DATABASE bbdump_source TO tgt;',
+                    ...copy,
                     'COMMIT;',
+                    'CHECKPOINT tgt;',
+                    'USE memory;',
                 ].join('\n'), { sandbox: false, timeoutMs: 2 * 60 * 60 * 1000 });
                 const message = `Restore successful from ${backupFile} to ${file} (${checked.tables ?? 0} table(s))`;
                 logger.info(message, target.name);
