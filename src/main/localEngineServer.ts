@@ -20,6 +20,7 @@ import { encryptionManager } from './encryption';
 import { pathManager } from './paths';
 import { logger } from './logger';
 import { getErrorMessage } from './utils';
+import { app } from 'electron';
 import { quoteIdent } from '../shared/engines/sqlGuard';
 import { parseGreeting, readPacket } from './mysqlProxy';
 import { defaultWhich, firstExisting, isPortOpen, run } from './platform/probe';
@@ -210,6 +211,15 @@ async function installedBinary(engine: LocalEngine): Promise<boolean> {
     return false;
 }
 
+/**
+ * What runs the Linux scripts as root: pkexec (the system asks for the password). Dev and tests
+ * only (the app not packaged): BBDUMP_PKEXEC names another one, e.g. sudo in the CI.
+ */
+async function rootRunner(): Promise<string | null> {
+    if (!app.isPackaged && process.env.BBDUMP_PKEXEC) return process.env.BBDUMP_PKEXEC;
+    return defaultWhich('pkexec');
+}
+
 async function brewPath(): Promise<string | null> {
     const found = await defaultWhich('brew');
     if (found) return found;
@@ -230,7 +240,7 @@ export async function localServerState(engine: LocalEngine, port = LOCAL_ENGINE_
         installCommand: manualLocalInstall(engine, system, family),
         canInstall: system === 'macos' ? !!(await brewPath())
             : system === 'windows' ? !!wingetLocalArgs(engine) && !!(await wingetPath())
-                : !!linuxLocalScript(engine, family, '0'.repeat(32)) && !!(await defaultWhich('pkexec')),
+                : !!linuxLocalScript(engine, family, '0'.repeat(32)) && !!(await rootRunner()),
     };
     if (!(await isPortOpen(port, '127.0.0.1', 1500))) {
         return { ...base, installed, running: false, account: 'unknown', canCreateAccount: false, canStart: installed };
@@ -289,12 +299,14 @@ export async function installLocalServer(engine: LocalEngine, onLine: (line: str
             const family = installFamily(await detectEnvironment());
             const password = randomBytes(24).toString('hex');
             const script = linuxLocalScript(engine, family, password);
-            const pkexec = await defaultWhich('pkexec');
+            const pkexec = await rootRunner();
             if (!script || !pkexec) return { success: false, error: 'bbdump cannot install it on this system: use the command shown' };
             const result = await runScriptWithPkexec(script, pkexec, onLine);
             if (result.cancelled) return { success: false, error: 'Cancelled' };
-            if (result.code !== 0) return { success: false, error: lastLines(result.output, 5) };
-            saveAccount(engine, port, { user: LOCAL_ACCOUNT, password });
+            // 3: installed and running, but root (set up before) asks for a password: an account is typed in bbdump
+            if (result.code === 3) logger.info(`Local ${engine} server installed; its root account asks for a password`);
+            else if (result.code !== 0) return { success: false, error: lastLines(result.output, 5) };
+            else saveAccount(engine, port, { user: LOCAL_ACCOUNT, password });
         } else {
             const args = wingetLocalArgs(engine);
             const winget = await wingetPath();
@@ -322,7 +334,7 @@ export async function startLocalServer(engine: LocalEngine): Promise<{ success: 
         } else if (system === 'linux') {
             const family = installFamily(await detectEnvironment());
             const script = linuxStartScript(engine, family);
-            const pkexec = await defaultWhich('pkexec');
+            const pkexec = await rootRunner();
             if (!script || !pkexec) return { success: false, error: 'Start the server with your system tools' };
             const result = await runScriptWithPkexec(script, pkexec, () => {});
             if (result.code !== 0) return { success: false, error: result.cancelled ? 'Cancelled' : lastLines(result.output, 3) };

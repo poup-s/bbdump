@@ -144,6 +144,49 @@ jobs:
           BBDUMP_TEST_MONGO: 127.0.0.1:27017
         run: node --test test/proxyLive.test.mjs test/localServerLive.test.mjs
 
+  # The local server installed for real by bbdump on a machine without it: Linux packages (sudo in
+  # place of pkexec) and winget on Windows. Then a database created on it, and the server restarted.
+  local-server:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, engine: mariadb }
+          - { os: ubuntu-24.04, engine: mysql }
+          - { os: windows-latest, engine: mongodb }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            mcp-postgres/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the main process
+        run: npx tsc
+
+      # The runner image comes with MySQL: removed, so bbdump starts from a machine without a server
+      - name: A machine without a MySQL / MariaDB server
+        if: runner.os == 'Linux'
+        run: |
+          sudo systemctl stop mysql || true
+          sudo DEBIAN_FRONTEND=noninteractive apt-get purge -y 'mysql-*' 'mariadb-*' || true
+          sudo apt-get autoremove -y
+          sudo rm -rf /var/lib/mysql /etc/mysql /var/log/mysql
+
+      - name: Install ${{ matrix.engine }} with bbdump, use it, restart it
+        env:
+          BBDUMP_TEST_LOCAL_INSTALL: ${{ matrix.engine }}
+          BBDUMP_PKEXEC: sudo
+        run: node --test test/localServerInstall.test.mjs
+
   # Windows (beta): build, tests, the installer, and a start of the packaged app
   windows:
     runs-on: windows-latest
