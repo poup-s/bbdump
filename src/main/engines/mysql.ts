@@ -9,6 +9,7 @@ import * as path from 'path';
 import * as zlib from 'zlib';
 import { spawn } from 'child_process';
 import { pipeline } from 'stream/promises';
+import { Writable } from 'stream';
 import type { Pool, PoolConnection, RowDataPacket, FieldPacket, ResultSetHeader } from 'mysql2/promise';
 import { connectionParamsFor } from '../savedConnection';
 import { backupManager } from '../backup';
@@ -301,12 +302,16 @@ export async function verifyMysqlDump(file: string, engine: MysqlFlavour): Promi
     let head = '';
     let tail = '';
     try {
-        const gunzip = zlib.createGunzip();
-        gunzip.on('data', (chunk: Buffer) => {
-            if (head.length < 200) head += chunk.toString('utf8', 0, Math.min(chunk.length, 200));
-            tail = (tail + chunk.toString('utf8')).slice(-400);
+        // Read to the decompressed end: a cut archive fails there ("unexpected end of file"),
+        // after the compressed input is consumed, so the reading side must be part of the pipeline
+        const sink = new Writable({
+            write(chunk: Buffer, _encoding, done) {
+                if (head.length < 200) head += chunk.toString('utf8', 0, Math.min(chunk.length, 200));
+                tail = (tail + chunk.toString('utf8')).slice(-400);
+                done();
+            },
         });
-        await pipeline(fs.createReadStream(file), gunzip);
+        await pipeline(fs.createReadStream(file), zlib.createGunzip(), sink);
     } catch (error) {
         return { valid: false, error: `the archive cannot be read to its end (${getErrorMessage(error)})` };
     }
