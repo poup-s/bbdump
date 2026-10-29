@@ -78,7 +78,7 @@ export function newDatabaseEntry(template: DatabaseConfig, name: string, file?: 
 
 /** A database name the engine accepts, and that is safe on a command line and in a URL */
 export function validNewName(name: string, engine: string): boolean {
-  if (engine === 'mongodb') return /^[A-Za-z0-9_-]{1,63}$/.test(name);
+  if (engine === 'mongodb') return /^[A-Za-z0-9_-]{1,63}$/.test(name) && !['admin', 'local', 'config'].includes(name.toLowerCase());
   return /^[A-Za-z_][A-Za-z0-9_$]{0,63}$/.test(name);
 }
 
@@ -154,7 +154,7 @@ export async function restoreToNewDatabase(params: RestoreToNewParams): Promise<
       // MongoDB creates a database with its first collection: only check the name is free
       await withSavedMongo(server.id, async client => {
         const { databases } = await client.db('admin').admin().listDatabases({ nameOnly: true, authorizedDatabases: true });
-        if (databases.some(d => d.name === name)) throw new Error(`A database named ${name} already exists on this server`);
+        if (databases.some(d => d.name.toLowerCase() === name.toLowerCase())) throw new Error(`A database named ${name} already exists on this server`);
       });
       undo = async () => {
         await withSavedMongo(server.id, async client => { await client.db(name).dropDatabase(); });

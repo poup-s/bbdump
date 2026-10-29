@@ -9,6 +9,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as tls from 'tls';
+import { once } from 'events';
 import { readExact } from './pgProtocol';
 
 const OP_REPLY = 1;
@@ -38,21 +39,34 @@ export interface MongoProxyTarget {
 
 // --- BSON, the few bits the proxy needs ------------------------------------------------------
 
+const malformed = () => new Error('Malformed BSON document');
+
+/** A non-negative int32 length read at `at` (a negative or absent one is malformed) */
+function lengthAt(doc: Buffer, at: number, min = 0): number {
+    if (at + 4 > doc.length) throw malformed();
+    const length = doc.readInt32LE(at);
+    if (length < min) throw malformed();
+    return length;
+}
+
 /** Size of an element's value at `at` (type `type`), from the BSON spec */
 function valueSize(doc: Buffer, type: number, at: number): number {
     switch (type) {
         case 0x01: case 0x09: case 0x11: case 0x12: return 8;
-        case 0x02: case 0x0d: case 0x0e: return 4 + doc.readInt32LE(at);
-        case 0x03: case 0x04: case 0x0f: return doc.readInt32LE(at);
-        case 0x05: return 5 + doc.readInt32LE(at);
+        case 0x02: case 0x0d: case 0x0e: return 4 + lengthAt(doc, at, 1);
+        case 0x03: case 0x04: return lengthAt(doc, at, 5);
+        case 0x0f: return lengthAt(doc, at, 14);
+        case 0x05: return 5 + lengthAt(doc, at);
         case 0x06: case 0x0a: case 0x7f: case 0xff: return 0;
         case 0x07: return 12;
         case 0x08: return 1;
         case 0x0b: {
             const first = doc.indexOf(0, at);
-            return doc.indexOf(0, first + 1) + 1 - at;
+            const second = first === -1 ? -1 : doc.indexOf(0, first + 1);
+            if (second === -1) throw malformed();
+            return second + 1 - at;
         }
-        case 0x0c: return 4 + doc.readInt32LE(at) + 12;
+        case 0x0c: return 4 + lengthAt(doc, at, 1) + 12;
         case 0x10: return 4;
         case 0x13: return 16;
         default: throw new Error(`Unknown BSON type 0x${type.toString(16)}`);
@@ -64,14 +78,18 @@ export interface BsonElement { type: number; key: string; start: number; valueAt
 /** The top-level elements of a document (no copy) */
 export function topLevel(doc: Buffer): BsonElement[] {
     const elements: BsonElement[] = [];
-    const length = doc.readInt32LE(0);
+    // Its declared length is its real one, ending with a NUL; each element moves forward inside it
+    const length = lengthAt(doc, 0, 5);
+    if (length !== doc.length || doc[length - 1] !== 0) throw malformed();
     let at = 4;
     while (at < length - 1) {
         const type = doc[at];
         const keyEnd = doc.indexOf(0, at + 1);
+        if (keyEnd === -1 || keyEnd >= length - 1) throw malformed();
         const key = doc.subarray(at + 1, keyEnd).toString('utf8');
         const valueAt = keyEnd + 1;
         const end = valueAt + valueSize(doc, type, valueAt);
+        if (end <= at || end > length - 1) throw malformed();
         elements.push({ type, key, start: at, valueAt, end });
         at = end;
     }
@@ -193,7 +211,8 @@ export function bodyDocument(body: Buffer): Buffer {
     let at = 4;
     while (at < body.length) {
         const kind = body[at];
-        const length = body.readInt32LE(at + 1);
+        const length = lengthAt(body, at + 1, 5);
+        if (at + 1 + length > body.length) throw malformed();
         if (kind === 0) return body.subarray(at + 1, at + 1 + length);
         at += 1 + length;
     }
@@ -212,7 +231,9 @@ export function rewriteMessage(message: Message, database: string): Message {
         let at = 4;
         while (at < end) {
             const kind = message.body[at];
-            const length = message.body.readInt32LE(at + 1);
+            if (kind !== 0 && kind !== 1) throw malformed();
+            const length = lengthAt(message.body, at + 1, 5);
+            if (at + 1 + length > end) throw malformed();
             if (kind === 0) parts.push(Buffer.from([0]), rewriteCommand(message.body.subarray(at + 1, at + 1 + length), database));
             else parts.push(message.body.subarray(at, at + 1 + length));
             at += 1 + length;
@@ -222,12 +243,14 @@ export function rewriteMessage(message: Message, database: string): Message {
     if (message.opCode === OP_QUERY) {
         // flags, "<db>.$cmd", skip, return, query document[, fields]
         const nameEnd = message.body.indexOf(0, 4);
+        if (nameEnd === -1) throw malformed();
         const fullName = message.body.subarray(4, nameEnd).toString('utf8');
         const dot = fullName.indexOf('.');
         const db = dot === -1 ? fullName : fullName.slice(0, dot);
         const name = SYSTEM_DATABASES.has(db) ? fullName : `${database}${dot === -1 ? '' : fullName.slice(dot)}`;
         const queryAt = nameEnd + 9;
-        const queryLength = message.body.readInt32LE(queryAt);
+        const queryLength = lengthAt(message.body, queryAt, 5);
+        if (queryAt + queryLength > message.body.length) throw malformed();
         const query = rewriteCommand(message.body.subarray(queryAt, queryAt + queryLength), database);
         return {
             ...message,
@@ -238,7 +261,8 @@ export function rewriteMessage(message: Message, database: string): Message {
         };
     }
     if (message.opCode === OP_COMPRESSED) throw new Error('Compressed messages are not supported by the bbdump proxy: remove compressors from the URL');
-    return message;
+    // The legacy opcodes (OP_INSERT, OP_UPDATE…) name their namespace themselves: refused
+    throw new Error(`MongoDB opcode ${message.opCode} is not supported by the bbdump proxy`);
 }
 
 /** An error answer to the app's request (OP_REPLY for OP_QUERY, OP_MSG otherwise) */
@@ -280,8 +304,12 @@ export async function scramLogin(socket: net.Socket | tls.TLSSocket, target: Mon
     const serverFirst = (start.payload as Buffer).toString('utf8');
     const attributes: Record<string, string> = Object.fromEntries(serverFirst.split(',').map(part => [part[0], part.slice(2)]));
     if (!attributes.r?.startsWith(nonce)) throw new Error('The server answered the login with another nonce');
-    const password = sha256 ? (target.password ?? '') : crypto.createHash('md5').update(`${user}:mongo:${target.password ?? ''}`).digest('hex');
-    const salted = crypto.pbkdf2Sync(password, Buffer.from(attributes.s, 'base64'), Number(attributes.i), sha256 ? 32 : 20, hash);
+    const password = sha256 ? (target.password ?? '').normalize('NFKC') : crypto.createHash('md5').update(`${user}:mongo:${target.password ?? ''}`).digest('hex');
+    // The server sets the cost: bounded, so a server cannot freeze bbdump nor make it trivial
+    const iterations = Number(attributes.i);
+    const salt = Buffer.from(attributes.s ?? '', 'base64');
+    if (!Number.isInteger(iterations) || iterations < 1000 || iterations > 1_000_000 || salt.length < 8) throw new Error('The server asked for unusual login settings: refused');
+    const salted = await new Promise<Buffer>((resolve, reject) => crypto.pbkdf2(password, salt, iterations, sha256 ? 32 : 20, hash, (error, key) => (error ? reject(error) : resolve(key))));
     const clientKey = crypto.createHmac(hash, salted).update('Client Key').digest();
     const storedKey = crypto.createHash(hash).update(clientKey).digest();
     const finalNoProof = `c=biws,r=${attributes.r}`;
@@ -294,7 +322,8 @@ export async function scramLogin(socket: net.Socket | tls.TLSSocket, target: Mon
     if (reply.ok !== 1) throw new Error(String(reply.errmsg ?? 'Authentication failed'));
     const serverFinal = Buffer.isBuffer(reply.payload) ? reply.payload.toString('utf8') : '';
     const expected = crypto.createHmac(hash, crypto.createHmac(hash, salted).update('Server Key').digest()).update(authMessage).digest('base64');
-    if (serverFinal && !serverFinal.includes(`v=${expected}`)) throw new Error('The server could not prove it knows the password');
+    // The server proves it knows the password too: without that proof, it may be another one
+    if (!serverFinal.split(',').includes(`v=${expected}`)) throw new Error('The server could not prove it knows the password');
     for (let round = 0; !reply.done && round < 3; round++) {
         reply = await command(socket, bson({ saslContinue: 1, conversationId: Number(start.conversationId), payload: Buffer.alloc(0), $db: target.authSource }));
         if (reply.ok !== 1) throw new Error(String(reply.errmsg ?? 'Authentication failed'));
@@ -374,12 +403,18 @@ async function login(server: net.Socket | tls.TLSSocket, target: MongoProxyTarge
  */
 export async function proxyMongoConnection(client: net.Socket, target: MongoProxyTarget, log: (message: string) => void): Promise<net.Socket | tls.TLSSocket> {
     let server: net.Socket | tls.TLSSocket | undefined;
+    // A silent server during the login does not hold the app forever
+    const deadline = setTimeout(() => server?.destroy(new Error('The login to the server did not finish in time')), 15_000);
     try {
         server = await openServer(target);
         await login(server, target);
-        log(`logged in${target.user ? ` as ${target.user}` : ''}`);
+        clearTimeout(deadline);
+        log('logged in');
     } catch (error) {
+        clearTimeout(deadline);
         server?.destroy();
+        // After a failover the primary changed: looked up again next time
+        if (target.discoveryUri) primaries.delete(target.discoveryUri);
         const text = error instanceof Error ? error.message : String(error);
         // The app waits for the answer to its hello: it gets the reason
         try {
@@ -396,7 +431,8 @@ export async function proxyMongoConnection(client: net.Socket, target: MongoProx
         try {
             for (;;) {
                 const message = await readMessage(client);
-                upstream.write(messageBytes(rewriteMessage(message, target.database)));
+                // The server reads slower than the app writes: wait, instead of keeping it all in memory
+                if (!upstream.write(messageBytes(rewriteMessage(message, target.database)))) await once(upstream, 'drain');
             }
         } catch (error) {
             const text = error instanceof Error ? error.message : String(error);

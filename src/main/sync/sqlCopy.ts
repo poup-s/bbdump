@@ -333,7 +333,10 @@ async function* readRows(side: SqlSide, table: SqlTable, columns: string[], filt
 }
 
 /** Inserts rows in multi-row statements; `ignore` skips rows that conflict. Returns the rows written */
-async function insertRows(side: SqlSide, table: string, columns: string[], rows: Row[], ignore: boolean): Promise<number> {
+/** MySQL warnings an INSERT IGNORE turns errors into: a duplicate key or a missing parent is a skip, the others change data */
+const SKIP_WARNINGS = new Set([1062, 1452]);
+
+async function insertRows(side: SqlSide, table: string, columns: string[], rows: Row[], ignore: boolean, adjusted?: string[]): Promise<number> {
   if (!rows.length) return 0;
   const q = (n: string) => quoteIdent(n, side.dialect);
   const per = Math.max(1, Math.min(500, Math.floor(20000 / Math.max(1, columns.length))));
@@ -344,6 +347,12 @@ async function insertRows(side: SqlSide, table: string, columns: string[], rows:
     const tuple = `(${columns.map(() => '?').join(', ')})`;
     const sql = `${verb} INTO ${q(table)} (${columns.map(q).join(', ')}) VALUES ${chunk.map(() => tuple).join(', ')}`;
     written += await side.run(sql, chunk.flatMap(r => columns.map(c => r[c])));
+    // INSERT IGNORE also writes values MySQL had to cut or convert: said, never hidden
+    if (ignore && adjusted && side.dialect === 'mysql') {
+      for (const w of await side.all('SHOW WARNINGS LIMIT 20')) {
+        if (!SKIP_WARNINGS.has(Number(w.Code)) && adjusted.length < 5) adjusted.push(String(w.Message));
+      }
+    }
   }
   return written;
 }
@@ -355,8 +364,11 @@ function keyPart(value: unknown): string {
   if (typeof value === 'boolean') return value ? '1' : '0';
   if (typeof value === 'number' || typeof value === 'bigint') return String(value);
   const text = String(value);
-  // "12.50" and 12.5 are the same key; "007" stays text
-  return /^-?\d+(\.\d+)?$/.test(text) && !/^-?0\d/.test(text) ? String(Number(text)) : text;
+  if (/^-?0\d/.test(text)) return text; // "007" stays text
+  // Whole numbers exactly (a BIGINT past 2^53 comes as text); "12.50" and 12.5 are the same key
+  if (/^-?\d+$/.test(text)) return BigInt(text).toString();
+  if (/^-?\d+\.\d+$/.test(text)) return text.replace(/\.?0+$/, '');
+  return text;
 }
 const rowKey = (row: Row, pk: string[]) => pk.map(c => keyPart(row[c])).join('\u0001');
 
@@ -658,8 +670,11 @@ export async function applySqlSync(
       const anonymize = anonymizerFor(table, pgTable, kinds);
       const recentDays = chosen.get(table.key)?.recentDays;
       const dateColumn = recentDays ? timeColumn(pgTable) : undefined;
+      // "The last days" without a date column would copy everything: said instead
+      if (recentDays && !dateColumn) { outcome.error = 'no date column to keep the last days by'; continue; }
       const filter = recentDays && dateColumn ? { sql: `${quoteIdent(dateColumn, source.dialect)} >= ?`, params: [daysAgo(recentDays)] } : undefined;
       const selfReferencing = table.foreignKeys.some(f => f.references === table.name);
+      const adjusted: string[] = [];
       // A table referencing itself: rows whose parent comes later get in on the next pass (MySQL checks keys)
       for (let pass = 0; pass < (selfReferencing && target.dialect === 'mysql' ? 4 : 1); pass++) {
         const have = await keySet(target, local, pk);
@@ -668,7 +683,7 @@ export async function applySqlSync(
         await inTransaction(target, async () => {
           for await (const rows of readRows(source, table, columns, filter)) {
             const missing = rows.filter(r => !have.has(rowKey(r, pk)));
-            const written = await insertRows(target, table.name, columns, anonymize ? missing.map(anonymize) : missing, true);
+            const written = await insertRows(target, table.name, columns, anonymize ? missing.map(anonymize) : missing, true, adjusted);
             copied += written;
             skipped += missing.length - written;
             onProgress({ stage: 'data', table: table.key, index, total: ordered.length, copied: outcome.copied + copied, skipped });
@@ -678,6 +693,7 @@ export async function applySqlSync(
         outcome.skipped = skipped;
         if (copied === 0 || skipped === 0) break;
       }
+      if (adjusted.length) outcome.error = `values changed by MySQL to fit the local columns: ${adjusted.join('; ')}`;
     } catch (error) {
       outcome.error = error instanceof Error ? error.message : String(error);
     }

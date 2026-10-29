@@ -344,6 +344,11 @@ export function registerConfigHandlers() {
                 lastBackup: existingDb.lastBackup,
                 masked: existingDb.masked,
                 syncSourceId: existingDb.syncSourceId,
+                // A database bbdump created on a local MySQL / MariaDB / MongoDB server is dropped
+                // with it: it stays the one bbdump created (never renamed nor moved to another server)
+                ...(existingDb.isLocalBbdump && ['mysql', 'mariadb', 'mongodb'].includes(engineOf(existingDb))
+                    ? { name: existingDb.name, host: existingDb.host, port: existingDb.port, connectionString: undefined, ssh: undefined }
+                    : {}),
             });
 
             config.databases[index] = dbToSave;

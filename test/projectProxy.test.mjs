@@ -134,6 +134,26 @@ describe('MongoDB proxy messages', () => {
     assert.equal(mongoProxy.readFields(doc).payload.toString(), 'n,,n=u');
   });
 
+  test('a malformed message is refused at once, never looped on', () => {
+    // A document whose sub-document claims a negative length
+    const doc = Buffer.from(BSON.serialize({ a: { b: 1 } }));
+    doc.writeInt32LE(-3, 7);
+    assert.throws(() => mongoProxy.topLevel(doc), /Malformed BSON/);
+    // A declared length that is not the real one
+    const short = Buffer.from(BSON.serialize({ find: 'x', $db: 'y' }));
+    short.writeInt32LE(short.length + 10, 0);
+    assert.throws(() => mongoProxy.rewriteCommand(short, 'z'), /Malformed BSON/);
+    // An OP_MSG section of length -1 (used to loop forever)
+    const body = Buffer.concat([Buffer.alloc(4), Buffer.from([1]), Buffer.from([0xff, 0xff, 0xff, 0xff])]);
+    assert.throws(() => mongoProxy.rewriteMessage({ requestId: 1, responseTo: 0, opCode: 2013, body }, 'z'), /Malformed BSON/);
+    // A key without its NUL
+    assert.throws(() => mongoProxy.topLevel(Buffer.from([8, 0, 0, 0, 0x10, 0x61, 0x62, 0])), /Malformed BSON/);
+  });
+
+  test("the legacy opcodes (OP_INSERT…) name their namespace: refused, the target is never bypassed", () => {
+    assert.throws(() => mongoProxy.rewriteMessage({ requestId: 1, responseTo: 0, opCode: 2002, body: Buffer.alloc(20) }, 'x'), /opcode 2002 is not supported/);
+  });
+
   test('compressed messages are refused with the way out', () => {
     assert.throws(() => mongoProxy.rewriteMessage({ requestId: 1, responseTo: 0, opCode: 2012, body: Buffer.alloc(9) }, 'x'), /remove compressors/);
   });
@@ -201,6 +221,29 @@ describe('local servers: what each system runs', () => {
     assert.ok(local.wingetLocalArgs('mongodb').includes('--silent'));
     assert.equal(local.wingetLocalArgs('mysql'), null);
     assert.match(local.manualLocalInstall('mysql', 'windows'), /dev\.mysql\.com/);
+  });
+});
+
+describe('copies: names and anonymized fields', () => {
+  test("a server's own databases are never created nor dropped", () => {
+    const { validLocalName } = require(path.join(root, 'dist/main/localEngineServer.js'));
+    for (const name of ['mysql', 'sys', 'information_schema', 'performance_schema', 'MySQL']) assert.equal(validLocalName('mysql', name), false, name);
+    for (const name of ['admin', 'local', 'config']) assert.equal(validLocalName('mongodb', name), false, name);
+    assert.equal(validLocalName('mysql', 'shop'), true);
+    assert.equal(restoreToNew.validNewName('admin', 'mongodb'), false);
+    assert.equal(restoreToNew.validNewName('Config', 'mongodb'), false);
+  });
+
+  test('an anonymized field is replaced in every shape a document gives it', () => {
+    const { replaceEverywhere } = require(path.join(root, 'dist/main/sync/mongoCopy.js'));
+    const fake = () => 'X';
+    // Sampled as a scalar, met in an array
+    assert.deepEqual(replaceEverywhere({ contact: [{ email: 'a@b.c' }, { email: 'd@e.f' }] }, 'contact.email', fake), { contact: [{ email: 'X' }, { email: 'X' }] });
+    // Sampled as an array, met as a scalar
+    assert.deepEqual(replaceEverywhere({ emails: 'a@b.c' }, 'emails[]', fake), { emails: 'X' });
+    assert.deepEqual(replaceEverywhere({ emails: ['a', 'b'] }, 'emails[]', fake), { emails: ['X', 'X'] });
+    // Absent: left absent
+    assert.deepEqual(replaceEverywhere({ other: 1 }, 'contact.email', fake), { other: 1 });
   });
 });
 

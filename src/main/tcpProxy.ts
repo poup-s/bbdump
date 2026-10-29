@@ -138,6 +138,11 @@ class TcpProxyManager {
         clientSocket.on('close', cleanup);
 
         const watchServer = (socket: net.Socket | tls.TLSSocket) => {
+            // The app left while the proxy was logging in: nothing to keep
+            if (clientSocket.destroyed) {
+                socket.destroy();
+                return;
+            }
             serverSocket = socket;
             activeConnections.add(socket);
             socket.on('error', (err) => {
@@ -152,8 +157,10 @@ class TcpProxyManager {
         if (target.engine === 'mysql') {
             try {
                 watchServer(await proxyMysqlConnection(clientSocket, target.conn, log));
-                clientSocket.pipe(serverSocket!);
-                serverSocket!.pipe(clientSocket);
+                if (serverSocket) {
+                    clientSocket.pipe(serverSocket);
+                    (serverSocket as net.Socket).pipe(clientSocket);
+                }
             } catch (err) {
                 logger.error(`[proxy:${projectId}] Connection error: ${getErrorMessage(err)}`);
                 cleanup();

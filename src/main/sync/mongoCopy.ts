@@ -13,7 +13,7 @@ import type { AnonymizeKind, AnonymizeCandidate } from './dataSync';
 import type { SchemaChange } from './schemaDiff';
 import type { SyncChoices, SyncProgress, SyncResult, TablePlan } from './syncEngine';
 import { fakeValue } from './fakeValues';
-import { replaceAtPath, SAMPLE_SIZE, describeSample } from '../../shared/engines/documents';
+import { SAMPLE_SIZE, describeSample } from '../../shared/engines/documents';
 import { detectFieldKind, fieldKinds } from '../mongoMasking';
 
 const BATCH = 1000;
@@ -120,7 +120,8 @@ export function mongoFake(value: unknown, kind: AnonymizeKind, b: Bson, wide = f
         if (value instanceof b.Int32) return new b.Int32(Number(fakeValue(value.valueOf(), kind, { type })));
         if (value instanceof b.Double) return new b.Double(Number(fakeValue(value.valueOf(), kind, { type })));
         if (typeof value === 'number') return fakeValue(value, kind, { type });
-        return value;
+        // Another type than the sample showed (text, an ObjectId…): hidden rather than kept
+        return mongoFake(value, 'secret', b, wide);
     }
     // Text kinds: the hash is made from the value's text, the same in every copy
     const text = value instanceof b.ObjectId ? value.toHexString()
@@ -130,13 +131,30 @@ export function mongoFake(value: unknown, kind: AnonymizeKind, b: Bson, wide = f
     return fakeValue(text, kind, { wide });
 }
 
+/**
+ * `replace` applied to the field at `path` in every shape a document gives it: arrays met on the
+ * way (marked [] in the sample or not) are walked, a scalar where an array was sampled is replaced
+ * itself. A field the sample did not show in that shape is replaced all the same.
+ */
+export function replaceEverywhere(document: Record<string, unknown>, path: string, replace: (value: unknown) => unknown): Record<string, unknown> {
+    const names = path.replace(/\[\]/g, '').split('.');
+    const plain = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+    const walk = (value: unknown, rest: string[]): unknown => {
+        if (Array.isArray(value)) return value.map(item => walk(item, rest));
+        if (rest.length === 0) return replace(value);
+        if (!plain(value) || !(rest[0] in value)) return value;
+        return { ...value, [rest[0]]: walk(value[rest[0]], rest.slice(1)) };
+    };
+    return walk(document, names) as Record<string, unknown>;
+}
+
 /** A function anonymizing a collection's documents, or null when none of its fields is chosen */
 export async function mongoAnonymizer(kinds: Map<string, AnonymizeKind>, uniquePaths: Set<string>): Promise<((doc: Document) => Document) | null> {
     const rules = [...kinds].filter(([path]) => path !== '_id');
     if (!rules.length) return null;
     const b = await bson();
     return doc => rules.reduce(
-        (out, [path, kind]) => replaceAtPath(out, path, v => mongoFake(v, kind, b, uniquePaths.has(path.replace(/\[\]/g, '')))),
+        (out, [path, kind]) => replaceEverywhere(out, path, v => mongoFake(v, kind, b, uniquePaths.has(path.replace(/\[\]/g, '')))),
         doc as Record<string, unknown>,
     ) as Document;
 }
@@ -158,9 +176,10 @@ export interface MongoCopyOptions {
 }
 
 /** Documents of a collection, in batches, by _id */
-async function* readDocuments(db: Db, collection: string, filter: Document = {}): AsyncGenerator<Document[]> {
-    // Numbers read as their own type (int32, double, long): written back exactly
-    const cursor = db.collection(collection).find(filter, { sort: { _id: 1 }, batchSize: BATCH, promoteValues: false });
+async function* readDocuments(db: Db, collection: string, filter: Document = {}, sorted = true): AsyncGenerator<Document[]> {
+    // Numbers read as their own type (int32, double, long): written back exactly. A time series has
+    // no _id index: read in its own order (a sort of a large one would fail)
+    const cursor = db.collection(collection).find(filter, { ...(sorted ? { sort: { _id: 1 }, allowDiskUse: true } : {}), batchSize: BATCH, promoteValues: false });
     let batch: Document[] = [];
     for await (const doc of cursor) {
         batch.push(doc);
@@ -204,14 +223,22 @@ export async function copyMongoDatabase(source: Db, target: Db, options: MongoCo
         options.onProgress?.({ collection: info.name, index, total: stored.length, documents });
         if (!options.emptyCollections?.has(info.name)) {
             const anonymize = await mongoAnonymizer(options.anonymize?.get(info.name) ?? new Map(), info.uniquePaths);
-            for await (const batch of readDocuments(source, info.name)) {
+            for await (const batch of readDocuments(source, info.name, {}, info.type !== 'timeseries')) {
                 documents += await insertDocuments(target, info.name, anonymize ? batch.map(anonymize) : batch);
                 options.onProgress?.({ collection: info.name, index, total: stored.length, documents });
             }
         }
         if (info.indexes.length) {
+            // A TTL index on a date that was moved or rounded would delete the copy's documents: kept without its expiry
+            const chosen = options.anonymize?.get(info.name) ?? new Map();
+            const indexes = info.indexes.map(index => {
+                if (index.expireAfterSeconds === undefined || !Object.keys(index.key ?? {}).some(field => chosen.has(field))) return index;
+                const { expireAfterSeconds: _ttl, ...rest } = index;
+                warnings.push(`${info.name}.${index.name}: copied without its expiry (its date is anonymized)`);
+                return rest;
+            });
             try {
-                await target.command(createIndexesCommand(info.name, info.indexes));
+                await target.command(createIndexesCommand(info.name, indexes));
             } catch (error) {
                 warnings.push(`${info.name}: indexes not created (${error instanceof Error ? error.message : String(error)})`);
             }
@@ -242,8 +269,8 @@ const ejson = async (command: Document) => JSON.stringify((await bson()).BSON.EJ
 /** What the target lacks: collections, indexes (by name), views; collections only it has (not chosen) */
 export async function diffMongoSchemas(src: MongoCatalog, tgt: MongoCatalog): Promise<SchemaChange[]> {
     const changes: SchemaChange[] = [];
-    let n = 0;
-    const add = (change: Omit<SchemaChange, 'id' | 'defaultSelected'>) => changes.push({ id: `m${n++}`, defaultSelected: !change.destructive, ...change });
+    // The id says what the change is: an apply minutes later runs the change previewed, never another
+    const add = (change: Omit<SchemaChange, 'id' | 'defaultSelected'>) => changes.push({ id: `${change.kind}:${change.object}`, defaultSelected: !change.destructive, ...change });
     for (const info of src.collections.values()) {
         const local = tgt.collections.get(info.name);
         if (info.type === 'view') {
@@ -289,10 +316,12 @@ async function sampleFields(db: Db, collection: string) {
     };
 }
 
-async function idSet(db: Db, collection: string): Promise<Set<string>> {
+/** Which of these _ids the collection already has (looked up batch by batch, never all of them in memory) */
+async function presentIds(db: Db, collection: string, ids: unknown[]): Promise<Set<string>> {
     const key = await idKey();
     const have = new Set<string>();
-    for await (const doc of db.collection(collection).find({}, { projection: { _id: 1 }, batchSize: 5000, promoteValues: false })) have.add(key(doc._id));
+    if (!ids.length) return have;
+    for await (const doc of db.collection(collection).find({ _id: { $in: ids } } as Document, { projection: { _id: 1 }, promoteValues: false })) have.add(key(doc._id));
     return have;
 }
 
@@ -314,9 +343,18 @@ export async function analyzeMongoSync(source: Db, target: Db): Promise<{ schema
         };
         if (!local || localRows === 0) { plan.missing = sourceRows; plan.missingExact = true; }
         else if (sourceRows <= EXACT_LIMIT) {
-            const have = await idSet(target, info.name);
             let missing = 0;
-            for await (const doc of source.collection(info.name).find({}, { projection: { _id: 1 }, batchSize: 5000, promoteValues: false })) if (!have.has(key(doc._id))) missing++;
+            let batch: unknown[] = [];
+            const count = async () => {
+                const have = await presentIds(target, info.name, batch);
+                missing += batch.filter(id => !have.has(key(id))).length;
+                batch = [];
+            };
+            for await (const doc of source.collection(info.name).find({}, { projection: { _id: 1 }, batchSize: BATCH, promoteValues: false })) {
+                batch.push(doc._id);
+                if (batch.length >= BATCH) await count();
+            }
+            await count();
             plan.missing = missing;
             plan.missingExact = true;
         } else {
@@ -381,9 +419,11 @@ export async function applyMongoSync(
                 const field = mongoTimeField(fields, idIsObjectId);
                 if (field === '_id') filter = { _id: { $gte: b.ObjectId.createFromTime(Math.floor(since.getTime() / 1000)) } };
                 else if (field) filter = { [field]: { $gte: since } };
+                // "The last days" without a date would copy everything: said instead
+                else { outcome.error = 'no date field to keep the last days by'; continue; }
             }
-            const have = await idSet(target, name);
-            for await (const batch of readDocuments(source, name, filter)) {
+            for await (const batch of readDocuments(source, name, filter, info.type !== 'timeseries')) {
+                const have = await presentIds(target, name, batch.map(d => d._id));
                 const missing = batch.filter(d => !have.has(key(d._id)));
                 const written = await insertDocuments(target, name, anonymize ? missing.map(anonymize) : missing);
                 outcome.copied += written;

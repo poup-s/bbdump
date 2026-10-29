@@ -65,7 +65,7 @@ export async function duplicateMongoDatabase(params: MongoDuplicateParams, progr
         const server = saved(params.serverOf || source.id);
         if (engineOf(server) !== 'mongodb') throw new Error('The copy goes to a MongoDB server');
         const name = String(params.name ?? '').trim();
-        if (!/^[A-Za-z0-9_-]{1,63}$/.test(name)) throw new Error('A database name of letters, digits, - and _ is needed');
+        if (!/^[A-Za-z0-9_-]{1,63}$/.test(name) || ['admin', 'local', 'config'].includes(name.toLowerCase())) throw new Error('A database name of letters, digits, - and _ is needed (not admin, local or config)');
 
         // The choices name collections "<database>.<collection>", as the dialog lists them
         const anonymize = new Map<string, Map<string, AnonymizeKind>>();
@@ -79,7 +79,8 @@ export async function duplicateMongoDatabase(params: MongoDuplicateParams, progr
 
         const result = await withSavedMongo(source.id, (srcClient, srcName) => withSavedMongo(server.id, async tgtClient => {
             const { databases } = await tgtClient.db('admin').admin().listDatabases({ nameOnly: true, authorizedDatabases: true });
-            if (databases.some(d => d.name === name)) throw new Error(`A database named ${name} already exists on this server`);
+            // MongoDB refuses two names that differ only by case
+            if (databases.some(d => d.name.toLowerCase() === name.toLowerCase())) throw new Error(`A database named ${name} already exists on this server`);
             undo = async () => {
                 await withSavedMongo(server.id, async c => { await c.db(name).dropDatabase(); });
             };
@@ -110,8 +111,9 @@ export function mongoPair(targetId: string, sourceId: string, writable: boolean)
     if (target.id === source.id) throw new Error('The source and the target are the same database');
     if (engineOf(target) !== 'mongodb' || engineOf(source) !== 'mongodb') throw new Error('The source must be a database of the same engine');
     if (writable) {
-        const local = LOCAL_HOSTS.includes((target.host || '').toLowerCase()) && !target.ssh && !target.connectionString;
-        if (!local) throw new Error('Only a database of this computer can be updated from another one');
+        // On this computer and made by bbdump (local server or a copy): a port forward on 127.0.0.1 is never written
+        const local = LOCAL_HOSTS.includes((target.host || '').toLowerCase()) && !target.ssh && !target.connectionString && (!!target.isLocalBbdump || !!target.syncSourceId);
+        if (!local) throw new Error('Only a database of this computer that bbdump made (on its local server, or a copy) can be updated from another one');
         const project = (getConfig().projects ?? []).find(p => p.databaseIds?.includes(target.id));
         if (!project?.databaseIds?.includes(source.id)) throw new Error('The source must be a database of the same project');
     }

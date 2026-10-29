@@ -27,6 +27,9 @@ export const CAP = {
     MFA: 0x10000000,
 } as const;
 
+/** The app's login and the server's together must finish in this time */
+const HANDSHAKE_TIMEOUT_MS = 15_000;
+
 /** What the app must never negotiate with the proxy (no TLS or compression on 127.0.0.1) */
 const HIDDEN_FROM_CLIENT = CAP.SSL | CAP.COMPRESS | CAP.ZSTD | CAP.MFA;
 
@@ -252,6 +255,10 @@ async function startTls(socket: net.Socket, conn: MysqlConnection): Promise<tls.
 export async function proxyMysqlConnection(client: net.Socket, conn: MysqlConnection, log: (message: string) => void): Promise<net.Socket | tls.TLSSocket> {
     let server: net.Socket | tls.TLSSocket = await connectTcp(conn.host, conn.port);
     let clientSeq = 0;
+    let greeted = false;
+    // A client or a server that stays silent does not hold a connection forever
+    let timedOut = false;
+    const deadline = setTimeout(() => { timedOut = true; server.destroy(); client.destroy(); }, HANDSHAKE_TIMEOUT_MS);
     try {
         const first = await readPacket(server);
         const greeting = parseGreeting(first.payload);
@@ -260,6 +267,7 @@ export async function proxyMysqlConnection(client: net.Socket, conn: MysqlConnec
 
         // The app logs in to the proxy (its password is not checked: the proxy only listens on 127.0.0.1)
         client.write(packet(0, greetingForClient(greeting)));
+        greeted = true;
         const answer = await readPacket(client);
         clientSeq = answer.seq;
         const app = parseHandshakeResponse(answer.payload);
@@ -279,6 +287,7 @@ export async function proxyMysqlConnection(client: net.Socket, conn: MysqlConnec
         }
         let plugin = greeting.plugin;
         let salt = greeting.salt;
+        let askedKey = false;
         server.write(packet(seq++, buildHandshakeResponse({
             caps, maxPacket: app.maxPacket, charset: app.charset, mariaCaps: app.mariaCaps,
             user: conn.user, auth: scramble(plugin, conn.password, salt), database: conn.database, plugin,
@@ -291,6 +300,7 @@ export async function proxyMysqlConnection(client: net.Socket, conn: MysqlConnec
             if (kind === 0x00) {
                 // Logged in: the app gets the server's OK, numbered after its own login
                 client.write(packet(clientSeq + 1, reply.payload));
+                clearTimeout(deadline);
                 return server;
             }
             if (kind === 0xff) throw new Error(errorText(reply.payload));
@@ -298,6 +308,10 @@ export async function proxyMysqlConnection(client: net.Socket, conn: MysqlConnec
                 // The server asks for another method
                 const next = cstring(reply.payload, 1);
                 plugin = next.value;
+                // The password in clear only to a server whose certificate was checked
+                if (plugin === 'mysql_clear_password' && !(useTls && conn.tls?.verifyServer)) {
+                    throw new Error('The server asks for the password in clear text without a verified TLS connection: refused');
+                }
                 salt = reply.payload.subarray(next.next);
                 if (salt.length && salt[salt.length - 1] === 0) salt = salt.subarray(0, salt.length - 1);
                 server.write(packet(seq, scramble(plugin, conn.password, salt)));
@@ -308,10 +322,13 @@ export async function proxyMysqlConnection(client: net.Socket, conn: MysqlConnec
                 if (data.length === 1 && data[0] === 0x03) continue; // fast login: the OK follows
                 if (data.length === 1 && data[0] === 0x04) {
                     // Full login: the password in clear over TLS, else encrypted with the server's key
+                    askedKey = !useTls;
                     server.write(packet(seq, useTls ? Buffer.from(`${conn.password}\0`, 'utf8') : Buffer.from([0x02])));
                     continue;
                 }
-                if (data.toString('latin1').includes('BEGIN PUBLIC KEY')) {
+                // Only the key the proxy just asked for
+                if (askedKey && data.toString('latin1').includes('BEGIN PUBLIC KEY')) {
+                    askedKey = false;
                     const secret = xor(Buffer.from(`${conn.password}\0`, 'utf8'), salt.subarray(0, 20));
                     const encrypted = crypto.publicEncrypt({ key: data.toString('latin1'), padding: crypto.constants.RSA_PKCS1_OAEP_PADDING }, secret);
                     server.write(packet(seq, encrypted));
@@ -322,9 +339,11 @@ export async function proxyMysqlConnection(client: net.Socket, conn: MysqlConnec
         }
         throw new Error('The login to the server did not finish');
     } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        try { client.write(errorPacket(clientSeq + 1, `bbdump proxy: ${message}`, /denied/i.test(message) ? 1045 : 2013)); } catch { /* closed */ }
+        clearTimeout(deadline);
+        const message = timedOut ? 'the login did not finish in time' : error instanceof Error ? error.message : String(error);
+        // Before the greeting, the app expects packet 0
+        try { client.write(errorPacket(greeted ? clientSeq + 1 : 0, `bbdump proxy: ${message}`, /denied/i.test(message) ? 1045 : 2013)); } catch { /* closed */ }
         server.destroy();
-        throw error;
+        throw timedOut ? new Error(message) : error;
     }
 }

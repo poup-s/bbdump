@@ -342,8 +342,10 @@ export async function startLocalServer(engine: LocalEngine): Promise<{ success: 
             const service = await windowsService(engine);
             if (!service) return { success: false, error: 'No server service found' };
             // Starting a service needs the administrator: Windows asks
-            const result = await run('powershell.exe', ['-NoProfile', '-Command', `Start-Process -FilePath sc.exe -ArgumentList 'start','${service}' -Verb RunAs -Wait`], 120000);
-            if (result.code !== 0) return { success: false, error: result.stderr.trim() || 'Not started' };
+            // -PassThru: sc's own exit code (Start-Process alone says 0 even when the service fails to start)
+            const result = await run('powershell.exe', ['-NoProfile', '-Command', `$p = Start-Process -FilePath sc.exe -ArgumentList 'start','${service}' -Verb RunAs -Wait -PassThru; exit $p.ExitCode`], 120000);
+            // 1056: already running
+            if (result.code !== 0 && result.code !== 1056) return { success: false, error: result.stderr.trim() || `The service did not start (sc: ${result.code})` };
         }
         if (!(await waitForPort(LOCAL_ENGINE_PORT[engine], 30))) return { success: false, error: 'The server does not answer yet' };
         return { success: true };
@@ -397,7 +399,11 @@ export async function createLocalAccount(engine: LocalEngine, port: number): Pro
     }
 }
 
+/** Databases of the servers themselves: never created nor dropped by bbdump */
+const SYSTEM_DATABASES = new Set(['mysql', 'sys', 'information_schema', 'performance_schema', 'admin', 'local', 'config']);
+
 export function validLocalName(engine: LocalEngine, name: string): boolean {
+    if (SYSTEM_DATABASES.has(name.toLowerCase())) return false;
     return engine === 'mongodb' ? /^[A-Za-z0-9_-]{1,63}$/.test(name) : /^[A-Za-z_][A-Za-z0-9_$]{0,63}$/.test(name);
 }
 
@@ -478,8 +484,11 @@ export async function dropLocalEngineDatabase(id: string): Promise<{ success: bo
     const db = getConfig().databases.find(d => d.id === id);
     if (!db || !db.isLocalBbdump) return { success: false, error: 'Not a database bbdump created on this computer' };
     if (!LOCAL_HOSTS.includes(db.host) || db.ssh || db.connectionString) return { success: false, error: 'Not a database of this computer' };
-    const password = db.encrypted && db.password ? encryptionManager.decrypt(db.password) : db.password || '';
+    const engine = db.engine === 'mongodb' ? 'mongodb' : db.engine === 'mariadb' ? 'mariadb' : 'mysql';
+    // Never a server's own database, whatever an old or edited entry says
+    if (!validLocalName(engine, db.name) || SYSTEM_DATABASES.has(db.name.toLowerCase())) return { success: false, error: `${db.name} is not a database bbdump can delete` };
     try {
+        const password = db.encrypted && db.password ? encryptionManager.decrypt(db.password) : db.password || '';
         if (db.engine === 'mongodb') {
             const { MongoClient } = await import('mongodb');
             const client = new MongoClient(mongoUrl(db.port, db.user ? { user: db.user, password } : undefined), { serverSelectionTimeoutMS: 5000 });

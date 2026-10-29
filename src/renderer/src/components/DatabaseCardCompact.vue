@@ -76,7 +76,8 @@ const onLoopback = computed(() => ['localhost', '127.0.0.1', '::1'].includes((pr
  * MariaDB on this computer without SSH. Never a remote database.
  */
 const isOnThisComputer = computed(() => (copiedByBbdump.value
-  ? engine.value === 'sqlite' || (onLoopback.value && !props.db.ssh)
+  // Made by bbdump (its local server, or a copy): a port forward on 127.0.0.1 is not one
+  ? engine.value === 'sqlite' || (onLoopback.value && !props.db.ssh && !props.db.connectionString && (!!props.db.isLocalBbdump || !!props.db.syncSourceId))
   : !!props.db.isLocalBbdump && onLoopback.value));
 
 /** Other databases of the same engine in this database's project (the sources "Update from…" can use) */

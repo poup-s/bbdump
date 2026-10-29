@@ -16,13 +16,25 @@ const proxyHolder = (projectId: string) => `proxy:${projectId}`;
  * tunnel, held open as long as the proxy runs (released by stopping or switching it).
  */
 export async function resolveProxyTarget(dbId: string, projectId: string): Promise<ProxyTarget | null> {
-    releaseHolder(proxyHolder(projectId));
     const db = getConfig().databases.find(d => d.id === dbId);
     if (!db) return null;
     const runtime = runtimeOf(db);
-    if (!db.ssh) return proxyTargetFor(runtime);
-    const endpoint = await holdTunnel(db.ssh, proxyHolder(projectId));
-    return proxyTargetFor(runtime, endpoint);
+    const holder = proxyHolder(projectId);
+    if (!db.ssh) {
+        const target = proxyTargetFor(runtime);
+        if (target) releaseHolder(holder);
+        return target;
+    }
+    // The new tunnel is up before the old one is let go: a failed switch keeps the running target reachable
+    const pending = `${holder}:next`;
+    const endpoint = await holdTunnel(db.ssh, pending);
+    const target = proxyTargetFor(runtime, endpoint);
+    if (target) {
+        releaseHolder(holder);
+        await holdTunnel(db.ssh, holder);
+    }
+    releaseHolder(pending);
+    return target;
 }
 
 export function releaseProxyTunnel(projectId: string): void {
@@ -68,7 +80,13 @@ export function registerProxyHandlers() {
 
             const targetDbName = targetDb?.displayName || targetDb?.name;
 
-            await tcpProxyManager.startProxy(projectId, port, target, targetDbName);
+            try {
+                await tcpProxyManager.startProxy(projectId, port, target, targetDbName);
+            } catch (error) {
+                // Not started (the port was taken meanwhile): its tunnel is not held
+                if (!tcpProxyManager.isRunning(projectId)) releaseProxyTunnel(projectId);
+                throw error;
+            }
 
             project.proxyEnabled = true;
             project.proxyPort = port;

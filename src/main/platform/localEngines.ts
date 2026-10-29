@@ -122,7 +122,11 @@ export function linuxLocalScript(engine: LocalEngine, family: LinuxFamily, passw
         '',
         // Root reached through its socket (a fresh install); a server set up before may ask for root's password
         `step 90 "Creating the ${LOCAL_ACCOUNT} account"`,
-        `if ! ${spec.client} -e "${sql}"; then`,
+        // On stdin, not on the command line: the password never shows in the process list
+        `if ! ${spec.client} <<'BBDUMP_SQL'`,
+        `${sql};`,
+        'BBDUMP_SQL',
+        'then',
         '  echo "The server is running, but its root account asks for a password: type an administrator account in bbdump" >&2',
         '  exit 3',
         'fi',

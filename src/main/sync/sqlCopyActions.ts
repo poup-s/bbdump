@@ -211,8 +211,11 @@ export function sqlPair(targetId: string, sourceId: string, writable: boolean): 
   if (family(target) !== family(source)) throw new Error('The source must be a database of the same engine');
   if (writable) {
     const host = (target.host || '').toLowerCase();
-    const local = engineOf(target) === 'sqlite' || (['localhost', '127.0.0.1', '::1'].includes(host) && !target.ssh);
-    if (!local) throw new Error('Only a database of this computer can be updated from another one');
+    // On this computer (no tunnel, no URL to elsewhere), and made by bbdump: on its local server or as a copy.
+    // A port forward to another server also listens on 127.0.0.1: never written
+    const local = engineOf(target) === 'sqlite'
+      || (['localhost', '127.0.0.1', '::1'].includes(host) && !target.ssh && !target.connectionString && (!!target.isLocalBbdump || !!target.syncSourceId));
+    if (!local) throw new Error('Only a database of this computer that bbdump made (on its local server, or a copy) can be updated from another one');
     const project = (getConfig().projects ?? []).find(p => p.databaseIds?.includes(target.id));
     if (!project?.databaseIds?.includes(source.id)) throw new Error('The source must be a database of the same project');
   }
