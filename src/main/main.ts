@@ -13,6 +13,7 @@ import { registerDbViewerHandlers, closeAllPools } from './ipc/dbViewerIpc';
 import { registerFeatureHandlers } from './featureFlags';
 import { registerSystemHandlers } from './ipc/systemIpc';
 import { registerSetupHandlers } from './ipc/setupIpc';
+import { registerLocalServerHandlers } from './ipc/localServerIpc';
 import { registerAiChatHandlers, stopAllChats } from './ipc/aiChatIpc';
 import { registerDashboardHandlers } from './ipc/dashboardIpc';
 import { registerDatabaseCreationHandlers } from './ipc/databaseCreationIpc';
@@ -181,6 +182,7 @@ function createWindow(): void {
     // Handlers outlive the window (it is re-created after being destroyed): resolve it on each use
     registerSystemHandlers(getMainWindow);
     registerSetupHandlers(getMainWindow);
+    registerLocalServerHandlers(getMainWindow);
     registerDatabaseCreationHandlers(getMainWindow);
     registerAiChatHandlers(getMainWindow);
     registerDashboardHandlers(getMainWindow);

@@ -86,6 +86,26 @@
     tables, columns, indexes, foreign keys and views the copy lacks, then the missing rows found
     key by key (optionally anonymized, or only the last days), after a backup if you want one.
     Only a database of this computer is written (a SQLite file, MySQL / MariaDB on localhost).
+- **Restore into a new database**, for MySQL, MariaDB, MongoDB and SQLite too: **New database**
+  in the restore dialog creates it on the server of a database of the same engine you saved
+  (MySQL, MariaDB, MongoDB) or as a new file (SQLite), restores the backup into it and saves it in
+  bbdump, automatic backups off. A restore that fails removes the database it created.
+- **Project proxy** for MySQL, MariaDB and MongoDB databases. The project's stable URL now speaks
+  the engine of the database it routes to: `mysql://name:name@127.0.0.1:port/name` (any user and
+  password: bbdump logs in to the real server with the saved account, TLS when the database asks
+  for it) or `mongodb://127.0.0.1:port/name?directConnection=true` (no user: bbdump logs in, and
+  your app's commands go to the target database whatever name it uses; a replica set or an SRV
+  address is reached through its primary). Routing a running proxy to a database of another
+  engine restarts it (the connected apps are disconnected, the URL changes). SQLite files have no
+  proxy.
+- **Local server for MySQL, MariaDB and MongoDB.** **This computer** in the add dialog shows the
+  server that runs here (or not), installs it (macOS with Homebrew, Linux with the distribution's
+  packages for MySQL and MariaDB, Windows with winget for MariaDB and MongoDB; otherwise the
+  command to run), starts it, then creates the database on it. bbdump needs an account there:
+  root without a password (Homebrew's MySQL), none at all (MongoDB), a `bbdump` account it creates
+  (Homebrew's MariaDB, Linux), or an administrator account you type once, kept encrypted on this
+  computer apart from the configuration. Deleting such a database in bbdump drops it on the server,
+  as for PostgreSQL.
 
 ### Changed
 

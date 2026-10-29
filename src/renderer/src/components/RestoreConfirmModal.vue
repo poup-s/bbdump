@@ -31,6 +31,12 @@ const canBackupFirst = computed(() => !isNew.value && !!store.restoreTargetDb?.i
 const targetDbName = computed(() => store.restoreTargetDb?.name || '');
 const isConfirmValid = computed(() => confirmInput.value.trim() === targetDbName.value);
 const backupName = computed(() => (store.restoreBackupFile || '').split(/[\\/]/).pop() || '');
+/** Where the target is: a SQLite file has a path, a server an address */
+const targetWhere = computed(() => {
+  const target = store.restoreTargetDb;
+  if (!target) return '';
+  return target.newOn?.file || target.sqlite?.path || `${target.host}:${target.port}`;
+});
 const steps = computed(() => [t('modal.restoreStepTarget'), t('modal.restoreStepConfirm')]);
 
 const restore = async () => {
@@ -57,6 +63,30 @@ const restore = async () => {
       password: store.restoreTargetDb.password,
       connectionString: store.restoreTargetDb.connectionString
     };
+
+    // MySQL, MariaDB, MongoDB, SQLite: created, restored and saved in one go (removed if the restore fails)
+    if (store.restoreTargetDb.isNew && store.restoreTargetDb.newOn) {
+      phase.value = 'restore';
+      const result = await ipcRenderer.invoke('restore-to-new-database', {
+        backupFile: store.restoreBackupFile,
+        ...store.restoreTargetDb.newOn,
+        name: target.name,
+      }) as { success: boolean; error?: string; warnings?: string[] };
+      if (!result?.success) {
+        addToast(t('restoreFlow.failed', { name: target.name }), 'error', { detail: result?.error });
+        return;
+      }
+      const config = await ipcRenderer.invoke('get-config');
+      store.databases = config.databases;
+      if (result.warnings?.length) {
+        addToast(t('restoreFlow.doneWithErrors', { name: target.name }), 'warning', { detail: result.warnings.join('\n') });
+      } else {
+        addToast(t('restoreFlow.done', { name: target.name }), 'success');
+      }
+      isLoading.value = false;
+      close();
+      return;
+    }
 
     // If it's a new database, create it first
     if (store.restoreTargetDb.isNew) {
@@ -168,7 +198,7 @@ const close = () => {
           <div class="min-w-0 flex-1 text-right">
             <div class="text-[11px] text-gray-500 dark:text-zinc-400">{{ t('modal.restoreTarget') }}</div>
             <div class="font-mono text-[13px] overflow-hidden text-ellipsis whitespace-nowrap" :class="isNew ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400'">{{ targetDbName }}</div>
-            <div class="font-mono text-[11px] text-gray-500 dark:text-zinc-500">{{ store.restoreTargetDb?.host }}:{{ store.restoreTargetDb?.port }}</div>
+            <div class="font-mono text-[11px] text-gray-500 dark:text-zinc-500 truncate">{{ targetWhere }}</div>
           </div>
         </div>
 
@@ -192,7 +222,7 @@ const close = () => {
           <svg class="w-3.5 h-3.5 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
-          {{ isNew ? t('modal.restoreConfirmCreateWarning') : t('restoreFlow.replaceWarning', { name: targetDbName }) }}
+          {{ isNew ? t(store.restoreTargetDb?.newOn ? 'modal.restoreConfirmCreateNew' : 'modal.restoreConfirmCreateWarning') : t('restoreFlow.replaceWarning', { name: targetDbName }) }}
         </p>
 
         <SwitchRow

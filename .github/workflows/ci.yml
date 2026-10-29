@@ -133,6 +133,15 @@ jobs:
           BBDUMP_TEST_SQL_TOOLS: required
         run: node --test test/sqlLive.test.mjs
 
+      # The project proxy (an app's login answered by bbdump) and the local server (account, databases)
+      - name: Project proxy and local server on the three servers
+        env:
+          BBDUMP_TEST_MYSQL: 127.0.0.1:3306
+          BBDUMP_TEST_MARIADB: 127.0.0.1:3307
+          BBDUMP_TEST_MYSQL_PASSWORD: ci-root-pw
+          BBDUMP_TEST_MONGO: 127.0.0.1:27017
+        run: node --test test/proxyLive.test.mjs test/localServerLive.test.mjs
+
   # Windows (beta): build, tests, the installer, and a start of the packaged app
   windows:
     runs-on: windows-latest

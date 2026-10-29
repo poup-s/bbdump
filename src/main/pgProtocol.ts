@@ -86,6 +86,9 @@ function readBytes(socket: net.Socket | tls.TLSSocket, n: number): Promise<Buffe
     });
 }
 
+/** Exactly `n` bytes of a paused socket (the MySQL and MongoDB proxies read with it too) */
+export const readExact = readBytes;
+
 // ---------------------------------------------------------------------------
 //  Public read helpers
 // ---------------------------------------------------------------------------

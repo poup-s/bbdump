@@ -8,7 +8,7 @@ import ActionMenu, { type ActionMenuItem } from './ActionMenu.vue';
 import FeatureGate from './ui/FeatureGate.vue';
 import { useFeatures } from '../composables/useFeatures';
 import { engineOf, type FeatureKey } from '../../../shared/engines/features';
-import { manifestFor } from '../../../shared/engines/manifests';
+import { isMysqlFamily, manifestFor } from '../../../shared/engines/manifests';
 
 const props = defineProps<{
   db: Database;
@@ -79,10 +79,11 @@ const isOnThisComputer = computed(() => (copiedByBbdump.value
   ? engine.value === 'sqlite' || (onLoopback.value && !props.db.ssh)
   : !!props.db.isLocalBbdump && onLoopback.value));
 
-/** Other databases in this database's project (the sources "Update from…" can use) */
+/** Other databases of the same engine in this database's project (the sources "Update from…" can use) */
+const familyOf = (db: { engine?: string }) => (isMysqlFamily(engineOf(db)) ? 'mysql' : engineOf(db));
 const projectSiblings = computed(() => {
   const project = props.projectId ? store.projects.find(p => p.id === props.projectId) : null;
-  return (project?.databaseIds ?? []).filter(id => id !== props.db.id && store.databases.some(d => d.id === id)).length;
+  return (project?.databaseIds ?? []).filter(id => id !== props.db.id && store.databases.some(d => d.id === id && familyOf(d) === familyOf(props.db))).length;
 });
 
 const { isEnabled, feature } = useFeatures();
@@ -114,7 +115,7 @@ const allMenuItems = computed<ActionMenuItem[]>(() => [
   ...(!isRemoteOnly() || copiedByBbdump.value ? [{ key: 'duplicate', label: t('cardAction.duplicate'), icon: ICONS.duplicate }] : []),
   { key: 'edit', label: t('cardAction.edit'), icon: ICONS.edit },
   // Extensions of a database on the local server
-  ...(props.db.isLocalBbdump && !isRemoteOnly() ? [{ key: 'addons', label: t('postgresConfig.extensions'), icon: ICONS.puzzle }] : []),
+  ...(props.db.isLocalBbdump && !isRemoteOnly() && engine.value === 'postgresql' ? [{ key: 'addons', label: t('postgresConfig.extensions'), icon: ICONS.puzzle }] : []),
   // A local database can catch up with another database of its project (e.g. prod)
   // Never for a remote database: local server flag AND an address on this computer
   ...(isOnThisComputer.value && (!isRemoteOnly() || copiedByBbdump.value) && projectSiblings.value > 0 ? [{ key: 'sync', label: t('sync.menu'), icon: ICONS.sync }] : []),

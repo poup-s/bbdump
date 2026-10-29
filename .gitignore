@@ -35,6 +35,9 @@ ai-masking.json.tmp
 backup-history.json
 backup-history.json.tmp
 ssh-tunnels.json
+local-server.json
+local-servers.json
+local-servers.json.tmp
 features.json
 features.json.tmp
 ai-journal/

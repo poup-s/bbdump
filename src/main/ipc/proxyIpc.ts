@@ -1,10 +1,11 @@
 import { ipcMain } from 'electron';
 import { getErrorMessage } from '../utils';
-import { tcpProxyManager, ProxyStatus, TargetCredentials } from '../tcpProxy';
+import { tcpProxyManager, ProxyStatus } from '../tcpProxy';
+import { proxyProtocolOf, proxyTargetFor, type ProxyTarget } from '../proxyTargets';
+import { toRuntimeDatabase } from '../dbSecrets';
+import type { DatabaseConfig } from '../../types/config';
 import { getConfig, saveConfig } from './configIpc';
-import { encryptionManager } from '../encryption';
 import { logger } from '../logger';
-import { isSslEnabled } from '../sslConfig';
 import { proxyActivityLog, ProxyActivityEvent } from '../proxyActivityLog';
 import { holdTunnel, releaseHolder } from '../sshTunnel';
 
@@ -14,64 +15,34 @@ const proxyHolder = (projectId: string) => `proxy:${projectId}`;
  * Where a project's proxy forwards to. A database on a server is reached through its SSH
  * tunnel, held open as long as the proxy runs (released by stopping or switching it).
  */
-export async function resolveProxyTarget(dbId: string, projectId: string): Promise<TargetCredentials | null> {
-    const target = resolveDbCredentials(dbId);
+export async function resolveProxyTarget(dbId: string, projectId: string): Promise<ProxyTarget | null> {
     releaseHolder(proxyHolder(projectId));
-    if (!target) return null;
     const db = getConfig().databases.find(d => d.id === dbId);
-    if (!db?.ssh) return target;
+    if (!db) return null;
+    const runtime = runtimeOf(db);
+    if (!db.ssh) return proxyTargetFor(runtime);
     const endpoint = await holdTunnel(db.ssh, proxyHolder(projectId));
-    return { ...target, host: endpoint.host, port: endpoint.port };
+    return proxyTargetFor(runtime, endpoint);
 }
 
 export function releaseProxyTunnel(projectId: string): void {
     releaseHolder(proxyHolder(projectId));
 }
 
-/**
- * Resolve full credentials for a database (host, port, user, password, database, ssl).
- * Decrypts the password if encrypted.
- */
-function resolveDbCredentials(dbId: string): TargetCredentials | null {
-    const config = getConfig();
-    const db = config.databases.find(d => d.id === dbId);
-    if (!db) return null;
-
-    // Decrypt password
-    let password = db.password || '';
-    if (password && db.encrypted) {
-        try {
-            password = encryptionManager.decrypt(password);
-        } catch (err) {
-            logger.error(`Failed to decrypt password for ${db.name}: ${getErrorMessage(err)}`);
-        }
+/** The saved database with its password decrypted (memory only) */
+function runtimeOf(db: DatabaseConfig): DatabaseConfig {
+    try {
+        return toRuntimeDatabase(db);
+    } catch (err) {
+        logger.error(`Failed to decrypt password for ${db.name}: ${getErrorMessage(err)}`);
+        return { ...db, password: '' };
     }
+}
 
-    // If connectionString is provided, parse it
-    if (db.connectionString) {
-        try {
-            const url = new URL(db.connectionString);
-            return {
-                host: url.hostname || 'localhost',
-                port: parseInt(url.port) || 5432,
-                user: decodeURIComponent(url.username) || 'postgres',
-                password: decodeURIComponent(url.password) || password,
-                database: url.pathname.replace(/^\//, '') || db.name || 'postgres',
-                ssl: isSslEnabled(db),
-            };
-        } catch {
-            // Fall back to individual fields
-        }
-    }
-
-    return {
-        host: db.host || 'localhost',
-        port: db.port || 5432,
-        user: db.user || 'postgres',
-        password,
-        database: db.name || 'postgres',
-        ssl: isSslEnabled(db),
-    };
+/** A proxy target without opening a tunnel (a proxy that is not running only checks it exists) */
+function resolveDbCredentials(dbId: string): ProxyTarget | null {
+    const db = getConfig().databases.find(d => d.id === dbId);
+    return db ? proxyTargetFor(runtimeOf(db)) : null;
 }
 
 export function registerProxyHandlers() {
@@ -90,10 +61,11 @@ export function registerProxyHandlers() {
             const targetDbId = project.proxyTargetDbId;
             if (!targetDbId) return { success: false, error: 'No target database selected' };
 
+            const targetDb = config.databases.find(d => d.id === targetDbId);
+            if (targetDb && !proxyProtocolOf(targetDb)) return { success: false, error: 'The project proxy does not support this engine' };
             const target = await resolveProxyTarget(targetDbId, projectId);
             if (!target) return { success: false, error: 'Target database not found' };
 
-            const targetDb = config.databases.find(d => d.id === targetDbId);
             const targetDbName = targetDb?.displayName || targetDb?.name;
 
             await tcpProxyManager.startProxy(projectId, port, target, targetDbName);
@@ -154,7 +126,14 @@ export function registerProxyHandlers() {
             const dbName = db?.displayName || db?.name;
 
             if (tcpProxyManager.isRunning(projectId)) {
-                tcpProxyManager.switchTarget(projectId, target, dbName);
+                const status = tcpProxyManager.getStatus(projectId);
+                if (tcpProxyManager.engineOf(projectId) !== target.engine && status) {
+                    // Another engine: the connected apps speak the old one, the proxy restarts on its port
+                    tcpProxyManager.stopProxy(projectId);
+                    await tcpProxyManager.startProxy(projectId, status.port, target, dbName);
+                } else {
+                    tcpProxyManager.switchTarget(projectId, target, dbName);
+                }
             }
 
             project.proxyTargetDbId = targetDbId;

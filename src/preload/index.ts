@@ -11,7 +11,7 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
     // System
     'check-prerequisites', 'install-homebrew', 'install-postgresql',
     'setup-get-environment', 'setup-get-plan', 'setup-install',
-    'backup-now', 'restore-backup', 'get-backups', 'backup-engine', 'delete-backup', 'download-backup',
+    'backup-now', 'restore-backup', 'restore-to-new-database','get-backups', 'backup-engine', 'delete-backup', 'download-backup',
     'logs-read', 'clear-logs', 'get-scheduled-tasks', 'schedule-overview',
     'get-app-version', 'get-about-info', 'get-default-path', 'select-directory', 'select-ssl-root-cert', 'select-sqlite-file', 'select-sqlite-copy-path', 'duplicate-sql-database',
     'check-for-updates', 'download-update', 'install-update',
@@ -41,6 +41,9 @@ const ALLOWED_INVOKE_CHANNELS = new Set([
     'create-local-database', 'duplicate-external-to-local', 'duplicate-anonymize-plan', 'duplicate-check-extensions', 'setup-install-pg-client', 'setup-local-password', 'ai-chat-providers', 'ai-chat-models', 'ai-chat-send', 'ai-chat-stop', 'ai-chat-history-list', 'ai-chat-history-get', 'ai-chat-history-save', 'ai-chat-history-pin', 'ai-chat-history-delete', 'ai-chat-history-clear', 'ai-masking-get', 'ai-masking-set', 'ai-masking-list',
     'dashboards-list', 'dashboards-get', 'dashboards-save', 'dashboards-delete', 'dashboards-cache-get', 'dashboards-save-filters', 'dashboards-cache-set',
     'dashboards-save-csv', 'dashboards-save-xlsx', 'dashboards-export-file', 'dashboards-import-file', 'dashboards-export-pdf',
+    // Local server of MySQL, MariaDB, MongoDB
+    'local-engine-state', 'local-engine-install', 'local-engine-start', 'local-engine-save-account', 'local-engine-create-account',
+    'local-engine-create-database', 'drop-local-engine-database',
     // Proxy
     'proxy-start', 'proxy-stop', 'proxy-switch-target', 'proxy-status', 'proxy-status-all',
     'proxy-check-port', 'proxy-get-logs', 'proxy-clear-logs',
@@ -53,7 +56,7 @@ const ALLOWED_SEND_CHANNELS = new Set([
 const ALLOWED_RECEIVE_CHANNELS = new Set([
     'backup-started', 'backup-complete', 'backup-progress', 'sync-progress',
     'scheduled-backup-started', 'scheduled-backup-completed',
-    'install-progress', 'setup-progress', 'ai-chat-event',
+    'install-progress', 'setup-progress', 'local-engine-progress', 'ai-chat-event',
     'create-database-progress', 'duplicate-progress',
     'tray-refresh', 'open-dbviewer', 'edit-db',
     'update-available', 'update-downloaded', 'update-error',

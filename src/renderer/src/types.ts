@@ -129,7 +129,12 @@ export interface TableRelation {
     constraint_type?: string;
 }
 
-export type RestoreTarget = Database & { isNew?: boolean };
+/**
+ * isNew: a database created for the restore. newOn: MySQL, MariaDB and MongoDB create it on
+ * the server of a saved database (serverOf), SQLite as a new file; without it, PostgreSQL
+ * creates a local one.
+ */
+export type RestoreTarget = Database & { isNew?: boolean; newOn?: { serverOf?: string; file?: string } };
 
 // ---- IPC payloads (shapes produced by the main process) ----
 

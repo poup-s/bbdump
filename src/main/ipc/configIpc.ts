@@ -165,6 +165,8 @@ export function saveConfig(newConfig: AppConfig): void {
 export async function repairLocalDatabaseUsers(): Promise<boolean> {
     let changed = false;
     for (const db of config.databases || []) {
+        // PostgreSQL roles only (a local MySQL / MongoDB keeps the account bbdump was given)
+        if (engineOf(db) !== 'postgresql') continue;
         let password = '';
         try {
             password = db.encrypted && db.password ? encryptionManager.decrypt(db.password) : (db.password || '');

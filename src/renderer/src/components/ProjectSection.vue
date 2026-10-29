@@ -5,6 +5,8 @@ import { useToast } from '../composables/useToast';
 import { store, isRemoteOnly } from '../store';
 import { Database, Project } from '../types';
 import DatabaseCardCompact from './DatabaseCardCompact.vue';
+import { useFeatures } from '../composables/useFeatures';
+import { proxyProtocolOf, proxyUrl } from '../../../shared/engines/proxy';
 
 const props = defineProps<{
   project: Project;
@@ -61,6 +63,14 @@ const proxyState = computed(() => {
 const proxyTarget = computed(() => props.databases.find(db => db.id === props.project.proxyTargetDbId) ?? null);
 const dbLabel = (db: Database) => (db.masked ? '••••••••' : (db.displayName || db.name));
 
+const { isEnabled } = useFeatures();
+/** Databases the proxy can route to (not SQLite files) */
+const proxyDatabases = computed(() => props.databases.filter(db => isEnabled(db, 'proxy.tcp') && proxyProtocolOf(db)));
+/** The protocol the app speaks to the proxy: the target's (PostgreSQL, MySQL for MariaDB too, MongoDB) */
+const proxyProtocol = computed(() => proxyProtocolOf(proxyTarget.value ?? proxyDatabases.value[0]) ?? 'postgresql');
+/** Another protocol than the running proxy's: choosing it restarts the proxy (the URL changes) */
+const otherProtocol = (db: Database) => props.proxyStatus?.running === true && !!proxyTarget.value && proxyProtocolOf(db) !== proxyProtocol.value;
+
 // Needs a target: open the switch so the choice is right there
 watch(proxyState, (state) => {
   if (state === 'needs-target') {
@@ -82,11 +92,14 @@ watch(() => props.project.proxyEnabled, (newVal, oldVal) => {
   }
 });
 
-const proxyConnectionString = () => {
-  if (!effectivePort.value) return '';
-  const slug = slugifiedName.value;
-  return `postgresql://${slug}:${slug}@localhost:${effectivePort.value}/${slug}`;
-};
+const proxyConnectionString = () => (effectivePort.value ? proxyUrl(proxyProtocol.value, effectivePort.value, slugifiedName.value) : '');
+/** The URL in three parts, the port highlighted */
+const urlParts = computed(() => {
+  const url = proxyConnectionString();
+  const port = `:${effectivePort.value}`;
+  const at = url.lastIndexOf(port);
+  return at === -1 ? [url, '', ''] : [url.slice(0, at + 1), String(effectivePort.value), url.slice(at + port.length)];
+});
 
 const copyProxyUrl = () => {
   const connStr = proxyConnectionString();
@@ -318,7 +331,7 @@ const onDrop = (event: DragEvent) => {
             :title="t('proxy.copyUrl')"
           >
             <span class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-gray-600 dark:text-gray-300">
-              <span class="opacity-50">postgresql://</span>{{ slugifiedName }}:{{ slugifiedName }}@localhost:<span class="font-semibold" :class="proxyStatus?.running ? 'text-emerald-600 dark:text-emerald-400' : ''">{{ effectivePort }}</span>/{{ slugifiedName }}
+              {{ urlParts[0] }}<span class="font-semibold" :class="proxyStatus?.running ? 'text-emerald-600 dark:text-emerald-400' : ''">{{ urlParts[1] }}</span>{{ urlParts[2] }}
             </span>
             <svg class="w-3.5 h-3.5 shrink-0 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-200" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
@@ -336,11 +349,12 @@ const onDrop = (event: DragEvent) => {
             :class="proxyState === 'needs-target' ? 'border-amber-300 dark:border-amber-700 ring-2 ring-amber-200/60 dark:ring-amber-900/40' : 'border-gray-200 dark:border-zinc-700'"
           >
             <button
-              v-for="db in databases"
+              v-for="db in proxyDatabases"
               :key="db.id"
               type="button"
               role="radio"
               :aria-checked="project.proxyTargetDbId === db.id"
+              :title="otherProtocol(db) ? t('proxy.otherEngine') : undefined"
               class="px-2.5 py-1 rounded-md text-xs transition-colors"
               :class="project.proxyTargetDbId === db.id
                 ? 'bg-emerald-500 text-white font-medium shadow-sm'
@@ -349,7 +363,7 @@ const onDrop = (event: DragEvent) => {
             >
               {{ dbLabel(db) }}
             </button>
-            <span v-if="!databases.length" class="px-2 py-1 text-xs text-gray-400 italic">{{ t('project.noDatabases') }}</span>
+            <span v-if="!proxyDatabases.length" class="px-2 py-1 text-xs text-gray-400 italic">{{ t('project.noDatabases') }}</span>
           </div>
         </div>
 

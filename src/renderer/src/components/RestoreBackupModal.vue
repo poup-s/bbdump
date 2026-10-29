@@ -10,12 +10,12 @@ import { useToast } from '../composables/useToast';
 import { useFeatures } from '../composables/useFeatures';
 import { ipcRenderer } from '../electron';
 import { engineOf } from '../../../shared/engines/features';
-import type { RestoreTarget } from '../types';
+import type { Database, RestoreTarget } from '../types';
 import AppModal from './ui/AppModal.vue';
 import ModalHeading from './ui/ModalHeading.vue';
 import FormField from './ui/FormField.vue';
 import SegmentedControl from './ui/SegmentedControl.vue';
-import { btnGhost, btnPrimary, monoInputClass, panelClass, selectClass } from './ui/classes';
+import { btnGhost, btnPrimary, btnSecondary, monoInputClass, panelClass, selectClass } from './ui/classes';
 
 const ICON_RESTORE = 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15';
 const COUNTDOWN_SECONDS = 5;
@@ -29,8 +29,30 @@ const fileEngine = ref<string | null>(null);
 /** Targets: databases of the backup's engine that can restore (the main process checks again) */
 const databases = computed(() => (store.databases || []).filter(db =>
   isEnabled(db, 'restore.replace') && (!fileEngine.value || engineOf(db) === fileEngine.value)));
-/** A new local database is a PostgreSQL one: not for another engine's backup */
-const canCreate = computed(() => !isRemoteOnly() && (!fileEngine.value || fileEngine.value === 'postgresql'));
+/** Backup of another engine than PostgreSQL: its new database goes on a saved server, or in a new file */
+const otherEngine = computed(() => (fileEngine.value && fileEngine.value !== 'postgresql' ? fileEngine.value : null));
+const isSqliteFile = computed(() => otherEngine.value === 'sqlite');
+const where = (d: Database) => (d.ssh ? `${d.ssh.host} (SSH)` : `${d.host}:${d.port}`);
+/** Servers a new database can be created on: one per server among the saved databases of the backup's engine */
+const newServers = computed(() => {
+  if (!otherEngine.value || isSqliteFile.value) return [];
+  const seen = new Set<string>();
+  return store.databases
+    .filter(d => engineOf(d) === otherEngine.value && isEnabled(d, 'restore.toOther'))
+    .filter(d => {
+      const key = `${d.ssh?.host ?? ''}|${d.host}|${d.port}|${d.user}|${d.connectionString ?? ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map(d => ({ id: d.id, label: `${dbLabel(d)} · ${where(d)}`, db: d }));
+});
+/** PostgreSQL: a new local database (needs the local server); the others: a saved server or a new file */
+const canCreate = computed(() => (otherEngine.value
+  ? isSqliteFile.value || newServers.value.length > 0
+  : !isRemoteOnly() && (!fileEngine.value || fileEngine.value === 'postgresql')));
+const newServer = ref('');
+const newFile = ref('');
 const selectedDb = ref<string>('');
 const restoreMode = ref<'existing' | 'new'>('existing');
 const newDbName = ref('');
@@ -49,16 +71,43 @@ const modeOptions = computed(() => [
 ]);
 const steps = computed(() => [t('modal.restoreStepTarget'), t('modal.restoreStepConfirm')]);
 
+const chosenServer = computed(() => newServers.value.find(s => s.id === newServer.value)?.db ?? null);
 const newNameError = computed(() => {
-  if (restoreMode.value !== 'new') return undefined;
+  if (restoreMode.value !== 'new' || isSqliteFile.value) return undefined;
   const name = newDbName.value.trim();
   if (!name) return attempted.value ? t('createDatabase.errors.nameRequired') : undefined;
-  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) return t('createDatabase.errors.nameInvalid');
-  if (store.databases.some(db => db.name === name)) return t('createDatabase.errors.nameExists');
+  const pattern = otherEngine.value === 'mongodb' ? /^[A-Za-z0-9_-]{1,63}$/ : /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+  if (!pattern.test(name)) return t('createDatabase.errors.nameInvalid');
+  // Another engine: the same name may exist on another server
+  const server = chosenServer.value;
+  const taken = server
+    ? store.databases.some(db => engineOf(db) === otherEngine.value && db.name === name && db.host === server.host && db.port === server.port)
+    : store.databases.some(db => db.name === name);
+  if (taken) return t('createDatabase.errors.nameExists');
   return undefined;
 });
-const newPortError = computed(() => (restoreMode.value === 'new' && (!newDbPort.value || newDbPort.value < 1024 || newDbPort.value > 65535)
+const newPortError = computed(() => (restoreMode.value === 'new' && !otherEngine.value && (!newDbPort.value || newDbPort.value < 1024 || newDbPort.value > 65535)
   ? t('createDatabase.errors.portInvalid') : undefined));
+const newFileError = computed(() => {
+  if (restoreMode.value !== 'new' || !isSqliteFile.value) return undefined;
+  const file = newFile.value.trim();
+  if (!file) return attempted.value ? t('modal.restoreNewFileRequired') : undefined;
+  if (!/\.(sqlite3?|db3?|s3db|sl3)$/i.test(file)) return t('databases.duplicateFileExtension');
+  if (store.databases.some(db => db.sqlite?.path === file)) return t('modal.restoreNewFileTaken');
+  return undefined;
+});
+const chooseFile = async () => {
+  const file = await ipcRenderer.invoke('select-sqlite-copy-path', newFile.value || undefined) as string | null;
+  if (file) newFile.value = file;
+};
+const newSteps = computed(() => {
+  if (!otherEngine.value) return [t('modal.restoreNewDbStep1'), t('modal.restoreNewDbStep2'), t('modal.restoreNewDbStep3')];
+  return [
+    t(isSqliteFile.value ? 'modal.restoreNewFileStep1' : 'modal.restoreNewServerStep1'),
+    t('modal.restoreNewDbStep2'),
+    t('modal.restoreNewUndoStep3'),
+  ];
+});
 
 /** Overwriting is destructive: a short pause before it can go on */
 const waiting = computed(() => restoreMode.value === 'existing' && countdown.value > 0);
@@ -83,6 +132,8 @@ onMounted(() => {
     restoreMode.value = 'new';
     newDbName.value = previous.name;
     newDbPort.value = previous.port;
+    newServer.value = previous.newOn?.serverOf ?? '';
+    newFile.value = previous.newOn?.file ?? '';
   } else {
     selectedDb.value = (previous && databases.value.find(db => db.name === previous.name && db.host === previous.host && db.port === previous.port)?.id)
       || databases.value[0]?.id || '';
@@ -93,6 +144,7 @@ onMounted(() => {
     fileEngine.value = engine;
     if (!canCreate.value) restoreMode.value = 'existing';
     if (!databases.value.some(db => db.id === selectedDb.value)) selectedDb.value = databases.value[0]?.id || '';
+    if (!newServers.value.some(s => s.id === newServer.value)) newServer.value = newServers.value[0]?.id || '';
   }).catch(() => { /* unknown: every target stays, the main process refuses a mismatch */ });
 });
 onUnmounted(stopCountdown);
@@ -111,6 +163,22 @@ const proceedToConfirm = () => {
       return;
     }
     store.restoreTargetDb = db;
+  } else if (otherEngine.value) {
+    if (newNameError.value || newFileError.value) return;
+    if (isSqliteFile.value) {
+      const file = newFile.value.trim();
+      if (!file) return;
+      const name = (file.split(/[\\/]/).pop() || file).replace(/\.(sqlite3?|db3?|s3db|sl3)$/i, '');
+      store.restoreTargetDb = { name, displayName: name, host: '', port: 0, user: '', password: '', output: '', engine: 'sqlite', isNew: true, newOn: { file } } as RestoreTarget;
+    } else {
+      const server = chosenServer.value;
+      const name = newDbName.value.trim();
+      if (!server || !name) return;
+      store.restoreTargetDb = {
+        name, displayName: name, host: server.host, port: server.port, user: server.user, password: '', output: '',
+        engine: otherEngine.value, isNew: true, newOn: { serverOf: server.id },
+      } as RestoreTarget;
+    }
   } else {
     if (newNameError.value || newPortError.value) return;
     store.restoreTargetDb = {
@@ -165,6 +233,26 @@ const selected = computed(() => databases.value.find(db => db.id === selectedDb.
         </select>
       </FormField>
 
+      <!-- SQLite: a new file -->
+      <FormField v-else-if="isSqliteFile" :label="t('modal.restoreNewFile')" for="restore-new-file" required :error="newFileError" :hint="t('modal.restoreNewFileHint')">
+        <div class="flex gap-2">
+          <input id="restore-new-file" v-model="newFile" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" placeholder="/path/to/restored.sqlite" />
+          <button type="button" :class="btnSecondary" class="shrink-0" @click="chooseFile">{{ t('sqlModal.fileChoose') }}</button>
+        </div>
+      </FormField>
+
+      <!-- MySQL, MariaDB, MongoDB: a new database on a saved server -->
+      <template v-else-if="otherEngine">
+        <FormField :label="t('modal.restoreNewDbName')" for="restore-new-name" required :error="newNameError">
+          <input id="restore-new-name" v-model="newDbName" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" :placeholder="t('database.namePlaceholder')" />
+        </FormField>
+        <FormField :label="t('modal.restoreNewServer')" for="restore-new-server" :hint="t('modal.restoreNewServerHint')">
+          <select id="restore-new-server" v-model="newServer" :class="selectClass">
+            <option v-for="server in newServers" :key="server.id" :value="server.id">{{ server.label }}</option>
+          </select>
+        </FormField>
+      </template>
+
       <div v-else class="grid grid-cols-[minmax(0,1fr)_8rem] gap-3">
         <FormField :label="t('modal.restoreNewDbName')" for="restore-new-name" required :error="newNameError" :hint="t('createDatabase.nameHint')">
           <input id="restore-new-name" v-model="newDbName" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" :placeholder="t('database.namePlaceholder')" />
@@ -186,7 +274,7 @@ const selected = computed(() => databases.value.find(db => db.id === selectedDb.
         </div>
         <ol class="space-y-1.5">
           <li v-for="(line, index) in (restoreMode === 'new'
-            ? [t('modal.restoreNewDbStep1'), t('modal.restoreNewDbStep2'), t('modal.restoreNewDbStep3')]
+            ? newSteps
             : [t('modal.restoreStep1'), t('modal.restoreStep2'), t('modal.restoreStep3')])"
             :key="index"
             class="flex items-start gap-2 text-[12px] leading-relaxed"

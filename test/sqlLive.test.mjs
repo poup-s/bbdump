@@ -95,7 +95,7 @@ after(async () => {
     if (!c) continue;
     await c.query(`DROP DATABASE IF EXISTS \`${e.name}\``).catch(() => {});
     await c.query(`DROP DATABASE IF EXISTS \`${e.name}_copy\``).catch(() => {});
-    for (const suffix of ['dup', 'anon']) await c.query(`DROP DATABASE IF EXISTS \`${e.name}_${suffix}\``).catch(() => {});
+    for (const suffix of ['dup', 'anon', 'new']) await c.query(`DROP DATABASE IF EXISTS \`${e.name}_${suffix}\``).catch(() => {});
     await c.end();
   }
   await require(path.join(root, 'dist/main/engines/mysql.js')).closeMysqlPools();
@@ -223,6 +223,47 @@ for (const label of ['SQLite', 'MySQL', 'MariaDB']) {
       const catalog = await registry.facetForDb(e.copy, 'explorer.browse', 'catalog');
       const schema = (await catalog.listNamespaces(e.copy)).schemas[0].name;
       assert.deepEqual((await catalog.listEntities(e.copy, schema)).tables.map(x => x.name), ['customers', 'orders', 'users']);
+    });
+
+    test('backup restored into a new database, saved in bbdump; a failed one leaves nothing', async (t) => {
+      if (!toolsFor(e)) {
+        if (toolsRequired) assert.fail('the dump tools are not in the PATH');
+        t.skip('the dump tools are not in the PATH');
+        return;
+      }
+      const cfg = require(path.join(root, 'dist/main/ipc/configIpc.js'));
+      const { restoreToNewDatabase } = require(path.join(root, 'dist/main/restoreToNew.js'));
+      const backup = await registry.facetForDb(e.id, 'backup.run', 'backup');
+      const dumped = await backup.dump(cfg.getConfig().databases.find(d => d.id === e.id));
+      assert.equal(dumped.success, true, dumped.error);
+      const isSqlite = e.engine === 'sqlite';
+      const where = isSqlite ? { file: path.join(tmp, 'shop_new.sqlite') } : { serverOf: e.id, name: `${e.name}_new` };
+      const before = cfg.getConfig().databases.length;
+      const result = await restoreToNewDatabase({ backupFile: dumped.filePath, ...where });
+      assert.equal(result.success, true, result.error);
+      const saved = cfg.getConfig().databases.find(d => d.id === result.id);
+      assert.equal(saved.engine, e.engine);
+      assert.equal(saved.enabled, false);
+      assert.equal(cfg.getConfig().databases.length, before + 1);
+      const records = await registry.facetForDb(result.id, 'explorer.browse', 'records');
+      assert.equal((await records.count(result.id, { table: 'orders' })).count, 12);
+      // The same name again: refused, nothing created or saved
+      const again = await restoreToNewDatabase({ backupFile: dumped.filePath, ...where });
+      assert.equal(again.success, false);
+      assert.match(again.error, isSqlite ? /already exists/ : /already saved|already exists/);
+      // A damaged backup: the new database it created is removed
+      const broken = path.join(tmp, `broken_${e.engine}.dump`);
+      fs.writeFileSync(broken, fs.readFileSync(dumped.filePath).subarray(0, 200));
+      const brokenWhere = isSqlite ? { file: path.join(tmp, 'shop_broken.sqlite') } : { serverOf: e.id, name: `${e.name}_broken` };
+      const failed = await restoreToNewDatabase({ backupFile: broken, ...brokenWhere });
+      assert.equal(failed.success, false);
+      assert.equal(cfg.getConfig().databases.length, before + 1);
+      if (isSqlite) assert.equal(fs.existsSync(brokenWhere.file), false);
+      else {
+        const query = await registry.facetForDb(e.id, 'explorer.query', 'query');
+        const rows = (await query.run(e.id, { sql: `SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '${e.name}_broken'` })).rows;
+        assert.equal(rows.length, 0);
+      }
     });
 
     test('copy (exact, then anonymized), then update the copy from its source', async () => {

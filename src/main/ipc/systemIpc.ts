@@ -10,6 +10,7 @@ import { engineOf } from '../../shared/engines/features';
 import { checkForUpdates, downloadUpdate, quitAndInstall, supportsAutoInstall } from '../updateChecker';
 import { toRuntimeDatabase } from '../dbSecrets';
 import { listBackupEntries, runBackupNow } from '../backupActions';
+import { restoreToNewDatabase, type RestoreToNewParams } from '../restoreToNew';
 import { defaultBackupDir, resolveBackupFile } from '../backupLocations';
 import { getConfig } from './configIpc';
 import { cronManager } from '../cron';
@@ -149,6 +150,17 @@ export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null
                 error: `Unexpected error: ${error}`
             };
         }
+    });
+
+    /** MySQL, MariaDB, MongoDB (a new database on a saved server) and SQLite (a new file) */
+    ipcMain.handle('restore-to-new-database', async (_, params: RestoreToNewParams) => {
+        logger.info(`Restore into a new database: ${path.basename(String(params?.backupFile ?? ''))}`);
+        return restoreToNewDatabase({
+            backupFile: String(params?.backupFile ?? ''),
+            serverOf: typeof params?.serverOf === 'string' ? params.serverOf : undefined,
+            name: typeof params?.name === 'string' ? params.name : undefined,
+            file: typeof params?.file === 'string' ? params.file : undefined,
+        });
     });
 
     ipcMain.handle('get-backups', async () => {

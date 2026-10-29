@@ -91,6 +91,7 @@ describe('MongoDB on a real server', { skip }, () => {
     if (raw) {
       await raw.db(NAME).dropDatabase().catch(() => {});
       await raw.db(COPY).dropDatabase().catch(() => {});
+      await raw.db(`${NAME}_new`).dropDatabase().catch(() => {});
       await raw.close();
     }
     process.chdir(root);
@@ -257,6 +258,20 @@ describe('MongoDB on a real server', { skip }, () => {
         }
       }
       assert.equal(await raw.db(COPY).collection('orders').countDocuments({ total: { $type: 'double' } }), 12);
+    });
+
+    test('a backup restored into a new database on the same server, saved in bbdump', async () => {
+      const cfg = require(path.join(root, 'dist/main/ipc/configIpc.js'));
+      const { restoreToNewDatabase } = require(path.join(root, 'dist/main/restoreToNew.js'));
+      const backup = await registry.facetForDb('m1', 'backup.run', 'backup');
+      const dumped = await backup.dump(cfg.getConfig().databases.find(d => d.id === 'm1'));
+      assert.equal(dumped.success, true, dumped.error);
+      const result = await restoreToNewDatabase({ backupFile: dumped.filePath, serverOf: 'm1', name: `${NAME}_new` });
+      assert.equal(result.success, true, result.error);
+      assert.equal(cfg.getConfig().databases.find(d => d.id === result.id).name, `${NAME}_new`);
+      assert.equal(await raw.db(`${NAME}_new`).collection('orders').countDocuments(), await raw.db(NAME).collection('orders').countDocuments());
+      const again = await restoreToNewDatabase({ backupFile: dumped.filePath, serverOf: 'm1', name: COPY });
+      assert.equal(again.success, false, 'an existing database is never a new one');
     });
   });
 });

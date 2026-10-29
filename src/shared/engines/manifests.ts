@@ -62,6 +62,8 @@ const MONGODB_FEATURES = {
     'backup.encrypt': 'yes',
     // Replaces the collections the backup holds (no transaction across them: "back up first" stays on)
     'restore.replace': 'yes',
+    // Into another database, or a new one on the server of a saved MongoDB database
+    'restore.toOther': 'yes',
     // Collections, documents (filter, sort, pages), sampled schema, indexes
     'explorer.documents': 'yes',
     // One document at a time, refused when it changed since it was read
@@ -78,6 +80,10 @@ const MONGODB_FEATURES = {
     'chat': 'yes',
     // Dashboards made with the AI: each block is a read-only aggregation
     'dashboards': 'yes',
+    // The project proxy: the app connects without a user, the commands go to the target database
+    'proxy.tcp': 'yes',
+    // A server on this computer (Homebrew, winget): installed, started, databases created by bbdump
+    'local.server': 'yes',
 } as const satisfies Partial<Record<FeatureKey, Support>>;
 
 export const MONGODB: EngineManifest = {
@@ -105,10 +111,13 @@ const MYSQL_FEATURES = {
     'backup.encrypt': 'yes',
     // The tables of the backup replace those of the target (no transaction around DDL: "back up first" stays on)
     'restore.replace': 'yes',
+    // Into another database, or a new one on the server of a saved database of the same engine
+    'restore.toOther': 'yes',
     // Copied by bbdump itself into a new database on a server it reaches (no dump tools);
     // "Update from…" only writes into a database of this computer
     'database.duplicate': 'yes',
     'sync.fromSource': 'yes',
+    'sync.anonymize': 'yes',
     'explorer.browse': 'yes',
     'explorer.edit': 'yes',
     'explorer.query': 'yes',
@@ -119,6 +128,11 @@ const MYSQL_FEATURES = {
     'mask.fields': 'yes',
     'chat': 'yes',
     'dashboards': 'yes',
+    // The project proxy: bbdump answers the app's login and logs in with the saved account
+    'proxy.tcp': 'yes',
+    // A server on this computer (Homebrew, the distribution, winget for MariaDB): installed,
+    // started, databases created by bbdump (deleted with them)
+    'local.server': 'yes',
 } as const satisfies Partial<Record<FeatureKey, Support>>;
 
 export const MYSQL: EngineManifest = {
@@ -152,9 +166,12 @@ const SQLITE_FEATURES = {
     'backup.verify': 'yes',
     'backup.encrypt': 'yes',
     'restore.replace': 'yes',
+    // Into another file, or a new one
+    'restore.toOther': 'yes',
     // A copy is a new file; "Update from…" writes into a file (always on this computer)
     'database.duplicate': 'yes',
     'sync.fromSource': 'yes',
+    'sync.anonymize': 'yes',
     'explorer.browse': 'yes',
     'explorer.edit': 'yes',
     'explorer.query': 'yes',

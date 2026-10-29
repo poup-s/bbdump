@@ -15,6 +15,7 @@ import AppModal from './ui/AppModal.vue';
 import { btnGhost, btnSecondary } from './ui/classes';
 import { engineOf } from '../../../shared/engines/features';
 import { formatMongoUri } from '../../../shared/engines/mongoUri';
+import { proxyProtocolOf } from '../../../shared/engines/proxy';
 // ProxyPortModal removed — config is now inline in ProjectSection
 
 const { t } = useI18n();
@@ -90,7 +91,14 @@ const deleteDatabase = (db: Database) => {
           // One toast per outcome: dropped, already gone, or kept on the server but removed from bbdump
           let outcome: 'deleted' | 'gone' | 'kept' = 'deleted';
           if (isLocal) {
-            const result = await ipcRenderer.invoke('drop-postgres-database', db.name, db.port, true);
+            // MySQL, MariaDB, MongoDB: a database bbdump created on this computer's server
+            const result = engineOf(db) === 'postgresql'
+              ? await ipcRenderer.invoke('drop-postgres-database', db.name, db.port, true)
+              : await ipcRenderer.invoke('drop-local-engine-database', db.id) as { success: boolean; error?: string; gone?: boolean };
+            if (result.success && result.gone) {
+              outcome = 'gone';
+              addToast(t('databases.dbAlreadyDeleted', { name: db.name }), 'info');
+            }
             if (!result.success) {
               const isNotFoundError = result.error && (
                 result.error.includes('does not exist') || 
@@ -515,10 +523,14 @@ const handleUpdateProxyConfig = async (projectId: string, config: { port?: numbe
 const handleSetProxyTarget = (projectId: string, dbId: string) => {
   const db = store.databases.find(d => d.id === dbId);
   const name = db?.displayName || db?.name || dbId;
+  // A running proxy of another engine restarts: the apps connected to it are cut, the URL changes
+  const project = store.projects.find(p => p.id === projectId);
+  const current = store.databases.find(d => d.id === project?.proxyTargetDbId);
+  const otherEngine = !!store.proxyStatuses[projectId]?.running && !!current && proxyProtocolOf(current) !== proxyProtocolOf(db);
 
   showConfirm({
     title: t('proxy.confirmTarget', { name }),
-    message: t('proxy.confirmTargetMessage'),
+    message: otherEngine ? t('proxy.confirmOtherEngine') : t('proxy.confirmTargetMessage'),
     confirmText: t('common.confirm'),
     cancelText: t('common.cancel'),
     type: 'info',

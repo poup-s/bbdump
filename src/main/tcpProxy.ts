@@ -1,5 +1,5 @@
 /**
- * PostgreSQL-aware proxy.
+ * Project proxy: PostgreSQL here, MySQL / MariaDB (mysqlProxy.ts) and MongoDB (mongoProxy.ts).
  *
  * Each project gets a local listening port (e.g. 54320).
  * Clients connect with any credentials — the proxy always replies AuthOk.
@@ -15,7 +15,6 @@ import * as tls from 'tls';
 import { logger } from './logger';
 import { proxyActivityLog } from './proxyActivityLog';
 import {
-    TargetCredentials,
     isSSLRequest,
     readInitialMessage,
     readBackendMessage,
@@ -24,13 +23,17 @@ import {
     buildErrorResponse,
     connectAndAuthenticate,
 } from './pgProtocol';
+import type { ProxyTarget } from './proxyTargets';
+import { proxyMysqlConnection } from './mysqlProxy';
+import { proxyMongoConnection } from './mongoProxy';
 
 export { TargetCredentials } from './pgProtocol';
+export type { ProxyTarget } from './proxyTargets';
 
 interface ProxyInstance {
     server: net.Server;
     port: number;
-    target: TargetCredentials;
+    target: ProxyTarget;
     activeConnections: Set<net.Socket>;
 }
 
@@ -48,7 +51,7 @@ class TcpProxyManager {
     /**
      * Start a PG proxy for a project.
      */
-    startProxy(projectId: string, port: number, target: TargetCredentials, dbName?: string): Promise<void> {
+    startProxy(projectId: string, port: number, target: ProxyTarget, dbName?: string): Promise<void> {
         return new Promise((resolve, reject) => {
             if (this.proxies.has(projectId)) {
                 this.stopProxy(projectId);
@@ -83,12 +86,12 @@ class TcpProxyManager {
                 const instance: ProxyInstance = {
                     server,
                     port,
-                    target: { ...target },
+                    target: { ...target } as ProxyTarget,
                     activeConnections,
                 };
                 this.proxies.set(projectId, instance);
                 const label = dbName || target.database;
-                logger.info(`PG proxy started for ${projectId} on 127.0.0.1:${port} → ${label} (${target.host}:${target.port})`);
+                logger.info(`Proxy (${target.engine}) started for ${projectId} on 127.0.0.1:${port} → ${label} (${target.host}:${target.port})`);
                 proxyActivityLog.addEvent(projectId, 'started', {
                     port,
                     targetHost: target.host,
@@ -107,7 +110,7 @@ class TcpProxyManager {
     private async handleConnection(
         projectId: string,
         clientSocket: net.Socket,
-        target: TargetCredentials,
+        target: ProxyTarget,
         activeConnections: Set<net.Socket>,
         remoteAddress: string,
     ) {
@@ -133,6 +136,40 @@ class TcpProxyManager {
             cleanup();
         });
         clientSocket.on('close', cleanup);
+
+        const watchServer = (socket: net.Socket | tls.TLSSocket) => {
+            serverSocket = socket;
+            activeConnections.add(socket);
+            socket.on('error', (err) => {
+                logger.warn(`Proxy server socket error [${projectId}]: ${err.message}`);
+                cleanup();
+            });
+            socket.on('close', cleanup);
+        };
+        const log = (message: string) => logger.info(`[proxy:${projectId}] ${message}`);
+
+        // MySQL / MariaDB: the handshake answered by bbdump, then a plain pipe
+        if (target.engine === 'mysql') {
+            try {
+                watchServer(await proxyMysqlConnection(clientSocket, target.conn, log));
+                clientSocket.pipe(serverSocket!);
+                serverSocket!.pipe(clientSocket);
+            } catch (err) {
+                logger.error(`[proxy:${projectId}] Connection error: ${getErrorMessage(err)}`);
+                cleanup();
+            }
+            return;
+        }
+        // MongoDB: the app's commands forwarded to the target database
+        if (target.engine === 'mongodb') {
+            try {
+                watchServer(await proxyMongoConnection(clientSocket, target.mongo, log));
+            } catch (err) {
+                logger.error(`[proxy:${projectId}] Connection error: ${getErrorMessage(err)}`);
+                cleanup();
+            }
+            return;
+        }
 
         try {
             // --- Phase 1: Read & discard client startup (fake creds) ---
@@ -197,12 +234,14 @@ class TcpProxyManager {
      * Switch the target of an existing proxy.
      * New connections use the new target; existing connections stay on the old one.
      */
-    switchTarget(projectId: string, target: TargetCredentials, dbName?: string): void {
+    switchTarget(projectId: string, target: ProxyTarget, dbName?: string): void {
         const instance = this.proxies.get(projectId);
         if (!instance) throw new Error(`No proxy running for project ${projectId}`);
-        instance.target = { ...target };
+        // The apps connected to it speak one protocol
+        if (instance.target.engine !== target.engine) throw new Error(`This proxy speaks ${instance.target.engine}: stop it to route it to a ${target.engine} database`);
+        instance.target = { ...target } as ProxyTarget;
         const label = dbName || target.database;
-        logger.info(`PG proxy target switched for ${projectId} → ${label} (${target.host}:${target.port})`);
+        logger.info(`Proxy target switched for ${projectId} → ${label} (${target.host}:${target.port})`);
         proxyActivityLog.addEvent(projectId, 'target-switched', {
             port: instance.port,
             targetHost: target.host,
@@ -219,7 +258,7 @@ class TcpProxyManager {
         instance.activeConnections.clear();
         instance.server.close();
         this.proxies.delete(projectId);
-        logger.info(`PG proxy stopped for ${projectId}`);
+        logger.info(`Proxy stopped for ${projectId}`);
         proxyActivityLog.addEvent(projectId, 'stopped', {
             port: instance.port,
             message: `Proxy stopped (was on port ${instance.port})`,
@@ -257,7 +296,12 @@ class TcpProxyManager {
 
     stopAll(): void {
         for (const [id] of this.proxies) this.stopProxy(id);
-        logger.info('All PG proxies stopped');
+        logger.info('All proxies stopped');
+    }
+
+    /** The protocol a running proxy speaks (undefined when stopped) */
+    engineOf(projectId: string): ProxyTarget['engine'] | undefined {
+        return this.proxies.get(projectId)?.target.engine;
     }
 
     isRunning(projectId: string): boolean {
