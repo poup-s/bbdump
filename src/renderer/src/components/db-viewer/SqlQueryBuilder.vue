@@ -297,7 +297,9 @@ const generatedSql = computed(() => {
     const parts: string[] = [];
     const distinct = selectBlock?.distinct ? 'DISTINCT ' : '';
     const cols = selectBlock?.columns?.length ? selectBlock.columns.map(columnSql).join(', ') : '*';
-    parts.push(`SELECT ${distinct}${cols}`);
+    // SQL Server has no LIMIT: TOP (n) after SELECT
+    const top = limitBlock && engine.value === 'sqlserver' ? `TOP (${limitBlock.value}) ` : '';
+    parts.push(`SELECT ${distinct}${top}${cols}`);
     parts.push(`FROM ${tableSql(fromBlock.table)}`);
     for (const join of joinBlocks) {
       if (join.table && join.onLeft && join.onRight) {
@@ -311,7 +313,7 @@ const generatedSql = computed(() => {
       const orderParts = orderByBlock.columns.filter(c => c.column).map(c => `${columnSql(c.column)} ${c.direction}`);
       if (orderParts.length) parts.push(`ORDER BY ${orderParts.join(', ')}`);
     }
-    if (limitBlock) parts.push(`LIMIT ${limitBlock.value}`);
+    if (limitBlock && !top) parts.push(`LIMIT ${limitBlock.value}`);
     return parts.join('\n');
   }
 

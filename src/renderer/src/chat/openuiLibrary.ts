@@ -181,6 +181,7 @@ const DIALECT: Record<string, string> = {
   mysql: 'It is a MySQL database: quote names with `backticks`, dates with DATE(), DATE_FORMAT(), YEARWEEK(); no ILIKE (LIKE ignores case), no ::casts (CAST(x AS …)).',
   mariadb: 'It is a MariaDB database: quote names with `backticks`, dates with DATE(), DATE_FORMAT(); no ILIKE (LIKE ignores case), no ::casts (CAST(x AS …)).',
   sqlite: 'It is a SQLite database: quote names with "double quotes", dates are text or numbers (date(), strftime(\'%Y-%m\', col)); no ILIKE (LIKE ignores ASCII case), CAST(x AS INTEGER / REAL / TEXT).',
+  sqlserver: 'It is a SQL Server database, read-only here: quote names with [brackets], TOP (n) after SELECT instead of LIMIT, dates with CAST(col AS date), CONVERT(char(7), col, 23) for a month, DATEADD / DATEDIFF; no ILIKE (LIKE ignores case with the usual collations), strings joined with +, CAST(x AS int / decimal(12,2) / nvarchar(100)), booleans are bit (0 / 1).',
   duckdb: 'It is a DuckDB database, read-only here: quote names with "double quotes", dates with date_trunc(\'month\', col), strftime(col, \'%Y-%m\'); ILIKE, :: casts and count(*) FILTER (WHERE …) work; files cannot be read (read_csv, read_parquet… are refused).',
 };
 

@@ -159,6 +159,13 @@ const copyConnectionUrl = async (db: Database) => {
   } else if (isFileEngine(engineOf(db))) {
     // A file, not a server: its path
     url = filePathOf(db) || '';
+  } else if (engineOf(db) === 'sqlserver') {
+    // Without the password, like every copied URL; a named instance (host\SQLEXPRESS) as instanceName
+    const [server, instance] = db.host.split('\\');
+    const options = [`encrypt=${db.sslMode === 'disable' ? 'false' : 'true'}`];
+    if (db.sslMode === 'require' || db.sslMode === 'prefer') options.push('trustServerCertificate=true');
+    if (instance) options.push(`instanceName=${encodeURIComponent(instance)}`);
+    url = `sqlserver://${encodeURIComponent(db.user || '')}@${server}:${db.port}/${encodeURIComponent(db.name)}?${options.join('&')}`;
   } else if (engineOf(db) === 'mysql' || engineOf(db) === 'mariadb') {
     url = `${engineOf(db)}://${encodeURIComponent(db.user || '')}@${db.host}:${db.port}/${encodeURIComponent(db.name)}`;
   } else if (db.isLocalBbdump && window.electron?.platform === 'linux') {

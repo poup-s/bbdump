@@ -6,10 +6,13 @@
 import * as fs from 'fs';
 import * as zlib from 'zlib';
 
-export type ArchiveEngine = 'postgresql' | 'mongodb' | 'mysql' | 'mariadb' | 'sqlite' | 'duckdb';
+export type ArchiveEngine = 'postgresql' | 'mongodb' | 'mysql' | 'mariadb' | 'sqlite' | 'duckdb' | 'sqlserver';
 
 /** The first line bbdump writes before a MySQL / MariaDB dump (inside the gzip stream) */
 export const sqlDumpHeader = (engine: 'mysql' | 'mariadb') => `-- bbdump: ${engine} dump`;
+
+/** How bbdump's SQL Server backup starts (its first JSON line, inside the gzip stream) */
+export const SQLSERVER_BACKUP_HEADER = '{"t":"header","bbdump":"sqlserver backup"';
 
 /** Bytes read to recognize a file (a gzip stream is inflated that far) */
 export const ARCHIVE_HEAD_BYTES = 4096;
@@ -33,6 +36,7 @@ export function archiveEngineOf(head: Uint8Array): ArchiveEngine | undefined {
         const first = text(inflated, 40);
         if (first.startsWith(sqlDumpHeader('mysql'))) return 'mysql';
         if (first.startsWith(sqlDumpHeader('mariadb'))) return 'mariadb';
+        if (text(inflated, SQLSERVER_BACKUP_HEADER.length) === SQLSERVER_BACKUP_HEADER) return 'sqlserver';
         return 'mongodb';
     }
     if (head.length >= 4 && head[0] === 0x6d && head[1] === 0xe2 && head[2] === 0x99 && head[3] === 0x81) return 'mongodb';

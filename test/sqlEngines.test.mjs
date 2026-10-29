@@ -35,8 +35,8 @@ process.on('exit', () => { try { fs.rmSync(tmp, { recursive: true, force: true, 
 
 describe('manifests', () => {
   test('MySQL, MariaDB, SQLite and DuckDB are known, with a driver each', async () => {
-    assert.deepEqual(MANIFESTS.map(m => m.id), ['postgresql', 'mongodb', 'mysql', 'mariadb', 'sqlite', 'duckdb']);
-    for (const id of ['mysql', 'mariadb', 'sqlite', 'duckdb']) {
+    assert.deepEqual(MANIFESTS.map(m => m.id), ['postgresql', 'mongodb', 'mysql', 'mariadb', 'sqlite', 'duckdb', 'sqlserver']);
+    for (const id of ['mysql', 'mariadb', 'sqlite', 'duckdb', 'sqlserver']) {
       assert.equal(manifestFor(id).queryLanguage, 'sql');
       assert.equal((await registry.getDriver(id)).manifest.id, id);
     }
@@ -342,5 +342,61 @@ describe('DuckDB helpers (no duckdb tool needed)', () => {
       assert.ok(guard.readOnlyProblem(sql, 'duckdb'), sql);
     }
     assert.equal(guard.quoteIdent('a"b', 'duckdb'), '"a""b"');
+  });
+});
+
+describe('SQL Server helpers (no server needed)', () => {
+  const ss = require(path.join(cwd, 'dist/shared/engines/sqlserverUri.js'));
+
+  test('connection strings: sqlserver:// URLs, JDBC, ADO.NET (Azure), TLS as the drivers read it', () => {
+    assert.deepEqual(ss.parseSqlServerUri('sqlserver://sa:p%40ss@db.local:14330/shop?encrypt=true&trustServerCertificate=true'),
+      { host: 'db.local', port: 14330, user: 'sa', password: 'p@ss', database: 'shop', sslMode: 'require' });
+    assert.equal(ss.parseSqlServerUri('mssql://u@h/db').sslMode, 'verify-full');
+    assert.equal(ss.parseSqlServerUri('sqlserver://u@h/db?encrypt=false').sslMode, 'disable');
+    assert.deepEqual(ss.parseSqlServerUri('jdbc:sqlserver://h.example.com:1433;databaseName=sales;user=app;password={a;b}};c};encrypt=true'),
+      { host: 'h.example.com', port: 1433, user: 'app', password: 'a;b};c', database: 'sales', sslMode: 'verify-full' });
+    assert.deepEqual(ss.parseSqlServerUri('Server=tcp:myserver.database.windows.net,1433;Initial Catalog=mydb;Persist Security Info=False;User ID=me;Password="x;y";Encrypt=True;TrustServerCertificate=False;'),
+      { host: 'myserver.database.windows.net', port: 1433, user: 'me', password: 'x;y', database: 'mydb', sslMode: 'verify-full' });
+    assert.equal(ss.parseSqlServerUri('Data Source=PC\\SQLEXPRESS;Database=d;UID=u;PWD=p').host, 'PC\\SQLEXPRESS');
+    assert.equal(ss.parseSqlServerUri('mysql://u@h/db'), null);
+    // A named instance: found through the Browser unless a port is given
+    const named = ss.sqlserverConnection({ host: 'PC\\SQLEXPRESS', port: 1433, user: 'u', password: 'p', database: 'd' });
+    assert.deepEqual([named.server, named.instanceName, named.port, named.encrypt, named.trustServerCertificate], ['PC', 'SQLEXPRESS', undefined, true, false]);
+    const plain = ss.sqlserverConnection({ host: 'h', port: 1500, user: 'u', database: 'd', sslMode: 'disable' });
+    assert.deepEqual([plain.port, plain.encrypt, plain.label], [1500, false, 'h:1500']);
+    assert.equal(ss.sqlserverIdent('a]b'), '[a]]b]');
+  });
+
+  test('read-only T-SQL: statements without ";" and the words that change things are refused', () => {
+    for (const sql of ['SELECT TOP (5) * FROM [orders] WHERE [update] = 1', "SELECT N'COMMIT; DROP' AS x", 'WITH a AS (SELECT 1 AS n) SELECT n FROM a', '(SELECT 1)']) {
+      assert.equal(guard.readOnlyProblem(sql, 'tsql'), null, sql);
+    }
+    for (const sql of ['SELECT 1 AS x DELETE FROM t', 'SELECT 1 AS x COMMIT', 'SELECT * INTO #t FROM o', 'EXEC sp_who', 'SELECT * FROM OPENROWSET(BULK \'c:\\x\', SINGLE_CLOB) AS f', 'WAITFOR DELAY \'00:00:05\'', 'SELECT 1; SELECT 2']) {
+      assert.ok(guard.readOnlyProblem(sql, 'tsql'), sql);
+    }
+    assert.equal(guard.replacePlaceholders("SELECT ?, '?', [a?] -- ?\n, ?", 'tsql', i => `@p${i + 1}`), "SELECT @p1, '?', [a?] -- ?\n, @p2");
+    assert.equal(guard.quoteIdent('x]', 'tsql'), '[x]]]');
+  });
+
+  test('backup: what a table, an index and a column read become; modules after what they use; the file recognized', () => {
+    const driver = require(path.join(cwd, 'dist/main/engines/sqlserver.js'));
+    const table = driver.createTableSql({ t: 'table', schema: 'sales', name: 'kinds', identity: { last: '40' }, primaryKey: { name: 'pk', clustered: false, unique: true, constraint: 'primary', columns: [{ name: 'id', desc: false }], include: [], filter: null }, columns: [
+      { name: 'id', type: 'bigint', base: 'bigint', nullable: false, collation: null, identity: { seed: '10', increment: '10' }, computed: null, default: null, rowguid: false, rowversion: false, sparse: false },
+      { name: 'label', type: 'nvarchar(100)', base: 'nvarchar', nullable: true, collation: 'Latin1_General_CS_AS', identity: null, computed: null, default: { name: 'df', definition: "(N'x')" }, rowguid: false, rowversion: false, sparse: false },
+      { name: 'twice', type: 'bigint', base: 'bigint', nullable: true, collation: null, identity: null, computed: { definition: '([id]*(2))', persisted: true }, default: null, rowguid: false, rowversion: false, sparse: false },
+      { name: 'stamp', type: 'timestamp', base: 'timestamp', nullable: false, collation: null, identity: null, computed: null, default: null, rowguid: false, rowversion: true, sparse: false },
+    ] });
+    assert.equal(table, "CREATE TABLE [sales].[kinds] (\n  [id] bigint IDENTITY(10, 10) NOT NULL,\n  [label] nvarchar(100) COLLATE Latin1_General_CS_AS NULL CONSTRAINT [df] DEFAULT (N'x'),\n  [twice] AS ([id]*(2)) PERSISTED,\n  [stamp] rowversion NOT NULL,\n  CONSTRAINT [pk] PRIMARY KEY NONCLUSTERED ([id])\n)");
+    assert.equal(driver.createIndexSql({ t: 'index', schema: 'dbo', table: 'orders', index: { name: 'by_status', clustered: false, unique: false, constraint: null, columns: [{ name: 'status', desc: true }], include: ['total'], filter: '([status] IS NOT NULL)' } }),
+      'CREATE NONCLUSTERED INDEX [by_status] ON [dbo].[orders] ([status] DESC) INCLUDE ([total]) WHERE ([status] IS NOT NULL)');
+    assert.equal(driver.dumpExpression({ name: 'at', base: 'datetime2' }), 'CONVERT(varchar(40), [at], 126)');
+    assert.equal(driver.dumpExpression({ name: 'p', base: 'geography' }), 'CAST([p] AS varbinary(max))');
+    assert.equal(driver.sqlserverTypeText('nvarchar', -1, 0, 0), 'nvarchar(max)');
+    assert.equal(driver.sqlserverTypeText('nchar', 6, 0, 0), 'nchar(3)');
+    assert.deepEqual(driver.orderModules([{ id: 3, trigger: true }, { id: 2, trigger: false }, { id: 1, trigger: false }], [[1, 2]]).map(m => m.id), [2, 1, 3]);
+    assert.equal(driver.likeLiteral('50%_[x]'), '%50[%][_][[]x[]]%');
+    assert.equal(driver.sqlserverVersionLabel('16.0.4135.4', 3), '2022 (16.0.4135.4)');
+    const { archiveEngineOf, SQLSERVER_BACKUP_HEADER } = require(path.join(cwd, 'dist/main/backupFormat.js'));
+    assert.equal(archiveEngineOf(zlib.gzipSync(`${SQLSERVER_BACKUP_HEADER},"version":1}\n`)), 'sqlserver');
   });
 });

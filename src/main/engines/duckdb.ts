@@ -184,8 +184,11 @@ async function copyStatements(sourceFile: string, from: string): Promise<string[
         ...schemas.map(row => `CREATE SCHEMA IF NOT EXISTS ${q(String(row.s))};`),
         ...types.map(row => `CREATE TYPE ${name(row)} AS ENUM (${(row.labels as unknown[]).map(lit).join(', ')});`),
         ...sequences.map(row => {
-            // Where the source is: the next value it would give
-            const next = row.last_value === null || row.last_value === undefined ? row.start_value : BigInt(String(row.last_value)) + BigInt(String(row.increment_by));
+            // Never below the next value the source would give (DuckDB 1.x and 2.x report these two
+            // differently: a gap is possible, a value given twice is not)
+            const start = BigInt(String(row.start_value));
+            const after = row.last_value === null || row.last_value === undefined ? start : BigInt(String(row.last_value)) + BigInt(String(row.increment_by));
+            const next = BigInt(String(row.increment_by)) < 0n ? (after < start ? after : start) : (after > start ? after : start);
             return `CREATE SEQUENCE ${name(row)} INCREMENT BY ${row.increment_by} MINVALUE ${row.min_value} MAXVALUE ${row.max_value} START ${next} ${row.cycle ? 'CYCLE' : 'NO CYCLE'};`;
         }),
         ...ordered.map(row => `${String(row.sql).replace(/;\s*$/, '')};`),

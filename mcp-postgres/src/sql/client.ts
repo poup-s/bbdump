@@ -3,16 +3,19 @@
  * active the PostgreSQL tools refuse to run. MySQL / MariaDB go through mysql2 (loaded on first
  * use), through the app's SSH tunnel when the database has one; SQLite reads run in their own
  * process (killed at their time limit: SQLite cannot be interrupted), short writes in this one.
- * DuckDB goes through the user's duckdb tool, read-only, with file access turned off.
+ * DuckDB goes through the user's duckdb tool, read-only, with file access turned off. SQL Server
+ * goes through mssql (loaded on first use), read-only: each query in a transaction rolled back.
  */
 import * as fs from 'fs';
 import * as v8 from 'v8';
 import { spawn, spawnSync } from 'child_process';
 import { createRequire } from 'module';
 import type { Pool, PoolConnection, FieldPacket } from 'mysql2/promise';
+import type { ConnectionPool } from 'mssql';
 import type { DatabaseSync } from 'node:sqlite';
 import { mysqlConnection, type MysqlConnection, type MysqlTarget } from '../shared/mysqlUri.js';
-import { readOnlyProblem, statementKind } from '../shared/sqlGuard.js';
+import { readOnlyProblem, replacePlaceholders, statementKind } from '../shared/sqlGuard.js';
+import { sqlserverConnection, type SqlServerTarget } from '../shared/sqlserverUri.js';
 import { bindDuckdb, duckdbInstallHint, duckdbVersionOf, findDuckdbTool, runDuckdbTool } from '../shared/duckdbCli.js';
 import { SQLITE_RUNNER } from '../shared/sqliteRunner.js';
 import { mongoToolsEnabled, type MongoFeature } from '../mongo/features.js';
@@ -35,6 +38,8 @@ interface ActiveSql {
   port: number;
   file?: string;
   pool?: Pool;
+  /** SQL Server */
+  mssql?: ConnectionPool;
   mariadb?: boolean;
   /** Behind SSH: the saved target, the database id the app opens the tunnel for, and its local port */
   ssh?: { target: MysqlTarget; databaseId: string; port: number };
@@ -205,6 +210,141 @@ async function describeDuckdb(file: string) {
 /** Kinds of statement that are queries (wrapped in a SELECT … LIMIT) */
 const DUCKDB_QUERY_STARTS = new Set(['SELECT', 'WITH', 'FROM', 'VALUES', '(', 'TABLE', 'PIVOT', 'UNPIVOT']);
 
+// --- SQL Server ----------------------------------------------------------------------------------
+
+type Mssql = typeof import('mssql');
+let mssqlModule: Mssql | null = null;
+async function mssql(): Promise<Mssql> {
+  if (!mssqlModule) {
+    const loaded = await import('mssql') as Mssql & { default?: Mssql };
+    mssqlModule = loaded.default ?? loaded;
+  }
+  return mssqlModule;
+}
+
+/** The same options as the app's driver (TLS as saved, dates read as written) */
+async function mssqlPool(target: SqlServerTarget): Promise<{ pool: ConnectionPool; label: string; database: string; user: string; port: number }> {
+  const conn = sqlserverConnection(target);
+  const { ConnectionPool: Pool } = await mssql();
+  const pool = new Pool({
+    server: conn.server, port: conn.port, user: conn.user, password: conn.password, database: conn.database || undefined,
+    connectionTimeout: 15000, requestTimeout: 0, pool: { max: 3, min: 0, idleTimeoutMillis: 60000 },
+    options: {
+      encrypt: conn.encrypt, trustServerCertificate: conn.trustServerCertificate, instanceName: conn.instanceName,
+      enableArithAbort: true, useUTC: false, appName: 'bbdump MCP',
+      ...(conn.caFile ? { cryptoCredentialsDetails: { ca: fs.readFileSync(conn.caFile) } } : {}),
+    },
+  });
+  await pool.connect();
+  return { pool, label: conn.label, database: conn.database, user: conn.user, port: conn.port ?? 1433 };
+}
+
+/** A value bound as @pN: JSON values as text, whole numbers past 32 bits as bigint */
+function bindMssql(request: import('mssql').Request, name: string, value: unknown, types: Mssql): void {
+  if (value === undefined || value === null) request.input(name, types.NVarChar, null);
+  else if (typeof value === 'boolean') request.input(name, types.Bit, value);
+  else if (typeof value === 'number') {
+    if (Number.isInteger(value) && Math.abs(value) < 2 ** 31) request.input(name, types.Int, value);
+    else if (Number.isSafeInteger(value)) request.input(name, types.BigInt, value);
+    else request.input(name, types.Float, value);
+  } else if (typeof value === 'object' && !(value instanceof Date)) request.input(name, types.NVarChar(types.MAX), JSON.stringify(value));
+  else if (value instanceof Date) request.input(name, types.DateTime2(7), value);
+  else request.input(name, types.NVarChar(types.MAX), String(value));
+}
+
+/** Rows of a catalog query on the active SQL Server database (@p1… values) */
+export async function mssqlRows(sql: string, values: unknown[] = []): Promise<Row[]> {
+  const db = sqlActive();
+  const types = await mssql();
+  const request = new types.Request(db.mssql!);
+  values.forEach((value, i) => bindMssql(request, `p${i + 1}`, value, types));
+  return ((await request.query(sql)).recordset ?? []) as Row[];
+}
+
+async function describeSqlServer(pool: ConnectionPool) {
+  const started = Date.now();
+  const types = await mssql();
+  const { recordset } = await new types.Request(pool).query(`
+    SELECT CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(50)) AS version,
+      (SELECT COUNT(*) FROM sys.tables WHERE is_ms_shipped = 0) AS tables,
+      (SELECT SUM(CAST(size AS bigint)) * 8192 FROM sys.database_files) AS size`);
+  const row = (recordset ?? [])[0] as Row | undefined;
+  return { latency_ms: Date.now() - started, version: String(row?.version ?? ''), tables: Number(row?.tables ?? 0), size_bytes: Number(row?.size ?? 0) };
+}
+
+/**
+ * One reading statement on SQL Server, in a transaction always rolled back; its rows streamed,
+ * cancelled past `maxRows` and past its time.
+ */
+async function readSqlServer(pool: ConnectionPool, sql: string, values: unknown[], maxRows: number, timeoutMs: number): Promise<ReadResult> {
+  const types = await mssql();
+  const tx = new types.Transaction(pool);
+  await tx.begin();
+  try {
+    const request = new types.Request(tx);
+    values.forEach((value, i) => bindMssql(request, `p${i + 1}`, value, types));
+    request.stream = true;
+    const rows: Row[] = [];
+    let fields: string[] = [];
+    let truncated = false;
+    let timedOut = false;
+    const started = Date.now();
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => { timedOut = true; request.cancel(); }, timeoutMs);
+      request.on('recordset', (columns: Record<string, { index: number; name: string }>) => {
+        if (!fields.length) fields = Object.values(columns).sort((a, b) => a.index - b.index).map((c) => c.name);
+      });
+      request.on('row', (row: Row) => {
+        if (truncated) return;
+        if (rows.length >= maxRows) {
+          truncated = true;
+          request.cancel();
+          return;
+        }
+        rows.push(row);
+      });
+      request.on('error', (error: Error & { code?: string }) => {
+        clearTimeout(timer);
+        // Cancelled past maxRows: the rows read are the result
+        if (error.code === 'ECANCEL' && truncated && !timedOut) return resolve();
+        reject(timedOut ? new Error(`The query was stopped after ${Math.round(timeoutMs / 1000)} s`) : error);
+      });
+      request.on('done', () => {
+        clearTimeout(timer);
+        if (timedOut) reject(new Error(`The query was stopped after ${Math.round(timeoutMs / 1000)} s`));
+        else resolve();
+      });
+      request.query(replacePlaceholders(sql, 'tsql', (i) => `@p${i + 1}`));
+    });
+    // The driver does not say which table a column comes from
+    return { rows, fields, origins: fields.map(() => ({ table: null, column: null })), truncated, duration: Date.now() - started };
+  } finally {
+    await tx.rollback().catch(() => {});
+  }
+}
+
+/** The plan SQL Server would follow (SHOWPLAN_TEXT: the statement is not run) */
+export async function explainSqlServer(sql: string): Promise<ReadResult> {
+  const db = sqlActive();
+  const problem = readOnlyProblem(sql, 'tsql');
+  if (problem) throw new Error(problem);
+  const types = await mssql();
+  const tx = new types.Transaction(db.mssql!);
+  await tx.begin();
+  try {
+    await new types.Request(tx).batch('SET SHOWPLAN_TEXT ON');
+    try {
+      const result = await new types.Request(tx).batch(sql);
+      const rows = ((result.recordsets ?? []) as unknown as Row[][]).flat();
+      return { rows, fields: rows.length ? Object.keys(rows[0]) : [], origins: [], truncated: false, duration: 0 };
+    } finally {
+      await new types.Request(tx).batch('SET SHOWPLAN_TEXT OFF').catch(() => {});
+    }
+  } finally {
+    await tx.rollback().catch(() => {});
+  }
+}
+
 // --- Switching -----------------------------------------------------------------------------------
 
 export interface SqlSaved { id: string; label: string; engine: SqlEngine; target?: MysqlTarget; file?: string; sshDatabaseId?: string }
@@ -216,6 +356,18 @@ export async function useSql(saved: SqlSaved) {
     await clearSql();
     active = { id: saved.id, label: saved.label, engine: saved.engine, database: 'main', where: saved.file!, user: '', port: 0, file: saved.file };
     return { database: 'main', file: saved.file, ...info };
+  }
+  if (saved.engine === 'sqlserver') {
+    const opened = await mssqlPool(saved.target as SqlServerTarget);
+    try {
+      const info = await describeSqlServer(opened.pool);
+      await clearSql();
+      active = { id: saved.id, label: saved.label, engine: 'sqlserver', database: opened.database, where: opened.label, user: opened.user, port: opened.port, mssql: opened.pool };
+      return { database: opened.database, hosts: opened.label, ...info };
+    } catch (err) {
+      await opened.pool.close().catch(() => {});
+      throw err;
+    }
   }
   const reached = await reach(saved.target!, saved.sshDatabaseId);
   const { pool, conn } = await mysqlPool(reached);
@@ -238,6 +390,14 @@ export async function useSql(saved: SqlSaved) {
 export async function testSql(saved: SqlSaved) {
   if (saved.engine === 'sqlite') return { file: saved.file, ...describeSqlite(saved.file!) };
   if (saved.engine === 'duckdb') return { file: saved.file, ...(await describeDuckdb(saved.file!)) };
+  if (saved.engine === 'sqlserver') {
+    const opened = await mssqlPool(saved.target as SqlServerTarget);
+    try {
+      return { database: opened.database, hosts: opened.label, ...(await describeSqlServer(opened.pool)) };
+    } finally {
+      await opened.pool.close().catch(() => {});
+    }
+  }
   const { pool, conn } = await mysqlPool(await reach(saved.target!, saved.sshDatabaseId));
   try {
     return { database: conn.database, hosts: conn.label, ...(await describeMysql(pool)) };
@@ -258,6 +418,7 @@ export async function clearSql(): Promise<void> {
   const previous = active;
   active = null;
   await previous?.pool?.end().catch(() => {});
+  await previous?.mssql?.close().catch(() => {});
 }
 
 /** The active database for a sql_* tool, or why it cannot be read (or changed) */
@@ -265,8 +426,10 @@ export function sqlActive(feature: MongoFeature = 'mcp.read'): ActiveSql {
   if (!mongoToolsEnabled(feature)) {
     throw new Error(feature === 'mcp.write' && mongoToolsEnabled() ? 'Changing these databases is turned off in bbdump.' : 'Reading these databases is turned off in bbdump.');
   }
-  if (!active) throw new Error('No MySQL, MariaDB, SQLite or DuckDB database is active: call list_connections, then use_connection on one.');
-  if (feature === 'mcp.write' && active.engine === 'duckdb') throw new Error('DuckDB databases are read-only here: changes are made in bbdump (explorer, SQL editor).');
+  if (!active) throw new Error('No MySQL, MariaDB, SQL Server, SQLite or DuckDB database is active: call list_connections, then use_connection on one.');
+  if (feature === 'mcp.write' && (active.engine === 'duckdb' || active.engine === 'sqlserver')) {
+    throw new Error(`${active.engine === 'duckdb' ? 'DuckDB' : 'SQL Server'} databases are read-only here: changes are made in bbdump (explorer, SQL editor).`);
+  }
   return active;
 }
 
@@ -284,11 +447,12 @@ export interface ReadResult {
 /** One reading statement: refused before when it is not one, then run read-only and timed */
 export async function readQuery(sql: string, values: unknown[] = [], options: { maxRows?: number; timeoutMs?: number } = {}): Promise<ReadResult> {
   const db = sqlActive();
-  const dialect = db.engine === 'sqlite' || db.engine === 'duckdb' ? db.engine : 'mysql';
+  const dialect = db.engine === 'sqlite' || db.engine === 'duckdb' ? db.engine : db.engine === 'sqlserver' ? 'tsql' : 'mysql';
   const problem = readOnlyProblem(sql, dialect);
   if (problem) throw new Error(problem);
   const maxRows = options.maxRows ?? 5000;
   const timeoutMs = options.timeoutMs ?? QUERY_TIMEOUT_MS;
+  if (db.engine === 'sqlserver') return readSqlServer(db.mssql!, sql, values, maxRows, timeoutMs);
   if (db.engine === 'duckdb') {
     // Values written as literals (the tool takes no parameters); a query gets one row more than shown
     const bound = bindDuckdb(sql, values).trim().replace(/;+\s*$/, '');

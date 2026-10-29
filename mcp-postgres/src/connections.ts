@@ -206,9 +206,9 @@ function loadAllDatabases(): BbdumpConfig | null {
 
 const isPostgres = (db: BbdumpDatabaseConfig) => !db.engine || db.engine === 'postgresql';
 
-/** MySQL, MariaDB, SQLite and DuckDB: tables queried with the sql_* tools */
-export type SqlEngine = 'mysql' | 'mariadb' | 'sqlite' | 'duckdb';
-export const isSqlEngine = (engine: string | undefined): engine is SqlEngine => engine === 'mysql' || engine === 'mariadb' || engine === 'sqlite' || engine === 'duckdb';
+/** MySQL, MariaDB, SQL Server, SQLite and DuckDB: tables queried with the sql_* tools */
+export type SqlEngine = 'mysql' | 'mariadb' | 'sqlserver' | 'sqlite' | 'duckdb';
+export const isSqlEngine = (engine: string | undefined): engine is SqlEngine => engine === 'mysql' || engine === 'mariadb' || engine === 'sqlserver' || engine === 'sqlite' || engine === 'duckdb';
 /** SQLite and DuckDB: a file on this computer */
 export const isFileSqlEngine = (engine: string | undefined) => engine === 'sqlite' || engine === 'duckdb';
 
@@ -258,7 +258,7 @@ export function getMongoTarget(identifier: string): { id: string; label: string;
   };
 }
 
-/** A saved MySQL, MariaDB, SQLite or DuckDB database: its target (password decrypted, memory only) or its file */
+/** A saved MySQL, MariaDB, SQL Server, SQLite or DuckDB database: its target (password decrypted, memory only) or its file */
 export function getSqlTarget(identifier: string): { id: string; label: string; engine: SqlEngine; target?: MysqlTarget; file?: string; sshDatabaseId?: string } | null {
   const db = findSaved(loadAllDatabases()?.databases ?? [], identifier);
   if (!db || !isSqlEngine(db.engine)) return null;
@@ -352,7 +352,7 @@ function mongoConnectionInfo(db: BbdumpDatabaseConfig, project: string | undefin
   };
 }
 
-/** A MySQL, MariaDB, SQLite or DuckDB database in list_connections, never with its password */
+/** A MySQL, MariaDB, SQL Server, SQLite or DuckDB database in list_connections, never with its password */
 function sqlConnectionInfo(db: BbdumpDatabaseConfig, engine: SqlEngine, project: string | undefined): ConnectionInfo {
   if (isFileSqlEngine(engine)) {
     return { id: db.id, name: db.name, displayName: db.displayName, project, engine, host: '', port: 0, user: '', database: db.name, file: (engine === 'duckdb' ? db.duckdb : db.sqlite)?.path, ssl: false, local: true, last_backup: db.lastBackup };

@@ -60,7 +60,7 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 
-  # Database engines on real servers: MongoDB 8, MySQL 8.4, MariaDB 11.8 (and SQLite, DuckDB: files):
+  # Database engines on real servers: MongoDB 8, MySQL 8.4, MariaDB 11.8, SQL Server 2022 (and SQLite, DuckDB: files):
   # explorer, edits, read-only queries, dashboards, backup and restore
   engines:
     # MongoDB 8 refuses Linux 6.19+ kernels (SERVER-121912): an image with an older kernel
@@ -97,6 +97,18 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 30
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: Ci-Sql-Pw-2026!
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Ci-Sql-Pw-2026! -C -b -Q 'SELECT 1'"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 30
     steps:
       - uses: actions/checkout@v4
 
@@ -113,6 +125,10 @@ jobs:
 
       - name: Build the main process
         run: npx tsc
+
+      # The MCP server reads SQL Server too (its tests below)
+      - name: Build the MCP server
+        run: npm run build:mcp
 
       # The server's image ships the MongoDB Database Tools: the same version as the server
       - name: mongodump and mongorestore from the server's image
@@ -150,6 +166,12 @@ jobs:
           BBDUMP_TEST_MYSQL_PASSWORD: ci-root-pw
           BBDUMP_TEST_SQL_TOOLS: required
         run: node --test test/sqlLive.test.mjs
+
+      - name: SQL Server 2022
+        env:
+          BBDUMP_TEST_SQLSERVER: 127.0.0.1:1433
+          BBDUMP_TEST_SQLSERVER_PASSWORD: Ci-Sql-Pw-2026!
+        run: node --test test/sqlserverLive.test.mjs
 
       # The project proxy (an app's login answered by bbdump) and the local server (account, databases)
       - name: Project proxy and local server on the three servers

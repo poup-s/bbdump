@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const from = path.join(root, 'src', 'shared', 'engines');
 const to = path.join(root, 'mcp-postgres', 'src', 'shared');
-const FILES = ['mongoUri.ts', 'documents.ts', 'mysqlUri.ts', 'sqlGuard.ts', 'sqliteRunner.ts', 'sqlRows.ts', 'duckdbCli.ts'];
+const FILES = ['mongoUri.ts', 'documents.ts', 'mysqlUri.ts', 'sqlGuard.ts', 'sqliteRunner.ts', 'sqlRows.ts', 'duckdbCli.ts', 'sqlserverUri.ts'];
 
 fs.mkdirSync(to, { recursive: true });
 for (const file of FILES) {

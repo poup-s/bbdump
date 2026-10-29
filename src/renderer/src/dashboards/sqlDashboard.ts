@@ -1,11 +1,12 @@
 /**
- * Dashboards of MySQL / MariaDB, SQLite and DuckDB databases, what the AI is shown: the tool a
- * block's query uses (Query("mysql", …), Query("sqlite", …), Query("duckdb", …): the name says the dialect, so a dashboard
+ * Dashboards of MySQL / MariaDB, SQL Server, SQLite and DuckDB databases, what the AI is shown:
+ * the tool a block's query uses (Query("mysql", …), Query("sqlserver", …), Query("sqlite", …),
+ * Query("duckdb", …): the name says the dialect, so a dashboard
  * only goes on a database that reads it) and two example programs per dialect (pure: tested
  * without a window, their queries run on real servers in the tests).
  */
 
-const tool = (name: 'mysql' | 'sqlite' | 'duckdb', dialect: string) => ({
+const tool = (name: 'mysql' | 'sqlite' | 'duckdb' | 'sqlserver', dialect: string) => ({
   name,
   description: `Runs one read-only SELECT (${dialect}) on the database and returns its columns and rows (rows are objects keyed by column alias). At most 1000 rows, 30 s. Filter placeholders {{from}}, {{to}} and {{name}} are bound by bbdump as ? parameters.`,
   inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'One SELECT statement' } }, required: ['query'] },
@@ -16,6 +17,7 @@ const tool = (name: 'mysql' | 'sqlite' | 'duckdb', dialect: string) => ({
 export const MYSQL_TOOL = tool('mysql', 'MySQL / MariaDB');
 export const SQLITE_TOOL = tool('sqlite', 'SQLite');
 export const DUCKDB_TOOL = tool('duckdb', 'DuckDB');
+export const SQLSERVER_TOOL = tool('sqlserver', 'SQL Server');
 
 /** Query("…", {query: "…"}) of an example: the SQL quoted for OpenUI */
 const query = (name: string, sql: string) => `Query("${name}", {query: ${JSON.stringify(sql)}}, {columns: [], rows: []})`;
@@ -87,4 +89,25 @@ export const DUCKDB_EXAMPLE_LINKED = `root = Dashboard([filters, people, profile
 users = ${query('duckdb', "SELECT u.id, u.name, u.email, u.created_at FROM users u WHERE ({{q}} IS NULL OR u.name ILIKE '%' || {{q}} || '%' OR u.email ILIKE '%' || {{q}} || '%') ORDER BY u.created_at DESC LIMIT 50")}
 picked = ${query('duckdb', 'SELECT u.name, u.email, u.phone, u.created_at, (SELECT count(*) FROM orders o WHERE o.user_id = u.id) AS orders FROM users u WHERE u.id = {{user}}')}
 theirOrders = ${query('duckdb', 'SELECT o.id, o.status, o.total, o.created_at FROM orders o WHERE ({{user}} IS NULL OR o.user_id = {{user}}) ORDER BY o.created_at DESC LIMIT 50')}
+${LINKED_LAYOUT}`;
+
+// --- SQL Server -----------------------------------------------------------------------------------
+
+const SQLSERVER_CITY = '({{city}} IS NULL OR c.city = {{city}})';
+// The bound date texts as datetime2: they compare with datetime columns too (which start in 1753)
+const SQLSERVER_PERIOD = 'o.created_at >= CAST({{from}} AS datetime2) AND o.created_at < CAST({{to}} AS datetime2)';
+// Monday of the week, as text (1900-01-01 was a Monday): whatever the server's DATEFIRST
+const SQLSERVER_WEEK = "CONVERT(char(10), DATEADD(day, -(DATEDIFF(day, '19000101', o.created_at) % 7), CAST(o.created_at AS date)), 23)";
+
+export const SQLSERVER_EXAMPLE = `root = Dashboard([filters, figures, charts, latest])
+cities = ${query('sqlserver', 'SELECT DISTINCT TOP (100) city AS value FROM customers WHERE city IS NOT NULL ORDER BY value')}
+totals = ${query('sqlserver', `SELECT COUNT(*) AS orders, COALESCE(SUM(o.total), 0) AS revenue FROM orders o JOIN customers c ON c.id = o.customer_id WHERE ${SQLSERVER_PERIOD} AND ${SQLSERVER_CITY}`)}
+perWeek = ${query('sqlserver', `SELECT ${SQLSERVER_WEEK} AS week, SUM(CASE WHEN o.status = 'paid' THEN 1 ELSE 0 END) AS paid, SUM(CASE WHEN o.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled FROM orders o JOIN customers c ON c.id = o.customer_id WHERE ${SQLSERVER_PERIOD} AND ${SQLSERVER_CITY} GROUP BY ${SQLSERVER_WEEK} ORDER BY week`)}
+recent = ${query('sqlserver', `SELECT TOP (50) o.id, c.name, o.status, o.total, o.created_at FROM orders o JOIN customers c ON c.id = o.customer_id WHERE ${SQLSERVER_CITY} ORDER BY o.created_at DESC`)}
+${LAYOUT}`;
+
+export const SQLSERVER_EXAMPLE_LINKED = `root = Dashboard([filters, people, profile, orders])
+users = ${query('sqlserver', "SELECT TOP (50) u.id, u.name, u.email, u.created_at FROM users u WHERE ({{q}} IS NULL OR u.name LIKE '%' + {{q}} + '%' OR u.email LIKE '%' + {{q}} + '%') ORDER BY u.created_at DESC")}
+picked = ${query('sqlserver', 'SELECT u.name, u.email, u.phone, u.created_at, (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id) AS orders FROM users u WHERE u.id = {{user}}')}
+theirOrders = ${query('sqlserver', 'SELECT TOP (50) o.id, o.status, o.total, o.created_at FROM orders o WHERE ({{user}} IS NULL OR o.user_id = {{user}}) ORDER BY o.created_at DESC')}
 ${LINKED_LAYOUT}`;

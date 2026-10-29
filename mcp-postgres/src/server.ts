@@ -38,9 +38,9 @@ const INSTRUCTIONS = `PostgreSQL tools from bbdump.
 const MONGO_INSTRUCTIONS = `
 - MongoDB databases appear in list_connections with engine "mongodb". After use_connection on one, use the mongo_* tools (mongo_list_collections, mongo_describe_collection, mongo_find, mongo_count, mongo_aggregate; mongo_insert_documents, mongo_update_documents, mongo_delete_documents, confirmed in bbdump with an undo point that list_changes / undo_change use); the other tools are for PostgreSQL. Filters and pipelines are Extended JSON ({"$oid": …}, {"$date": …}).`;
 
-/** Added with the MongoDB ones: MySQL, MariaDB, SQLite and DuckDB databases */
+/** Added with the MongoDB ones: MySQL, MariaDB, SQL Server, SQLite and DuckDB databases */
 const SQL_INSTRUCTIONS = `
-- MySQL, MariaDB, SQLite and DuckDB databases appear in list_connections with their engine. After use_connection on one, use the sql_* tools (sql_schema_overview, sql_list_tables, sql_describe_table, sql_query read-only with ? params, sql_explain; sql_insert_rows, sql_update_rows, sql_delete_rows with an undo point, sql_execute for any other change, all confirmed in bbdump); the other tools are for PostgreSQL. Write the SQL of that engine: MySQL / MariaDB quote names with \`backticks\`, SQLite and DuckDB with "double quotes"; dates are DATETIME / TEXT columns (SQLite: date(), strftime(); DuckDB: date_trunc(), strftime()). DuckDB databases are read-only here.`;
+- MySQL, MariaDB, SQL Server, SQLite and DuckDB databases appear in list_connections with their engine. After use_connection on one, use the sql_* tools (sql_schema_overview, sql_list_tables, sql_describe_table, sql_query read-only with ? params, sql_explain; sql_insert_rows, sql_update_rows, sql_delete_rows with an undo point, sql_execute for any other change, all confirmed in bbdump); the other tools are for PostgreSQL. Write the SQL of that engine: MySQL / MariaDB quote names with \`backticks\`, SQL Server with [brackets] (TOP (n) instead of LIMIT), SQLite and DuckDB with "double quotes"; dates are DATETIME / TEXT columns (SQLite: date(), strftime(); DuckDB: date_trunc(), strftime()). DuckDB and SQL Server databases are read-only here.`;
 
 export function createServer(): McpServer {
   // The mongo_* tools are offered unless turned off in bbdump when the server starts (each call checks again)
@@ -48,7 +48,7 @@ export function createServer(): McpServer {
   const base = mongo ? INSTRUCTIONS + MONGO_INSTRUCTIONS + SQL_INSTRUCTIONS : INSTRUCTIONS;
   const chatEngine = chatScope.databaseId ? savedEngine(chatScope.databaseId) : null;
   const chatTools = mongo && chatEngine === 'mongodb' ? ' It is a MongoDB database: use the mongo_* tools only.'
-    : mongo && isSqlEngine(chatEngine ?? undefined) ? ` It is a ${chatEngine === 'sqlite' ? 'SQLite' : chatEngine === 'duckdb' ? 'DuckDB' : chatEngine === 'mariadb' ? 'MariaDB' : 'MySQL'} database: use the sql_* tools only.${chatEngine === 'duckdb' ? ' It can only be read here.' : ''}` : '';
+    : mongo && isSqlEngine(chatEngine ?? undefined) ? ` It is a ${chatEngine === 'sqlite' ? 'SQLite' : chatEngine === 'duckdb' ? 'DuckDB' : chatEngine === 'sqlserver' ? 'SQL Server' : chatEngine === 'mariadb' ? 'MariaDB' : 'MySQL'} database: use the sql_* tools only.${chatEngine === 'duckdb' || chatEngine === 'sqlserver' ? ' It can only be read here.' : ''}` : '';
   const instructions = chatScope.databaseId
     ? `${base}\n- This session is a chat opened in bbdump on one database: it is already the active connection${chatScope.readOnly ? ', and only reading is possible' : ''}.${chatTools}`
     : base;

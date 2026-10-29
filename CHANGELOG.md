@@ -126,6 +126,27 @@
   AI assistants (MCP), which read DuckDB databases but do not change them. Queries written in
   bbdump or by the AI cannot read other files of this computer (`read_csv`, `read_parquet`,
   `ATTACH`, `COPY`, extensions are refused). A query that runs too long is stopped.
+- **SQL Server and Azure SQL databases (beta).** **Add an external connection** offers SQL Server:
+  a connection string (`sqlserver://…`, a JDBC URL, or `Server=…;Initial Catalog=…` as Azure shows
+  it) or the address field by field, a named instance (`host\SQLEXPRESS`) included, with TLS
+  (encrypted and verified by default, or encrypted without checking the certificate, or not
+  encrypted). Nothing to install. They get:
+  - **Backups** now or on a schedule, with retention, encryption and verification. SQL Server's own
+    `BACKUP` writes on the server's disk, out of reach for a remote server: bbdump makes its own,
+    compressed, in one snapshot when the database allows it (snapshot isolation): the schemas,
+    sequences, tables and their rows (exact decimals, dates to the 100 ns, offsets, GUIDs, bytes,
+    spatial types, XML), identities, computed columns, indexes, constraints and foreign keys, then
+    views, functions, procedures and triggers. What it cannot copy is named in the log (columnstore
+    and XML indexes, encrypted modules, database triggers, the history of a system-versioned table).
+  - **Restore** into the same database, another one or a new one on the same server, in a single
+    transaction: when anything fails, nothing was changed. Identities and sequences go on where
+    the source was; triggers are created after the rows, so they do not fire during the restore.
+  - **View**: the table explorer by schema (`dbo` first), keys, the diagram, editing rows, the SQL
+    editor (`TOP (n)` in the query builder). Queries run in a transaction that is always rolled back,
+    and words that change data are refused even without `;` between statements; a query past its
+    time is stopped.
+  - The **database chat**, **dashboards** and AI assistants (MCP) read SQL Server databases (in
+    T-SQL), without changing them.
 
 ### Changed
 

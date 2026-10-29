@@ -88,7 +88,7 @@ const runQuery = async (query: string): Promise<QueryResult> => {
     const { collection, pipeline } = mongoDashboardQuery(bindMongoFilters(query, boundValues()));
     return toMongoQueryResult(await ipcRenderer.invoke('dashboards-aggregate', { db: { id: props.databaseId }, query: { collection, pipeline, limit: 1000 } }));
   }
-  // MySQL, MariaDB, SQLite, DuckDB: ? parameters; PostgreSQL: $n with their types
+  // MySQL, MariaDB, SQL Server, SQLite, DuckDB: ? parameters; PostgreSQL: $n with their types
   const { text, params } = engine.value === 'postgresql' ? bindFilters(query, boundValues()) : bindSqlParams(query, boundValues());
   return toQueryResult(await ipcRenderer.invoke('execute-sql', { db: { id: props.databaseId }, sql: text, params, maxRows: 1000, timeoutMs: 30000 }));
 };
@@ -135,7 +135,7 @@ const runTool = async (args: Record<string, unknown>) => {
   }
 };
 /** Query("sql", …) on PostgreSQL, Query("mongo", …) on MongoDB: the same runner */
-const tools = { sql: runTool, mongo: runTool, mysql: runTool, sqlite: runTool, duckdb: runTool };
+const tools = { sql: runTool, mongo: runTool, mysql: runTool, sqlite: runTool, duckdb: runTool, sqlserver: runTool };
 
 /** Blocks the renderer could not build (wrong arguments, unknown component…) */
 const renderErrors = ref<OpenUIError[]>([]);

@@ -15,6 +15,7 @@ import { quoteIdent } from '../shared/engines/sqlGuard';
 import { facetFor } from './engines/registry';
 import { withSavedMysql } from './engines/mysql';
 import { withSavedMongo } from './engines/mongodb';
+import { closeSqlServerPools, withSavedSqlServer } from './engines/sqlserver';
 import { toRuntimeDatabase } from './dbSecrets';
 import { withTunnel } from './sshTunnel';
 import { listBackupEntries } from './backupActions';
@@ -23,7 +24,7 @@ import { logger } from './logger';
 import { getErrorMessage } from './utils';
 
 /** Engines restored into a new database by this module (PostgreSQL creates a local one) */
-export const RESTORE_TO_NEW_ENGINES = ['mysql', 'mariadb', 'mongodb', 'sqlite', 'duckdb'];
+export const RESTORE_TO_NEW_ENGINES = ['mysql', 'mariadb', 'mongodb', 'sqlite', 'duckdb', 'sqlserver'];
 
 const SQLITE_FILE = /\.(sqlite3?|db3?|s3db|sl3)$/i;
 const DUCKDB_FILE = /\.(duckdb|ddb|db)$/i;
@@ -70,7 +71,8 @@ export function newDatabaseEntry(template: DatabaseConfig, name: string, file?: 
     id: randomUUID(),
     name,
     displayName: name,
-    connectionString: urlWithDatabase(template.connectionString, name),
+    // SQL Server databases are saved field by field: a connection string would name the old database
+    connectionString: engineOf(template) === 'sqlserver' ? undefined : urlWithDatabase(template.connectionString, name),
     sqlite: file ? { path: file } : template.sqlite,
     enabled: false,
     lastBackup: undefined,
@@ -159,6 +161,22 @@ export async function restoreToNewDatabase(params: RestoreToNewParams): Promise<
       });
       undo = async () => {
         await withSavedMysql(server.id, async c => { await c.query(`DROP DATABASE IF EXISTS ${quoteIdent(name, 'mysql')}`); });
+      };
+    } else if (engine === 'sqlserver') {
+      await withSavedSqlServer(server.id, async query => {
+        if ((await query('SELECT DB_ID(@p1) AS id', [name]))[0]?.id !== null) throw new Error(`A database named ${name} already exists on this server`);
+        try {
+          await query(`CREATE DATABASE ${quoteIdent(name, 'tsql')}`);
+        } catch (error) {
+          throw new Error(`The database could not be created on this server (the account needs the CREATE DATABASE permission): ${getErrorMessage(error)}`);
+        }
+      });
+      undo = async () => {
+        // Its connections (the restore's) closed first: a database in use cannot be dropped
+        await closeSqlServerPools();
+        await withSavedSqlServer(server.id, async query => {
+          await query(`IF DB_ID(@p1) IS NOT NULL BEGIN ALTER DATABASE ${quoteIdent(name, 'tsql')} SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE ${quoteIdent(name, 'tsql')}; END`, [name]);
+        });
       };
     } else {
       // MongoDB creates a database with its first collection: only check the name is free

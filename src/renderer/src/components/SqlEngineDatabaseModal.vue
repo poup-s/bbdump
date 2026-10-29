@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
- * Add or edit a MySQL, MariaDB, SQLite or DuckDB database: MySQL / MariaDB by URL, field by
- * field (TLS included) or on a server through SSH, SQLite and DuckDB by their file; then its backups (folder,
+ * Add or edit a MySQL, MariaDB, SQL Server, SQLite or DuckDB database: MySQL / MariaDB by URL,
+ * field by field (TLS included) or on a server through SSH, SQL Server by connection string or
+ * field by field, SQLite and DuckDB by their file; then its backups (folder,
  * retention, encryption, schedule). Same shell and fields as the PostgreSQL and MongoDB dialogs.
  */
 import { ref, computed, watch, onMounted } from 'vue';
@@ -14,6 +15,7 @@ import type { Database, SslMode } from '../types';
 import { engineOf } from '../../../shared/engines/features';
 import { FILE_EXTENSION, filePathOf, isFileEngine, manifestFor } from '../../../shared/engines/manifests';
 import { MYSQL_DEFAULT_PORT, parseMysqlUri } from '../../../shared/engines/mysqlUri';
+import { SQLSERVER_DEFAULT_PORT, parseSqlServerUri } from '../../../shared/engines/sqlserverUri';
 import SslOptions from './SslOptions.vue';
 import SshConnectionFields from './SshConnectionFields.vue';
 import LocalServerPanel from './LocalServerPanel.vue';
@@ -43,11 +45,14 @@ const { t } = useI18n();
 const { addToast } = useToast();
 
 const isEditing = computed(() => !!store.editingDatabase);
-/** mysql, mariadb, sqlite or duckdb: the database's own when editing */
+/** mysql, mariadb, sqlserver, sqlite or duckdb: the database's own when editing */
 const engine = computed(() => (store.editingDatabase ? engineOf(store.editingDatabase) : store.databaseModalEngine ?? 'mysql'));
 /** SQLite or DuckDB: a file, no server */
 const isFile = computed(() => isFileEngine(engine.value));
 const isDuckdb = computed(() => engine.value === 'duckdb');
+/** SQL Server: by connection string or field by field, saved field by field (the string names one database) */
+const isSqlServer = computed(() => engine.value === 'sqlserver');
+const defaultPort = computed(() => (isSqlServer.value ? SQLSERVER_DEFAULT_PORT : MYSQL_DEFAULT_PORT));
 const label = computed(() => manifestFor(engine.value)?.label ?? engine.value);
 const isLoading = ref(false);
 const attempted = ref(false);
@@ -100,7 +105,7 @@ onMounted(async () => {
       displayName: db.displayName || '',
       name: db.name,
       host: db.host,
-      port: db.port || MYSQL_DEFAULT_PORT,
+      port: db.port || defaultPort.value,
       user: db.user || '',
       // The saved password never reaches the renderer: empty = unchanged
       password: db.password === MASKED_PASSWORD ? '' : db.password || '',
@@ -120,6 +125,10 @@ onMounted(async () => {
       section.value = 'schedule';
       store.modalTargetSection = null;
     }
+  } else if (isSqlServer.value) {
+    // SQL Server: its port, and encrypted (the drivers' own default; most servers have their own certificate)
+    form.value.port = SQLSERVER_DEFAULT_PORT;
+    form.value.sslMode = 'require';
   }
   if (!backup.value.output) {
     try { backup.value.output = await ipcRenderer.invoke('get-default-path'); } catch { /* chosen below */ }
@@ -128,7 +137,10 @@ onMounted(async () => {
 
 // --- URL / file --------------------------------------------------------------------------
 
-const parsed = computed(() => (!isFile.value && mode.value === 'url' && url.value.trim() ? parseMysqlUri(url.value) : null));
+const parsed = computed(() => {
+  if (isFile.value || mode.value !== 'url' || !url.value.trim()) return null;
+  return isSqlServer.value ? parseSqlServerUri(url.value) : parseMysqlUri(url.value);
+});
 const needsName = computed(() => mode.value === 'url' && !!parsed.value && !parsed.value.database);
 /** "shop" for /path/to/shop.sqlite or shop.duckdb */
 const fileStem = (file: string) => (file.split(/[\\/]/).pop() || '').replace(FILE_EXTENSION[engine.value] ?? /$^/, '');
@@ -146,7 +158,7 @@ const errors = computed(() => {
     if (!form.value.file.trim()) found.file = t('dbModal.required');
   } else if (mode.value === 'url') {
     if (!url.value.trim()) found.url = t('dbModal.required');
-    else if (!parsed.value) found.url = t('sqlModal.urlInvalid', { engine: label.value });
+    else if (!parsed.value) found.url = isSqlServer.value ? t('sqlModal.urlInvalidSqlServer') : t('sqlModal.urlInvalid', { engine: label.value });
     else if (needsName.value && !form.value.name.trim()) found.name = t('sqlModal.urlNoDatabase');
   } else if (mode.value === 'local') {
     if (!form.value.name.trim()) found.name = t('dbModal.required');
@@ -209,7 +221,22 @@ const connectionFields = () => {
     const file = form.value.file.trim();
     return { connectionString: undefined, host: '', port: 0, user: '', password: '', name: form.value.name.trim() || fileStem(file) || 'database', sqlite: { path: file }, sslMode: 'disable' as SslMode, sslRootCert: undefined };
   }
-  if (mode.value === 'url' && parsed.value) {
+  if (mode.value === 'url' && parsed.value && isSqlServer.value) {
+    // Saved field by field: the password of the string is encrypted like a typed one
+    const server = parsed.value;
+    return {
+      connectionString: undefined,
+      host: server.host,
+      port: server.port,
+      user: server.user,
+      password: server.password ?? '',
+      name: server.database || form.value.name.trim(),
+      sqlite: undefined,
+      sslMode: server.sslMode as SslMode,
+      sslRootCert: undefined,
+    };
+  }
+  if (mode.value === 'url' && parsed.value && 'sslRootCert' in parsed.value) {
     return {
       connectionString: url.value.trim(),
       host: parsed.value.host,
@@ -419,14 +446,27 @@ const close = () => {
 const modeOptions = computed(() => [
   { value: 'url' as const, label: t('database.modeUrl'), icon: ICONS.link },
   { value: 'manual' as const, label: t('database.modeManual'), icon: ICONS.edit },
-  { value: 'ssh' as const, label: t('ssh.modeShort'), icon: ICONS.terminal },
+  // SQL Server: no SSH or local server yet
+  ...(isSqlServer.value ? [] : [{ value: 'ssh' as const, label: t('ssh.modeShort'), icon: ICONS.terminal }]),
   // A new database on this computer's server (adding only)
-  ...(isEditing.value ? [] : [{ value: 'local' as const, label: t('localServer.mode'), icon: ICONS.computer }]),
+  ...(isEditing.value || isSqlServer.value ? [] : [{ value: 'local' as const, label: t('localServer.mode'), icon: ICONS.computer }]),
 ]);
 const title = computed(() => (isEditing.value ? t('sqlModal.editTitle', { engine: label.value }) : t('sqlModal.addTitle', { engine: label.value })));
 const meta = computed(() => (isEditing.value ? label.value : `${label.value} · ${step.value + 1} / 2`));
 const dumpTool = computed(() => (engine.value === 'mariadb' ? 'mariadb-dump' : 'mysqldump'));
-const urlPlaceholder = computed(() => `${engine.value === 'mariadb' ? 'mariadb' : 'mysql'}://user@localhost:3306/mydb`);
+const urlPlaceholder = computed(() => (isSqlServer.value ? 'sqlserver://sa@localhost:1433/mydb' : `${engine.value === 'mariadb' ? 'mariadb' : 'mysql'}://user@localhost:3306/mydb`));
+const urlExample = computed(() => (isSqlServer.value
+  ? 'Server=tcp:myserver.database.windows.net,1433;Initial Catalog=mydb;User ID=me;Password=…;Encrypt=True'
+  : 'mysql://user:password@db.example.com:3306/mydb?ssl-mode=REQUIRED'));
+const backupSubtitle = computed(() => {
+  if (isFile.value) return t(isDuckdb.value ? 'sqlModal.duckdbBackupSubtitle' : 'sqlModal.sqliteBackupSubtitle');
+  if (isSqlServer.value) return t('sqlModal.sqlserverBackupSubtitle');
+  return t('sqlModal.backupSubtitle', { tool: dumpTool.value, engine: label.value });
+});
+const verifyHint = computed(() => {
+  if (isFile.value) return t(isDuckdb.value ? 'sqlModal.duckdbVerifyHint' : 'sqlModal.sqliteVerifyHint');
+  return t(isSqlServer.value ? 'sqlModal.sqlserverVerifyHint' : 'sqlModal.verifyHint');
+});
 </script>
 
 <template>
@@ -482,7 +522,7 @@ const urlPlaceholder = computed(() => `${engine.value === 'mariadb' ? 'mariadb' 
               for="sql-url"
               required
               :error="shown('url')"
-              :hint="isEditing ? t('dbModal.urlPasswordKept') : 'mysql://user:password@db.example.com:3306/mydb?ssl-mode=REQUIRED'"
+              :hint="isEditing ? t('dbModal.urlPasswordKept') : urlExample"
             >
               <input id="sql-url" v-model="url" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" :placeholder="urlPlaceholder" />
             </FormField>
@@ -537,12 +577,12 @@ const urlPlaceholder = computed(() => `${engine.value === 'mariadb' ? 'mariadb' 
                 <input id="sql-host" v-model="form.host" type="text" spellcheck="false" :class="monoInputClass" placeholder="localhost" />
               </FormField>
               <FormField :label="t('database.port')" for="sql-port" required :error="shown('port')">
-                <input id="sql-port" v-model.number="form.port" type="number" min="1" max="65535" :class="monoInputClass" placeholder="3306" />
+                <input id="sql-port" v-model.number="form.port" type="number" min="1" max="65535" :class="monoInputClass" :placeholder="String(defaultPort)" />
               </FormField>
             </div>
             <div class="grid grid-cols-2 gap-3">
               <FormField :label="t('database.user')" for="sql-user">
-                <input id="sql-user" v-model="form.user" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" placeholder="root" />
+                <input id="sql-user" v-model="form.user" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" :placeholder="isSqlServer ? 'sa' : 'root'" />
               </FormField>
               <FormField :label="t('database.password')" for="sql-password" :optional="isEditing ? undefined : t('common.optional')">
                 <div class="relative">
@@ -598,7 +638,7 @@ const urlPlaceholder = computed(() => `${engine.value === 'mariadb' ? 'mariadb' 
       <ModalHeading
         :eyebrow="t('dbModal.sections.backup')"
         :title="t('dbModal.backup.title')"
-        :subtitle="isFile ? t(isDuckdb ? 'sqlModal.duckdbBackupSubtitle' : 'sqlModal.sqliteBackupSubtitle') : t('sqlModal.backupSubtitle', { tool: dumpTool, engine: label })"
+        :subtitle="backupSubtitle"
       />
       <div class="space-y-4">
         <FormField :label="t('database.output')" for="sql-output" required :error="shown('output')">
@@ -618,7 +658,7 @@ const urlPlaceholder = computed(() => `${engine.value === 'mariadb' ? 'mariadb' 
           </FormField>
         </div>
         <SwitchRow v-model="backup.encryptBackups" :title="t('database.wizard.encryptBackups')" :description="t('database.wizard.encryptBackupsDesc')" />
-        <SwitchRow v-model="backup.verifyBackups" :title="t('database.verifyBackups')" :description="isFile ? t(isDuckdb ? 'sqlModal.duckdbVerifyHint' : 'sqlModal.sqliteVerifyHint') : t('sqlModal.verifyHint')" />
+        <SwitchRow v-model="backup.verifyBackups" :title="t('database.verifyBackups')" :description="verifyHint" />
       </div>
     </template>
 

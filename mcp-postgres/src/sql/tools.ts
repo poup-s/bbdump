@@ -1,5 +1,5 @@
 /**
- * Reading tools for MySQL, MariaDB, SQLite and DuckDB databases: tables, one table in detail, the whole
+ * Reading tools for MySQL, MariaDB, SQL Server, SQLite and DuckDB databases: tables, one table in detail, the whole
  * schema in one call, read-only queries and their plan. The personal columns chosen in bbdump
  * come masked; a result column whose origin is unknown (an expression, a view) is masked too
  * when the database has any.
@@ -10,7 +10,7 @@ import { errorResult, jsonResult, textResult, type ToolResult } from '../types.j
 import { READ } from '../tools/common.js';
 import { toCsv, toMarkdown } from '../sql.js';
 import { fakeValue, readMaskingFile, rulesFromFile, type MaskKind } from '../masking.js';
-import { activeSql, keepReachable, readQuery, sqlActive, sqlError, type ReadResult } from './client.js';
+import { activeSql, explainSqlServer, keepReachable, readQuery, sqlActive, sqlError, type ReadResult } from './client.js';
 import { describeTable, listTables, schemaOverview } from './catalog.js';
 
 type Row = Record<string, unknown>;
@@ -97,8 +97,8 @@ const formatParam = z.enum(['json', 'markdown', 'csv']).default('json').describe
 
 export function registerSqlTools(server: McpServer) {
   server.registerTool('sql_list_tables', {
-    title: 'List tables (MySQL, MariaDB, SQLite, DuckDB)',
-    description: 'MySQL, MariaDB, SQLite or DuckDB: the tables of the active database with their row count (exact for small tables, ~ for an estimate) and its views. Call use_connection on such a database first.',
+    title: 'List tables (MySQL, MariaDB, SQL Server, SQLite, DuckDB)',
+    description: 'MySQL, MariaDB, SQL Server, SQLite or DuckDB: the tables of the active database with their row count (exact for small tables, ~ for an estimate) and its views. Call use_connection on such a database first.',
     inputSchema: {},
     annotations: READ,
   }, async () => run(async () => {
@@ -107,15 +107,15 @@ export function registerSqlTools(server: McpServer) {
   }));
 
   server.registerTool('sql_describe_table', {
-    title: 'Describe a table (MySQL, MariaDB, SQLite, DuckDB)',
-    description: 'MySQL, MariaDB, SQLite or DuckDB: the columns of a table (type, nullable, default, key), its primary key, foreign keys both ways (with ON DELETE) and indexes. Read it before writing a query or a change.',
+    title: 'Describe a table (MySQL, MariaDB, SQL Server, SQLite, DuckDB)',
+    description: 'MySQL, MariaDB, SQL Server, SQLite or DuckDB: the columns of a table (type, nullable, default, key), its primary key, foreign keys both ways (with ON DELETE) and indexes. Read it before writing a query or a change.',
     inputSchema: { table: tableParam },
     annotations: READ,
   }, async ({ table }) => run(async () => jsonResult({ table, ...(await describeTable(table)) })));
 
   server.registerTool('sql_schema_overview', {
-    title: 'Schema overview (MySQL, MariaDB, SQLite, DuckDB)',
-    description: 'MySQL, MariaDB, SQLite or DuckDB: every table with its columns, keys and links (col → table.col) in one compact text. The fastest way to learn a database.',
+    title: 'Schema overview (MySQL, MariaDB, SQL Server, SQLite, DuckDB)',
+    description: 'MySQL, MariaDB, SQL Server, SQLite or DuckDB: every table with its columns, keys and links (col → table.col) in one compact text. The fastest way to learn a database.',
     inputSchema: {},
     annotations: READ,
   }, async () => run(async () => {
@@ -124,9 +124,9 @@ export function registerSqlTools(server: McpServer) {
   }));
 
   server.registerTool('sql_query', {
-    title: 'Run a read-only query (MySQL, MariaDB, SQLite, DuckDB)',
-    description: 'MySQL, MariaDB, SQLite or DuckDB: runs one reading statement (SELECT, WITH, SHOW, EXPLAIN…; PRAGMA on SQLite; DESCRIBE, SUMMARIZE on DuckDB) read-only and returns its rows. Use ? placeholders with params for values. '
-      + 'Dialect: MySQL / MariaDB quote names with `backticks`; SQLite and DuckDB with "double quotes". DuckDB cannot read other files here (read_csv, read_parquet… are refused). Writes, DDL and several statements are refused here (sql_execute writes, with the user\'s approval).',
+    title: 'Run a read-only query (MySQL, MariaDB, SQL Server, SQLite, DuckDB)',
+    description: 'MySQL, MariaDB, SQL Server, SQLite or DuckDB: runs one reading statement (SELECT, WITH, SHOW, EXPLAIN…; PRAGMA on SQLite; DESCRIBE, SUMMARIZE on DuckDB) read-only and returns its rows. Use ? placeholders with params for values. '
+      + 'Dialect: MySQL / MariaDB quote names with `backticks`; SQL Server with [brackets] (TOP (n), no LIMIT); SQLite and DuckDB with "double quotes". DuckDB cannot read other files here (read_csv, read_parquet… are refused). Writes, DDL and several statements are refused here (sql_execute writes, with the user\'s approval).',
     inputSchema: {
       sql: z.string().min(1).describe('One reading statement'),
       params: z.array(z.any()).optional().describe('Values for the ? placeholders, in order'),
@@ -147,14 +147,14 @@ export function registerSqlTools(server: McpServer) {
   }));
 
   server.registerTool('sql_explain', {
-    title: 'Explain a query (MySQL, MariaDB, SQLite, DuckDB)',
-    description: 'MySQL, MariaDB, SQLite or DuckDB: the plan of a reading query (EXPLAIN on MySQL / MariaDB / DuckDB, EXPLAIN QUERY PLAN on SQLite), without running it. Shows full scans and the indexes used.',
+    title: 'Explain a query (MySQL, MariaDB, SQL Server, SQLite, DuckDB)',
+    description: 'MySQL, MariaDB, SQL Server, SQLite or DuckDB: the plan of a reading query (EXPLAIN on MySQL / MariaDB / DuckDB, EXPLAIN QUERY PLAN on SQLite, SHOWPLAN_TEXT on SQL Server), without running it. Shows full scans and the indexes used.',
     inputSchema: { sql: z.string().min(1).describe('One reading statement') },
     annotations: READ,
   }, async ({ sql }) => run(async () => {
     const db = sqlActive();
     const explained = db.engine === 'sqlite' ? `EXPLAIN QUERY PLAN ${sql}` : `EXPLAIN ${sql}`;
-    const result = await readQuery(explained, [], { maxRows: 500 });
+    const result = db.engine === 'sqlserver' ? await explainSqlServer(sql) : await readQuery(explained, [], { maxRows: 500 });
     return rowsResult(result.fields, result.rows, 'markdown', { engine: db.engine });
   }));
 }

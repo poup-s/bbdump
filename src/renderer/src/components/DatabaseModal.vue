@@ -48,6 +48,7 @@ const otherEngines = computed(() => [
   { id: 'mongodb', label: 'MongoDB', description: t('mongoModal.methodDesc'), icon: ICONS.leaf },
   { id: 'mysql', label: 'MySQL', description: t('sqlModal.mysqlMethodDesc'), icon: ICONS.database },
   { id: 'mariadb', label: 'MariaDB', description: t('sqlModal.mariadbMethodDesc'), icon: ICONS.database },
+  { id: 'sqlserver', label: 'SQL Server', description: t('sqlModal.sqlserverMethodDesc'), icon: ICONS.database },
   { id: 'sqlite', label: 'SQLite', description: t('sqlModal.sqliteMethodDesc'), icon: ICONS.file },
   { id: 'duckdb', label: 'DuckDB', description: t('sqlModal.duckdbMethodDesc'), icon: ICONS.file },
 ].filter(engine => engineLevel(engine.id) !== 'off'));

@@ -229,10 +229,40 @@ export const DUCKDB: EngineManifest = {
     features: DUCKDB_FEATURES,
 };
 
-export const MANIFESTS: readonly EngineManifest[] = [POSTGRESQL, MONGODB, MYSQL, MARIADB, SQLITE, DUCKDB];
+/** SQL Server and Azure SQL: in beta (new in this version) */
+const SQLSERVER_FEATURES = {
+    'connection.test': 'beta',
+    'connection.tls': 'beta',
+    'stats.size': 'beta',
+    'backup.run': 'beta',
+    'backup.schedule': 'beta',
+    'backup.verify': 'beta',
+    'backup.encrypt': 'beta',
+    'restore.replace': 'beta',
+    'restore.toOther': 'beta',
+    'explorer.browse': 'beta',
+    'explorer.edit': 'beta',
+    'explorer.query': 'beta',
+    'explorer.diagram': 'beta',
+    // The AI reads (chat, dashboards, MCP); changes are made in bbdump
+    'mcp.read': 'beta',
+    'chat': 'beta',
+    'dashboards': 'beta',
+} as const satisfies Partial<Record<FeatureKey, Support>>;
+
+export const SQLSERVER: EngineManifest = {
+    id: 'sqlserver',
+    label: 'SQL Server',
+    defaultPort: 1433,
+    uriSchemes: ['sqlserver', 'mssql'],
+    queryLanguage: 'sql',
+    features: SQLSERVER_FEATURES,
+};
+
+export const MANIFESTS: readonly EngineManifest[] = [POSTGRESQL, MONGODB, MYSQL, MARIADB, SQLITE, DUCKDB, SQLSERVER];
 
 /** Engines whose databases are tables queried in SQL (the table explorer, SQL dashboards) */
-export const SQL_ENGINES: readonly string[] = ['postgresql', 'mysql', 'mariadb', 'sqlite', 'duckdb'];
+export const SQL_ENGINES: readonly string[] = ['postgresql', 'mysql', 'mariadb', 'sqlite', 'duckdb', 'sqlserver'];
 
 /** Engines whose database is a file on this computer (no server, host, port or account) */
 export const FILE_ENGINES: readonly string[] = ['sqlite', 'duckdb'];

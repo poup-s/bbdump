@@ -68,7 +68,7 @@ describe('feature resolution', () => {
 
 describe('features.json', () => {
   test('keeps valid levels only, and stable engines can never be turned off', () => {
-    const stable = { postgresql: 'on', mongodb: 'on', mysql: 'on', mariadb: 'on', sqlite: 'on', duckdb: 'on' };
+    const stable = { postgresql: 'on', mongodb: 'on', mysql: 'on', mariadb: 'on', sqlite: 'on', duckdb: 'on', sqlserver: 'on' };
     assert.deepEqual(shared.sanitizeRollout({ engines: { postgresql: 'off', mongodb: 'off', mysql: 'beta', redis: 'beta', 'Bad Name': 'on', x: 'maybe' }, disabled: ['backup.run', 'nope', 3] }),
       { engines: { ...stable, redis: 'beta' }, disabled: ['backup.run'] });
     assert.deepEqual(shared.sanitizeRollout('garbage'), shared.DEFAULT_ROLLOUT);
@@ -86,7 +86,7 @@ describe('features.json', () => {
   test('the file is read, sanitized, then the development overrides apply', () => {
     // features.json still says mongodb: 'beta' (saved while it was in testing): no longer applies
     assert.deepEqual(flags.currentRollout(), {
-      engines: { postgresql: 'on', mongodb: 'on', mysql: 'on', mariadb: 'on', sqlite: 'on', duckdb: 'on' },
+      engines: { postgresql: 'on', mongodb: 'on', mysql: 'on', mariadb: 'on', sqlite: 'on', duckdb: 'on', sqlserver: 'on' },
       disabled: ['explorer.edit', 'explorer.query'],
     });
   });

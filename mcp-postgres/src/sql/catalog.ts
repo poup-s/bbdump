@@ -1,12 +1,12 @@
 /**
- * The catalog of the active MySQL, MariaDB, SQLite or DuckDB database: tables, columns, keys,
- * foreign keys (with their ON DELETE rule, for undo points) and indexes. Read from
- * information_schema (MySQL / MariaDB), PRAGMA functions (SQLite) or duckdb_* functions (DuckDB,
- * where a table of another schema than main is named schema.table).
+ * The catalog of the active MySQL, MariaDB, SQL Server, SQLite or DuckDB database: tables,
+ * columns, keys, foreign keys (with their ON DELETE rule, for undo points) and indexes. Read from
+ * information_schema (MySQL / MariaDB), sys.* views (SQL Server), PRAGMA functions (SQLite) or
+ * duckdb_* functions (DuckDB). A table of another schema than dbo / main is named schema.table.
  */
 import type { DatabaseSync } from 'node:sqlite';
 import { quoteIdent } from '../shared/sqlGuard.js';
-import { duckdbRows, sqlActive, withSqliteRead } from './client.js';
+import { duckdbRows, mssqlRows, sqlActive, withSqliteRead } from './client.js';
 
 type Row = Record<string, unknown>;
 
@@ -17,8 +17,98 @@ export interface IndexInfo { name: string; columns: string[]; unique: boolean }
 /** Quotes an identifier for the active database */
 export const qi = (name: string) => {
   const engine = sqlActive().engine;
-  return quoteIdent(name, engine === 'sqlite' || engine === 'duckdb' ? engine : 'mysql');
+  return quoteIdent(name, engine === 'sqlite' || engine === 'duckdb' ? engine : engine === 'sqlserver' ? 'tsql' : 'mysql');
 };
+
+// --- SQL Server (a table of another schema than dbo is named schema.table) -----------------------
+
+const msName = (row: Row) => (row.s === 'dbo' ? String(row.n) : `${row.s}.${row.n}`);
+const MS_OBJECTS = `SELECT SCHEMA_NAME(o.schema_id) AS s, o.name AS n, CASE o.type WHEN 'U' THEN 'table' ELSE 'view' END AS kind, o.object_id
+  FROM sys.objects o WHERE o.is_ms_shipped = 0 AND o.type IN ('U', 'V')
+  ORDER BY CASE WHEN SCHEMA_NAME(o.schema_id) = 'dbo' THEN 0 ELSE 1 END, s, n`;
+
+async function msObject(name: string): Promise<Row | null> {
+  return (await mssqlRows(MS_OBJECTS)).find((row) => msName(row) === name) ?? null;
+}
+
+/** "nvarchar(50)", "decimal(10,2)"… */
+function msType(row: Row): string {
+  const type = String(row.type_name).toLowerCase();
+  const length = Number(row.max_length);
+  if (['varchar', 'char', 'varbinary', 'binary'].includes(type)) return `${type}(${length === -1 ? 'max' : length})`;
+  if (['nvarchar', 'nchar'].includes(type)) return `${type}(${length === -1 ? 'max' : length / 2})`;
+  if (['decimal', 'numeric'].includes(type)) return `${type}(${row.precision},${row.scale})`;
+  if (['datetime2', 'time', 'datetimeoffset'].includes(type)) return `${type}(${row.scale})`;
+  return type;
+}
+
+async function msTables() {
+  const objects = await mssqlRows(MS_OBJECTS);
+  const counts = await mssqlRows("SELECT p.object_id, SUM(p.rows) AS n FROM sys.partitions p WHERE p.index_id IN (0, 1) GROUP BY p.object_id");
+  const estimate = new Map(counts.map((c) => [Number(c.object_id), Number(c.n)]));
+  const tables = [];
+  for (const row of objects.filter((o) => o.kind === 'table')) {
+    const rows = estimate.get(Number(row.object_id)) ?? 0;
+    // Exact under a million rows (the catalog's count is close, not always exact)
+    const exact = rows <= 1_000_000 ? Number((await mssqlRows(`SELECT COUNT_BIG(*) AS n FROM ${quoteIdent(String(row.s), 'tsql')}.${quoteIdent(String(row.n), 'tsql')}`))[0]?.n ?? 0) : null;
+    tables.push({ name: msName(row), rows: exact ?? rows, rows_estimated: exact === null });
+  }
+  return { tables, views: objects.filter((o) => o.kind === 'view').map(msName) };
+}
+
+async function msDescribe(name: string) {
+  const object = await msObject(name);
+  if (!object) throw new Error(`No table or view "${name}" in this database: sql_list_tables lists them.`);
+  const id = Number(object.object_id);
+  const columns = await mssqlRows(`
+    SELECT c.name, TYPE_NAME(c.user_type_id) AS type_name, c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity, c.is_computed,
+           dc.definition AS dflt
+    FROM sys.columns c LEFT JOIN sys.default_constraints dc ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
+    WHERE c.object_id = @p1 ORDER BY c.column_id`, [id]);
+  const indexRows = await mssqlRows(`
+    SELECT i.name, i.is_unique, i.is_primary_key, c.name AS col FROM sys.indexes i
+    JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0
+    JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+    WHERE i.object_id = @p1 ORDER BY i.index_id, ic.key_ordinal`, [id]);
+  const indexes = new Map<string, IndexInfo & { primary: boolean }>();
+  for (const row of indexRows) {
+    const index = indexes.get(String(row.name)) ?? { name: String(row.name), columns: [], unique: !!row.is_unique, primary: !!row.is_primary_key };
+    index.columns.push(String(row.col));
+    indexes.set(index.name, index);
+  }
+  const primary = [...indexes.values()].find((i) => i.primary)?.columns ?? [];
+  const fkRows = await mssqlRows(`
+    SELECT fk.object_id, fk.name, fk.parent_object_id, SCHEMA_NAME(pt.schema_id) AS ps, pt.name AS pt, SCHEMA_NAME(rt.schema_id) AS rs, rt.name AS rt,
+           pc.name AS col, rc.name AS ref, fk.delete_referential_action_desc AS on_delete
+    FROM sys.foreign_keys fk
+    JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+    JOIN sys.tables pt ON pt.object_id = fk.parent_object_id JOIN sys.tables rt ON rt.object_id = fk.referenced_object_id
+    JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
+    JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
+    WHERE fk.parent_object_id = @p1 OR fk.referenced_object_id = @p1 ORDER BY fk.object_id, fkc.constraint_column_id`, [id]);
+  const grouped = new Map<number, ForeignKey & { from: number; source: string; target: string }>();
+  for (const row of fkRows) {
+    const key = Number(row.object_id);
+    const fk = grouped.get(key) ?? {
+      name: String(row.name), columns: [], table: '', references: [], on_delete: String(row.on_delete).replace(/_/g, ' '),
+      from: Number(row.parent_object_id), source: msName({ s: row.ps, n: row.pt }), target: msName({ s: row.rs, n: row.rt }),
+    };
+    fk.columns.push(String(row.col));
+    fk.references.push(String(row.ref));
+    grouped.set(key, fk);
+  }
+  const all = [...grouped.values()];
+  return {
+    columns: columns.map((c) => ({
+      name: String(c.name), type: msType(c), nullable: !!c.is_nullable, default: c.dflt ?? null, primary: primary.includes(String(c.name)),
+      extra: c.is_identity ? 'identity (auto)' : c.is_computed ? 'computed' : undefined,
+    })),
+    primary_key: primary,
+    foreign_keys: all.filter((fk) => fk.from === id).map(({ from: _from, source: _source, target, ...fk }) => ({ ...fk, table: target })),
+    referenced_by: all.filter((fk) => fk.target === name).map(({ from: _from, source, target: _target, ...fk }) => ({ ...fk, table: source })),
+    indexes: [...indexes.values()].filter((i) => !i.primary).map(({ primary: _primary, ...index }) => index),
+  };
+}
 
 // --- DuckDB --------------------------------------------------------------------------------------
 
@@ -92,6 +182,7 @@ const sqliteTables = (db: DatabaseSync, type: 'table' | 'view') =>
 export async function listTables(): Promise<{ tables: Array<{ name: string; rows: number | null; rows_estimated: boolean }>; views: string[] }> {
   const db = sqlActive();
   if (db.engine === 'duckdb') return duckTables(db.file!);
+  if (db.engine === 'sqlserver') return msTables();
   if (db.engine === 'sqlite') {
     return withSqliteRead(db.file!, (sqlite) => ({
       tables: sqliteTables(sqlite, 'table').map((name) => ({ name, rows: Number(sqlite.prepare(`SELECT COUNT(*) AS n FROM ${quoteIdent(name, 'sqlite')}`).get()?.n ?? 0), rows_estimated: false })),
@@ -112,6 +203,7 @@ export async function listTables(): Promise<{ tables: Array<{ name: string; rows
 async function tableExists(table: string): Promise<boolean> {
   const db = sqlActive();
   if (db.engine === 'duckdb') return !!(await duckObject(db.file!, table));
+  if (db.engine === 'sqlserver') return !!(await msObject(table));
   if (db.engine === 'sqlite') return withSqliteRead(db.file!, (sqlite) => !!sqlite.prepare("SELECT 1 FROM sqlite_schema WHERE type IN ('table', 'view') AND name = ?").get(table));
   return (await mysqlRows('SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?', [table])).length > 0;
 }
@@ -125,6 +217,7 @@ export async function knownTable(table: string): Promise<string> {
 export async function describeTable(table: string): Promise<{ columns: ColumnInfo[]; primary_key: string[]; foreign_keys: ForeignKey[]; referenced_by: ForeignKey[]; indexes: IndexInfo[] }> {
   const db = sqlActive();
   if (db.engine === 'duckdb') return duckDescribe(db.file!, table);
+  if (db.engine === 'sqlserver') return msDescribe(table);
   await knownTable(table);
   if (db.engine === 'sqlite') {
     return withSqliteRead(db.file!, (sqlite) => {
