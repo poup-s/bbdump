@@ -34,6 +34,8 @@ interface BbdumpDatabaseConfig {
   mongo?: { authSource?: string };
   /** SQLite: the database file */
   sqlite?: { path?: string };
+  /** DuckDB: the database file */
+  duckdb?: { path?: string };
 }
 
 interface BbdumpConfig {
@@ -204,9 +206,11 @@ function loadAllDatabases(): BbdumpConfig | null {
 
 const isPostgres = (db: BbdumpDatabaseConfig) => !db.engine || db.engine === 'postgresql';
 
-/** MySQL, MariaDB and SQLite: tables queried with the sql_* tools */
-export type SqlEngine = 'mysql' | 'mariadb' | 'sqlite';
-export const isSqlEngine = (engine: string | undefined): engine is SqlEngine => engine === 'mysql' || engine === 'mariadb' || engine === 'sqlite';
+/** MySQL, MariaDB, SQLite and DuckDB: tables queried with the sql_* tools */
+export type SqlEngine = 'mysql' | 'mariadb' | 'sqlite' | 'duckdb';
+export const isSqlEngine = (engine: string | undefined): engine is SqlEngine => engine === 'mysql' || engine === 'mariadb' || engine === 'sqlite' || engine === 'duckdb';
+/** SQLite and DuckDB: a file on this computer */
+export const isFileSqlEngine = (engine: string | undefined) => engine === 'sqlite' || engine === 'duckdb';
 
 /** The PostgreSQL databases only: what every tool but the mongo_* ones works on */
 function loadBbdumpConfig(): BbdumpConfig | null {
@@ -254,7 +258,7 @@ export function getMongoTarget(identifier: string): { id: string; label: string;
   };
 }
 
-/** A saved MySQL, MariaDB or SQLite database: its target (password decrypted, memory only) or its file */
+/** A saved MySQL, MariaDB, SQLite or DuckDB database: its target (password decrypted, memory only) or its file */
 export function getSqlTarget(identifier: string): { id: string; label: string; engine: SqlEngine; target?: MysqlTarget; file?: string; sshDatabaseId?: string } | null {
   const db = findSaved(loadAllDatabases()?.databases ?? [], identifier);
   if (!db || !isSqlEngine(db.engine)) return null;
@@ -262,6 +266,10 @@ export function getSqlTarget(identifier: string): { id: string; label: string; e
   if (db.engine === 'sqlite') {
     if (!db.sqlite?.path) throw new Error('This SQLite database has no file');
     return { id: db.id, label, engine: 'sqlite', file: db.sqlite.path };
+  }
+  if (db.engine === 'duckdb') {
+    if (!db.duckdb?.path) throw new Error('This DuckDB database has no file');
+    return { id: db.id, label, engine: 'duckdb', file: db.duckdb.path };
   }
   let password = db.password;
   if (db.encrypted !== false && password) {
@@ -344,10 +352,10 @@ function mongoConnectionInfo(db: BbdumpDatabaseConfig, project: string | undefin
   };
 }
 
-/** A MySQL, MariaDB or SQLite database in list_connections, never with its password */
+/** A MySQL, MariaDB, SQLite or DuckDB database in list_connections, never with its password */
 function sqlConnectionInfo(db: BbdumpDatabaseConfig, engine: SqlEngine, project: string | undefined): ConnectionInfo {
-  if (engine === 'sqlite') {
-    return { id: db.id, name: db.name, displayName: db.displayName, project, engine, host: '', port: 0, user: '', database: db.name, file: db.sqlite?.path, ssl: false, local: true, last_backup: db.lastBackup };
+  if (isFileSqlEngine(engine)) {
+    return { id: db.id, name: db.name, displayName: db.displayName, project, engine, host: '', port: 0, user: '', database: db.name, file: (engine === 'duckdb' ? db.duckdb : db.sqlite)?.path, ssl: false, local: true, last_backup: db.lastBackup };
   }
   const parsed = db.connectionString ? parseMysqlUri(db.connectionString) : null;
   const sslMode = db.sslMode || parsed?.sslMode;

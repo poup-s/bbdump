@@ -71,6 +71,25 @@ before(() => {
   databases.push({ ...base, id: 's1', engine: 'sqlite', name: 'shop', host: '', port: 0, sqlite: { path: sqliteFile } });
   databases.push({ ...base, id: 's2', engine: 'sqlite', name: 'copy', host: '', port: 0, sqlite: { path: sqliteCopy } });
   engines.push({ id: 's1', copy: 's2', engine: 'sqlite', label: 'SQLite' });
+  // DuckDB: the same shop, written with its own tool (the test needs it in the PATH)
+  if (hasTool('duckdb')) {
+    const { bindDuckdb } = require(path.join(root, 'dist/shared/engines/duckdbCli.js'));
+    const duckFile = path.join(tmp, 'shop.duckdb');
+    const duckCopy = path.join(tmp, 'copy.duckdb');
+    const script = [
+      'CREATE SEQUENCE id_seq;',
+      ...schemaSql("DEFAULT nextval('id_seq')", 'TIMESTAMP').map(sql => `${sql};`),
+      ...seedStatements().map(([sql, values]) => `${bindDuckdb(sql, values)};`),
+    ].join('\n');
+    const env = { ...process.env, AI_AGENT: '', CLAUDECODE: '' };
+    execFileSync('duckdb', [duckFile], { input: script, env });
+    execFileSync('duckdb', [duckCopy], { input: 'CREATE TABLE leftover (id INT);', env });
+    databases.push({ ...base, id: 'd1', engine: 'duckdb', name: 'shop', host: '', port: 0, duckdb: { path: duckFile } });
+    databases.push({ ...base, id: 'd2', engine: 'duckdb', name: 'copy', host: '', port: 0, duckdb: { path: duckCopy } });
+    engines.push({ id: 'd1', copy: 'd2', engine: 'duckdb', label: 'DuckDB' });
+  } else if (toolsRequired) {
+    throw new Error('the duckdb tool is not in the PATH');
+  }
   for (const [engine, env] of [['mysql', 'BBDUMP_TEST_MYSQL'], ['mariadb', 'BBDUMP_TEST_MARIADB']]) {
     const server = process.env[env];
     if (!server) continue;
@@ -116,11 +135,12 @@ async function seedServer(e) {
   await c.end();
 }
 
-const toolsFor = (e) => (e.engine === 'sqlite' ? true : hasTool(e.engine === 'mariadb' ? 'mariadb-dump' : 'mysqldump', 'mysqldump', 'mariadb-dump'));
+const toolsFor = (e) => (e.engine === 'sqlite' ? true : e.engine === 'duckdb' ? hasTool('duckdb') : hasTool(e.engine === 'mariadb' ? 'mariadb-dump' : 'mysqldump', 'mysqldump', 'mariadb-dump'));
 
-for (const label of ['SQLite', 'MySQL', 'MariaDB']) {
+for (const label of ['SQLite', 'MySQL', 'MariaDB', 'DuckDB']) {
   const env = label === 'MySQL' ? 'BBDUMP_TEST_MYSQL' : label === 'MariaDB' ? 'BBDUMP_TEST_MARIADB' : null;
-  const skip = env && !process.env[env] ? `${env} is not set (host:port of a throwaway server)` : false;
+  const skip = env && !process.env[env] ? `${env} is not set (host:port of a throwaway server)`
+    : label === 'DuckDB' && !hasTool('duckdb') ? 'the duckdb tool is not in the PATH' : false;
 
   describe(`${label} for real`, { skip }, () => {
     let e;
@@ -161,7 +181,8 @@ for (const label of ['SQLite', 'MySQL', 'MariaDB']) {
       // Stopped at its time limit: an error, or (MySQL) SLEEP cut short, which then returns 1
       const slow = e.engine === 'sqlite'
         ? 'WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) AS s FROM c'
-        : 'SELECT SLEEP(5) AS s FROM orders LIMIT 1';
+        : e.engine === 'duckdb' ? 'SELECT sum(a.range * b.range) AS s FROM range(200000) a, range(200000) b'
+          : 'SELECT SLEEP(5) AS s FROM orders LIMIT 1';
       const started = Date.now();
       const outcome = await query.run(e.id, { sql: slow, timeoutMs: 800 }).then(r => r, error => error);
       assert.ok(Date.now() - started < 3000, `${Date.now() - started} ms`);
@@ -171,9 +192,10 @@ for (const label of ['SQLite', 'MySQL', 'MariaDB']) {
 
     test('dashboards: the example queries given to the AI, with their filters', async () => {
       const query = await registry.facetForDb(e.id, 'explorer.query', 'query');
-      const example = e.engine === 'sqlite' ? examples.SQLITE_EXAMPLE : examples.MYSQL_EXAMPLE;
-      const linked = e.engine === 'sqlite' ? examples.SQLITE_EXAMPLE_LINKED : examples.MYSQL_EXAMPLE_LINKED;
-      const tool = e.engine === 'sqlite' ? 'sqlite' : 'mysql';
+      const dialect = e.engine === 'sqlite' || e.engine === 'duckdb' ? e.engine.toUpperCase() : 'MYSQL';
+      const example = examples[`${dialect}_EXAMPLE`];
+      const linked = examples[`${dialect}_EXAMPLE_LINKED`];
+      const tool = dialect.toLowerCase();
       const run = async (source, block, values) => {
         const match = source.match(new RegExp(`^${block} = Query\\("${tool}", \\{query: ("(?:[^"\\\\]|\\\\.)*")\\}`, 'm'));
         assert.ok(match, block);
@@ -236,8 +258,9 @@ for (const label of ['SQLite', 'MySQL', 'MariaDB']) {
       const backup = await registry.facetForDb(e.id, 'backup.run', 'backup');
       const dumped = await backup.dump(cfg.getConfig().databases.find(d => d.id === e.id));
       assert.equal(dumped.success, true, dumped.error);
-      const isSqlite = e.engine === 'sqlite';
-      const where = isSqlite ? { file: path.join(tmp, 'shop_new.sqlite') } : { serverOf: e.id, name: `${e.name}_new` };
+      const isSqlite = e.engine === 'sqlite' || e.engine === 'duckdb';
+      const ext = e.engine === 'duckdb' ? 'duckdb' : 'sqlite';
+      const where = isSqlite ? { file: path.join(tmp, `shop_new.${ext}`) } : { serverOf: e.id, name: `${e.name}_new` };
       const before = cfg.getConfig().databases.length;
       const result = await restoreToNewDatabase({ backupFile: dumped.filePath, ...where });
       assert.equal(result.success, true, result.error);
@@ -254,7 +277,7 @@ for (const label of ['SQLite', 'MySQL', 'MariaDB']) {
       // A damaged backup: the new database it created is removed
       const broken = path.join(tmp, `broken_${e.engine}.dump`);
       fs.writeFileSync(broken, fs.readFileSync(dumped.filePath).subarray(0, 200));
-      const brokenWhere = isSqlite ? { file: path.join(tmp, 'shop_broken.sqlite') } : { serverOf: e.id, name: `${e.name}_broken` };
+      const brokenWhere = isSqlite ? { file: path.join(tmp, `shop_broken.${ext}`) } : { serverOf: e.id, name: `${e.name}_broken` };
       const failed = await restoreToNewDatabase({ backupFile: broken, ...brokenWhere });
       assert.equal(failed.success, false);
       assert.equal(cfg.getConfig().databases.length, before + 1);
@@ -266,7 +289,7 @@ for (const label of ['SQLite', 'MySQL', 'MariaDB']) {
       }
     });
 
-    test('copy (exact, then anonymized), then update the copy from its source', async () => {
+    test('copy (exact, then anonymized), then update the copy from its source', { skip: label === 'DuckDB' ? 'not for DuckDB yet' : false }, async () => {
       const cfg = require(path.join(root, 'dist/main/ipc/configIpc.js'));
       const actions = require(path.join(root, 'dist/main/sync/sqlCopyActions.js'));
       const sync = require(path.join(root, 'dist/main/sync/syncEngine.js'));

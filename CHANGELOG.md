@@ -116,6 +116,16 @@
   (Homebrew's MariaDB, Linux), or an administrator account you type once, kept encrypted on this
   computer apart from the configuration. Deleting such a database in bbdump drops it on the server,
   as for PostgreSQL.
+- **DuckDB databases.** **Add an external connection** offers DuckDB: a `.duckdb` file on this
+  computer. bbdump uses DuckDB's own `duckdb` tool, which must be installed (`brew install duckdb`,
+  `winget install DuckDB.cli`, or DuckDB's install script on Linux); the connection test says how
+  when it is missing. DuckDB databases get backups (a full copy of the file, consistent, now or on
+  a schedule, with retention, encryption and a check that opens the copy), restore into the same
+  file, another one or a new file, the table explorer (schemas, keys, the diagram, editing rows,
+  the SQL editor, `DESCRIBE` and `SUMMARIZE` included), the **database chat**, **dashboards** and
+  AI assistants (MCP), which read DuckDB databases but do not change them. Queries written in
+  bbdump or by the AI cannot read other files of this computer (`read_csv`, `read_parquet`,
+  `ATTACH`, `COPY`, extensions are refused). A query that runs too long is stopped.
 
 ### Changed
 

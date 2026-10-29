@@ -1,11 +1,12 @@
 /**
- * The catalog of the active MySQL, MariaDB or SQLite database: tables, columns, keys, foreign
- * keys (with their ON DELETE rule, for undo points) and indexes. Read from information_schema
- * (MySQL / MariaDB) or PRAGMA functions (SQLite).
+ * The catalog of the active MySQL, MariaDB, SQLite or DuckDB database: tables, columns, keys,
+ * foreign keys (with their ON DELETE rule, for undo points) and indexes. Read from
+ * information_schema (MySQL / MariaDB), PRAGMA functions (SQLite) or duckdb_* functions (DuckDB,
+ * where a table of another schema than main is named schema.table).
  */
 import type { DatabaseSync } from 'node:sqlite';
 import { quoteIdent } from '../shared/sqlGuard.js';
-import { sqlActive, withSqliteRead } from './client.js';
+import { duckdbRows, sqlActive, withSqliteRead } from './client.js';
 
 type Row = Record<string, unknown>;
 
@@ -14,7 +15,68 @@ export interface ForeignKey { name: string; columns: string[]; table: string; re
 export interface IndexInfo { name: string; columns: string[]; unique: boolean }
 
 /** Quotes an identifier for the active database */
-export const qi = (name: string) => quoteIdent(name, sqlActive().engine === 'sqlite' ? 'sqlite' : 'mysql');
+export const qi = (name: string) => {
+  const engine = sqlActive().engine;
+  return quoteIdent(name, engine === 'sqlite' || engine === 'duckdb' ? engine : 'mysql');
+};
+
+// --- DuckDB --------------------------------------------------------------------------------------
+
+const DUCK_OBJECTS = `SELECT schema_name AS s, table_name AS n, 'table' AS kind, estimated_size AS estimate FROM duckdb_tables() WHERE database_name = current_database() AND NOT internal
+  UNION ALL SELECT schema_name, view_name, 'view', NULL FROM duckdb_views() WHERE database_name = current_database() AND NOT internal
+  ORDER BY s = 'main' DESC, s, n`;
+const duckName = (row: Row) => (row.s === 'main' ? String(row.n) : `${row.s}.${row.n}`);
+
+/** The schema and table of a name as listed (schema.table outside main) */
+async function duckObject(file: string, name: string): Promise<{ schema: string; table: string; kind: string } | null> {
+  const found = (await duckdbRows(file, DUCK_OBJECTS)).find((row) => duckName(row) === name);
+  return found ? { schema: String(found.s), table: String(found.n), kind: String(found.kind) } : null;
+}
+
+async function duckTables(file: string) {
+  const objects = await duckdbRows(file, DUCK_OBJECTS);
+  const tables = [];
+  for (const row of objects.filter((r) => r.kind === 'table')) {
+    // Exact under a million estimated rows, else DuckDB's estimate
+    const estimate = Number(row.estimate ?? 0);
+    const exact = estimate <= 1_000_000
+      ? Number((await duckdbRows(file, `SELECT count(*) AS n FROM ${quoteIdent(String(row.s), 'duckdb')}.${quoteIdent(String(row.n), 'duckdb')}`))[0]?.n ?? 0)
+      : null;
+    tables.push({ name: duckName(row), rows: exact ?? estimate, rows_estimated: exact === null });
+  }
+  return { tables, views: objects.filter((r) => r.kind === 'view').map(duckName) };
+}
+
+interface DuckConstraint { constraint_type: string; constraint_column_names: string[]; referenced_table: string | null; referenced_column_names: string[] | null; table_name: string; schema_name: string; constraint_index: number }
+
+async function duckDescribe(file: string, name: string) {
+  const object = await duckObject(file, name);
+  if (!object) throw new Error(`No table or view "${name}" in this database: sql_list_tables lists them.`);
+  const { schema, table } = object;
+  const columns = await duckdbRows(file, 'SELECT column_name, data_type, is_nullable, column_default FROM duckdb_columns() WHERE database_name = current_database() AND schema_name = ? AND table_name = ? ORDER BY column_index', [schema, table]);
+  const constraints = await duckdbRows(file, "SELECT constraint_type, constraint_column_names, referenced_table, referenced_column_names, table_name, schema_name, constraint_index FROM duckdb_constraints() WHERE database_name = current_database() AND schema_name = ? AND constraint_type IN ('PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY') ORDER BY table_name, constraint_index", [schema]) as unknown as DuckConstraint[];
+  const indexes = await duckdbRows(file, 'SELECT index_name, is_unique, expressions FROM duckdb_indexes() WHERE database_name = current_database() AND schema_name = ? AND table_name = ?', [schema, table]);
+  const own = constraints.filter((c) => c.table_name === table);
+  const primary = own.find((c) => c.constraint_type === 'PRIMARY KEY')?.constraint_column_names ?? [];
+  const toKey = (c: DuckConstraint, other: string): ForeignKey => ({
+    name: `${c.table_name}_fk_${c.constraint_index}`, columns: c.constraint_column_names, table: other,
+    references: c.referenced_column_names ?? c.constraint_column_names, on_delete: 'NO ACTION',
+  });
+  const qualify = (t: string) => (schema === 'main' ? t : `${schema}.${t}`);
+  return {
+    columns: columns.map((c) => ({
+      name: String(c.column_name), type: String(c.data_type), nullable: !!c.is_nullable, default: c.column_default ?? null, primary: primary.includes(String(c.column_name)),
+      extra: /nextval\(/i.test(String(c.column_default ?? '')) ? 'sequence (auto)' : undefined,
+    })),
+    primary_key: primary,
+    foreign_keys: own.filter((c) => c.constraint_type === 'FOREIGN KEY' && c.referenced_table).map((c) => toKey(c, qualify(String(c.referenced_table)))),
+    referenced_by: constraints.filter((c) => c.constraint_type === 'FOREIGN KEY' && c.referenced_table === table).map((c) => toKey(c, qualify(c.table_name))),
+    indexes: [
+      ...own.filter((c) => c.constraint_type === 'UNIQUE').map((c) => ({ name: `${table}_unique_${c.constraint_index}`, columns: c.constraint_column_names, unique: true })),
+      ...indexes.map((i) => ({ name: String(i.index_name), columns: Array.isArray(i.expressions) ? i.expressions.map(String) : [String(i.expressions ?? '(expression)')], unique: !!i.is_unique })),
+    ],
+  };
+}
 
 async function mysqlRows(sql: string, values: unknown[] = []): Promise<Row[]> {
   const db = sqlActive();
@@ -28,6 +90,7 @@ const sqliteTables = (db: DatabaseSync, type: 'table' | 'view') =>
 /** Tables (with their row count: exact on SQLite and small MySQL tables, else an estimate) and views */
 export async function listTables(): Promise<{ tables: Array<{ name: string; rows: number | null; rows_estimated: boolean }>; views: string[] }> {
   const db = sqlActive();
+  if (db.engine === 'duckdb') return duckTables(db.file!);
   if (db.engine === 'sqlite') {
     return withSqliteRead(db.file!, (sqlite) => ({
       tables: sqliteTables(sqlite, 'table').map((name) => ({ name, rows: Number(sqlite.prepare(`SELECT COUNT(*) AS n FROM ${quoteIdent(name, 'sqlite')}`).get()?.n ?? 0), rows_estimated: false })),
@@ -47,6 +110,7 @@ export async function listTables(): Promise<{ tables: Array<{ name: string; rows
 
 async function tableExists(table: string): Promise<boolean> {
   const db = sqlActive();
+  if (db.engine === 'duckdb') return !!(await duckObject(db.file!, table));
   if (db.engine === 'sqlite') return withSqliteRead(db.file!, (sqlite) => !!sqlite.prepare("SELECT 1 FROM sqlite_schema WHERE type IN ('table', 'view') AND name = ?").get(table));
   return (await mysqlRows('SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?', [table])).length > 0;
 }
@@ -59,6 +123,7 @@ export async function knownTable(table: string): Promise<string> {
 
 export async function describeTable(table: string): Promise<{ columns: ColumnInfo[]; primary_key: string[]; foreign_keys: ForeignKey[]; referenced_by: ForeignKey[]; indexes: IndexInfo[] }> {
   const db = sqlActive();
+  if (db.engine === 'duckdb') return duckDescribe(db.file!, table);
   await knownTable(table);
   if (db.engine === 'sqlite') {
     return withSqliteRead(db.file!, (sqlite) => {

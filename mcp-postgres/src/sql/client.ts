@@ -1,17 +1,19 @@
 /**
- * The active MySQL, MariaDB or SQLite database, chosen with use_connection. While it is active
- * the PostgreSQL tools refuse to run. MySQL / MariaDB go through mysql2 (loaded on first use),
- * through the app's SSH tunnel when the database has one; SQLite reads run in their own process
- * (killed at their time limit: SQLite cannot be interrupted), short writes in this one.
+ * The active MySQL, MariaDB, SQLite or DuckDB database, chosen with use_connection. While it is
+ * active the PostgreSQL tools refuse to run. MySQL / MariaDB go through mysql2 (loaded on first
+ * use), through the app's SSH tunnel when the database has one; SQLite reads run in their own
+ * process (killed at their time limit: SQLite cannot be interrupted), short writes in this one.
+ * DuckDB goes through the user's duckdb tool, read-only, with file access turned off.
  */
 import * as fs from 'fs';
 import * as v8 from 'v8';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { createRequire } from 'module';
 import type { Pool, PoolConnection, FieldPacket } from 'mysql2/promise';
 import type { DatabaseSync } from 'node:sqlite';
 import { mysqlConnection, type MysqlConnection, type MysqlTarget } from '../shared/mysqlUri.js';
-import { readOnlyProblem } from '../shared/sqlGuard.js';
+import { readOnlyProblem, statementKind } from '../shared/sqlGuard.js';
+import { bindDuckdb, duckdbInstallHint, duckdbVersionOf, findDuckdbTool, runDuckdbTool } from '../shared/duckdbCli.js';
 import { SQLITE_RUNNER } from '../shared/sqliteRunner.js';
 import { mongoToolsEnabled, type MongoFeature } from '../mongo/features.js';
 import { appApi } from '../confirm.js';
@@ -25,9 +27,9 @@ interface ActiveSql {
   id: string;
   label: string;
   engine: SqlEngine;
-  /** MySQL database name; "main" for SQLite */
+  /** MySQL database name; "main" for SQLite and DuckDB */
   database: string;
-  /** host:port, or the SQLite file */
+  /** host:port, or the SQLite / DuckDB file */
   where: string;
   user: string;
   port: number;
@@ -166,16 +168,53 @@ function describeSqlite(file: string) {
   });
 }
 
+// --- DuckDB ------------------------------------------------------------------------------------
+
+let duckdbTool: { file: string; version?: string } | null = null;
+
+/** The user's duckdb tool and its version (found once), or how to install it */
+function requireDuckdbTool(): { file: string; version?: string } {
+  if (duckdbTool) return duckdbTool;
+  const file = findDuckdbTool();
+  if (!file) throw new Error(`The duckdb tool was not found. Install it: ${duckdbInstallHint()}`);
+  const answer = spawnSync(file, ['--version'], { encoding: 'utf8', timeout: 10000, windowsHide: true });
+  duckdbTool = { file, version: duckdbVersionOf(`${answer.stdout ?? ''}${answer.stderr ?? ''}`) };
+  return duckdbTool;
+}
+
+/** Statements of a DuckDB script, read-only, with file access turned off */
+export function runDuckdb(file: string, script: string, timeoutMs = QUERY_TIMEOUT_MS): Promise<Row[][]> {
+  if (!fs.existsSync(file)) return Promise.reject(new Error(`The DuckDB file was not found: ${file}`));
+  return runDuckdbTool(requireDuckdbTool(), file, script, { readOnly: true, timeoutMs });
+}
+
+/** The rows of one reading statement on a DuckDB file (values bound as literals) */
+export async function duckdbRows(file: string, sql: string, values: unknown[] = []): Promise<Row[]> {
+  const results = await runDuckdb(file, `${bindDuckdb(sql, values)};`);
+  return results[results.length - 1] ?? [];
+}
+
+async function describeDuckdb(file: string) {
+  const started = Date.now();
+  const [row] = await duckdbRows(file, 'SELECT version() AS v, (SELECT count(*) FROM duckdb_tables() WHERE database_name = current_database() AND NOT internal) AS n');
+  let size = 0;
+  try { size = fs.statSync(file).size; } catch { /* checked above */ }
+  return { latency_ms: Date.now() - started, version: String(row?.v ?? '').replace(/^v/, ''), tables: Number(row?.n ?? 0), size_bytes: size };
+}
+
+/** Kinds of statement that are queries (wrapped in a SELECT … LIMIT) */
+const DUCKDB_QUERY_STARTS = new Set(['SELECT', 'WITH', 'FROM', 'VALUES', '(', 'TABLE', 'PIVOT', 'UNPIVOT']);
+
 // --- Switching -----------------------------------------------------------------------------------
 
 export interface SqlSaved { id: string; label: string; engine: SqlEngine; target?: MysqlTarget; file?: string; sshDatabaseId?: string }
 
 /** Connects to a saved database and makes it the active one; the previous one is closed */
 export async function useSql(saved: SqlSaved) {
-  if (saved.engine === 'sqlite') {
-    const info = describeSqlite(saved.file!);
+  if (saved.engine === 'sqlite' || saved.engine === 'duckdb') {
+    const info = saved.engine === 'duckdb' ? await describeDuckdb(saved.file!) : describeSqlite(saved.file!);
     await clearSql();
-    active = { id: saved.id, label: saved.label, engine: 'sqlite', database: 'main', where: saved.file!, user: '', port: 0, file: saved.file };
+    active = { id: saved.id, label: saved.label, engine: saved.engine, database: 'main', where: saved.file!, user: '', port: 0, file: saved.file };
     return { database: 'main', file: saved.file, ...info };
   }
   const reached = await reach(saved.target!, saved.sshDatabaseId);
@@ -198,6 +237,7 @@ export async function useSql(saved: SqlSaved) {
 /** Checks a saved database without switching to it */
 export async function testSql(saved: SqlSaved) {
   if (saved.engine === 'sqlite') return { file: saved.file, ...describeSqlite(saved.file!) };
+  if (saved.engine === 'duckdb') return { file: saved.file, ...(await describeDuckdb(saved.file!)) };
   const { pool, conn } = await mysqlPool(await reach(saved.target!, saved.sshDatabaseId));
   try {
     return { database: conn.database, hosts: conn.label, ...(await describeMysql(pool)) };
@@ -225,7 +265,8 @@ export function sqlActive(feature: MongoFeature = 'mcp.read'): ActiveSql {
   if (!mongoToolsEnabled(feature)) {
     throw new Error(feature === 'mcp.write' && mongoToolsEnabled() ? 'Changing these databases is turned off in bbdump.' : 'Reading these databases is turned off in bbdump.');
   }
-  if (!active) throw new Error('No MySQL, MariaDB or SQLite database is active: call list_connections, then use_connection on one.');
+  if (!active) throw new Error('No MySQL, MariaDB, SQLite or DuckDB database is active: call list_connections, then use_connection on one.');
+  if (feature === 'mcp.write' && active.engine === 'duckdb') throw new Error('DuckDB databases are read-only here: changes are made in bbdump (explorer, SQL editor).');
   return active;
 }
 
@@ -243,11 +284,23 @@ export interface ReadResult {
 /** One reading statement: refused before when it is not one, then run read-only and timed */
 export async function readQuery(sql: string, values: unknown[] = [], options: { maxRows?: number; timeoutMs?: number } = {}): Promise<ReadResult> {
   const db = sqlActive();
-  const dialect = db.engine === 'sqlite' ? 'sqlite' : 'mysql';
+  const dialect = db.engine === 'sqlite' || db.engine === 'duckdb' ? db.engine : 'mysql';
   const problem = readOnlyProblem(sql, dialect);
   if (problem) throw new Error(problem);
   const maxRows = options.maxRows ?? 5000;
   const timeoutMs = options.timeoutMs ?? QUERY_TIMEOUT_MS;
+  if (db.engine === 'duckdb') {
+    // Values written as literals (the tool takes no parameters); a query gets one row more than shown
+    const bound = bindDuckdb(sql, values).trim().replace(/;+\s*$/, '');
+    const isQuery = DUCKDB_QUERY_STARTS.has(statementKind(bound, 'duckdb'));
+    const started = Date.now();
+    const [rows = []] = await runDuckdb(db.file!, `${isQuery ? `SELECT * FROM (${bound}) LIMIT ${maxRows + 1}` : bound};`, timeoutMs);
+    const duration = Date.now() - started;
+    let fields = rows.length ? Object.keys(rows[0]) : [];
+    if (!fields.length && isQuery) fields = (await duckdbRows(db.file!, `DESCRIBE ${bound}`).catch(() => [])).map((r) => String(r.column_name));
+    // The tool does not say where a column comes from
+    return { rows: rows.slice(0, maxRows), fields, origins: fields.map(() => ({ table: null, column: null })), truncated: rows.length > maxRows, duration };
+  }
   if (db.engine === 'sqlite') {
     const result = await runSqlite(db.file!, { sql, values, mode: 'read', maxRows, timeoutMs });
     return { rows: result.rows, fields: result.fields, origins: result.origins, truncated: result.truncated, duration: result.duration };

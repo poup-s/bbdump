@@ -133,6 +133,7 @@ export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null
                     mongo: saved.mongo,
                     // SQLite: the file restored into
                     sqlite: saved.sqlite,
+                    duckdb: saved.duckdb,
                 };
             }
             // Restored by the target's engine (feature flag checked first)
@@ -331,12 +332,14 @@ export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null
         return result.filePaths[0];
     });
 
-    // SQLite: the database file (any extension: apps name them as they like)
-    ipcMain.handle('select-sqlite-file', async () => {
+    // SQLite or DuckDB: the database file (any extension: apps name them as they like)
+    ipcMain.handle('select-sqlite-file', async (_, engine?: string) => {
         const result = await dialog.showOpenDialog({
             properties: ['openFile'],
             filters: [
-                { name: 'SQLite', extensions: ['sqlite', 'sqlite3', 'db', 'db3', 's3db', 'sl3'] },
+                engine === 'duckdb'
+                    ? { name: 'DuckDB', extensions: ['duckdb', 'ddb', 'db'] }
+                    : { name: 'SQLite', extensions: ['sqlite', 'sqlite3', 'db', 'db3', 's3db', 'sl3'] },
                 { name: 'All files', extensions: ['*'] }
             ]
         });
@@ -344,11 +347,11 @@ export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null
         return result.filePaths[0];
     });
 
-    /** Where to write a copy of a SQLite database (a new file) */
-    ipcMain.handle('select-sqlite-copy-path', async (_, suggested?: string) => {
+    /** Where to write a copy of a SQLite or DuckDB database (a new file) */
+    ipcMain.handle('select-sqlite-copy-path', async (_, suggested?: string, engine?: string) => {
         const result = await dialog.showSaveDialog({
             defaultPath: typeof suggested === 'string' ? suggested : undefined,
-            filters: [{ name: 'SQLite', extensions: ['sqlite', 'sqlite3', 'db'] }],
+            filters: [engine === 'duckdb' ? { name: 'DuckDB', extensions: ['duckdb', 'ddb', 'db'] } : { name: 'SQLite', extensions: ['sqlite', 'sqlite3', 'db'] }],
             properties: ['createDirectory', 'showOverwriteConfirmation'],
         });
         return result.canceled || !result.filePath ? null : result.filePath;

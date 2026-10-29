@@ -11,6 +11,7 @@ import ModalHeading from './ui/ModalHeading.vue';
 import FormField from './ui/FormField.vue';
 import SwitchRow from './ui/SwitchRow.vue';
 import { btnDanger, btnGhost, btnPrimary, monoInputClass, panelClass } from './ui/classes';
+import { filePathOf } from '../../../shared/engines/manifests';
 // three.js-based: loaded only when a restore runs
 const RestoreAnimation = defineAsyncComponent(() => import('./RestoreAnimation.vue'));
 
@@ -35,7 +36,7 @@ const backupName = computed(() => (store.restoreBackupFile || '').split(/[\\/]/)
 const targetWhere = computed(() => {
   const target = store.restoreTargetDb;
   if (!target) return '';
-  return target.newOn?.file || target.sqlite?.path || `${target.host}:${target.port}`;
+  return target.newOn?.file || filePathOf(target) || `${target.host}:${target.port}`;
 });
 const steps = computed(() => [t('modal.restoreStepTarget'), t('modal.restoreStepConfirm')]);
 

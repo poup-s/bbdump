@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * Add or edit a MySQL, MariaDB or SQLite database: MySQL / MariaDB by URL, field by field
- * (TLS included) or on a server through SSH, SQLite by its file; then its backups (folder,
+ * Add or edit a MySQL, MariaDB, SQLite or DuckDB database: MySQL / MariaDB by URL, field by
+ * field (TLS included) or on a server through SSH, SQLite and DuckDB by their file; then its backups (folder,
  * retention, encryption, schedule). Same shell and fields as the PostgreSQL and MongoDB dialogs.
  */
 import { ref, computed, watch, onMounted } from 'vue';
@@ -12,7 +12,7 @@ import { useToast } from '../composables/useToast';
 import { ipcRenderer } from '../electron';
 import type { Database, SslMode } from '../types';
 import { engineOf } from '../../../shared/engines/features';
-import { manifestFor } from '../../../shared/engines/manifests';
+import { FILE_EXTENSION, filePathOf, isFileEngine, manifestFor } from '../../../shared/engines/manifests';
 import { MYSQL_DEFAULT_PORT, parseMysqlUri } from '../../../shared/engines/mysqlUri';
 import SslOptions from './SslOptions.vue';
 import SshConnectionFields from './SshConnectionFields.vue';
@@ -43,9 +43,11 @@ const { t } = useI18n();
 const { addToast } = useToast();
 
 const isEditing = computed(() => !!store.editingDatabase);
-/** mysql, mariadb or sqlite: the database's own when editing */
+/** mysql, mariadb, sqlite or duckdb: the database's own when editing */
 const engine = computed(() => (store.editingDatabase ? engineOf(store.editingDatabase) : store.databaseModalEngine ?? 'mysql'));
-const isSqlite = computed(() => engine.value === 'sqlite');
+/** SQLite or DuckDB: a file, no server */
+const isFile = computed(() => isFileEngine(engine.value));
+const isDuckdb = computed(() => engine.value === 'duckdb');
 const label = computed(() => manifestFor(engine.value)?.label ?? engine.value);
 const isLoading = ref(false);
 const attempted = ref(false);
@@ -72,7 +74,7 @@ const form = ref({
   password: '',
   sslMode: 'disable' as SslMode,
   sslRootCert: undefined as string | undefined,
-  /** SQLite: the database file */
+  /** SQLite / DuckDB: the database file */
   file: '',
 });
 /** Backups: the same settings as the other engines */
@@ -104,7 +106,7 @@ onMounted(async () => {
       password: db.password === MASKED_PASSWORD ? '' : db.password || '',
       sslMode: db.sslMode || 'disable',
       sslRootCert: db.sslRootCert,
-      file: db.sqlite?.path || '',
+      file: filePathOf(db) || '',
     };
     backup.value = {
       output: db.output || '',
@@ -126,13 +128,13 @@ onMounted(async () => {
 
 // --- URL / file --------------------------------------------------------------------------
 
-const parsed = computed(() => (!isSqlite.value && mode.value === 'url' && url.value.trim() ? parseMysqlUri(url.value) : null));
+const parsed = computed(() => (!isFile.value && mode.value === 'url' && url.value.trim() ? parseMysqlUri(url.value) : null));
 const needsName = computed(() => mode.value === 'url' && !!parsed.value && !parsed.value.database);
-/** "shop" for /path/to/shop.sqlite */
-const fileStem = (file: string) => (file.split(/[\\/]/).pop() || '').replace(/\.(sqlite3?|db3?|s3db|sl3)$/i, '');
+/** "shop" for /path/to/shop.sqlite or shop.duckdb */
+const fileStem = (file: string) => (file.split(/[\\/]/).pop() || '').replace(FILE_EXTENSION[engine.value] ?? /$^/, '');
 
 const chooseFile = async () => {
-  const file = await ipcRenderer.invoke('select-sqlite-file') as string | null;
+  const file = await ipcRenderer.invoke('select-sqlite-file', engine.value) as string | null;
   if (!file) return;
   form.value.file = file;
   if (!isEditing.value) form.value.name = fileStem(file) || 'database';
@@ -140,7 +142,7 @@ const chooseFile = async () => {
 
 const errors = computed(() => {
   const found: Record<string, string> = {};
-  if (isSqlite.value) {
+  if (isFile.value) {
     if (!form.value.file.trim()) found.file = t('dbModal.required');
   } else if (mode.value === 'url') {
     if (!url.value.trim()) found.url = t('dbModal.required');
@@ -188,7 +190,7 @@ const cleanSsh = (): NonNullable<Database['ssh']> => {
 
 /** What the main process gets, for the test and for saving */
 const connectionFields = () => {
-  if (!isSqlite.value && mode.value === 'ssh') {
+  if (!isFile.value && mode.value === 'ssh') {
     // As for PostgreSQL: host / port keep the server and the remote port, the tunnel does the rest
     const sslMode = (sshForm.value.sslMode || 'disable') as SslMode;
     return {
@@ -203,7 +205,7 @@ const connectionFields = () => {
       sslRootCert: undefined,
     };
   }
-  if (isSqlite.value) {
+  if (isFile.value) {
     const file = form.value.file.trim();
     return { connectionString: undefined, host: '', port: 0, user: '', password: '', name: form.value.name.trim() || fileStem(file) || 'database', sqlite: { path: file }, sslMode: 'disable' as SslMode, sslRootCert: undefined };
   }
@@ -259,7 +261,7 @@ const testConnection = async () => {
         connectionString: fields.connectionString,
         sslMode: fields.sslMode,
         sslRootCert: fields.sslRootCert,
-        sqlite: fields.sqlite ? { path: fields.sqlite.path } : undefined,
+        [isDuckdb.value ? 'duckdb' : 'sqlite']: fields.sqlite ? { path: fields.sqlite.path } : undefined,
       }),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error(t('dbModal.testTimeout'))), TEST_TIMEOUT_MS)),
     ]) as { version: string; tables: number };
@@ -300,7 +302,7 @@ const selectOutput = async () => {
 
 /** The same database already saved (same file, or same server and database) */
 const isDuplicate = (fields: ReturnType<typeof connectionFields>) => store.databases.some(db => engineOf(db) === engine.value
-  && (fields.sqlite ? db.sqlite?.path === fields.sqlite.path : db.host === fields.host && db.port === fields.port && db.name === fields.name));
+  && (fields.sqlite ? filePathOf(db) === fields.sqlite.path : db.host === fields.host && db.port === fields.port && db.name === fields.name));
 
 const save = async () => {
   if (!valid.value || !backupValid.value) {
@@ -322,15 +324,17 @@ const save = async () => {
       id: store.editingDatabase?.id ?? '',
       engine: engine.value,
       name: fields.name,
-      displayName: (mode.value === 'ssh' && !isSqlite.value ? sshForm.value.displayName : form.value.displayName)?.trim() || undefined,
+      displayName: (mode.value === 'ssh' && !isFile.value ? sshForm.value.displayName : form.value.displayName)?.trim() || undefined,
       host: fields.host,
       port: fields.port,
       user: fields.user,
       // Empty while editing: the saved password is kept by the main process
       password: fields.password,
       connectionString: fields.connectionString,
-      sqlite: fields.sqlite,
-      ssh: mode.value === 'ssh' && !isSqlite.value ? cleanSsh() : undefined,
+      // fields.sqlite holds the file of either file engine
+      sqlite: isDuckdb.value ? undefined : fields.sqlite,
+      duckdb: isDuckdb.value ? fields.sqlite : undefined,
+      ssh: mode.value === 'ssh' && !isFile.value ? cleanSsh() : undefined,
       ssl: ['require', 'verify-ca', 'verify-full'].includes(fields.sslMode),
       sslMode: fields.sslMode,
       sslRootCert: fields.sslRootCert,
@@ -351,7 +355,7 @@ const save = async () => {
     const config = await ipcRenderer.invoke('get-config');
     store.databases = config.databases;
     if (!isEditing.value) {
-      const added = store.databases.find(d => engineOf(d) === engine.value && (fields.sqlite ? d.sqlite?.path === fields.sqlite.path : d.name === dbData.name && d.host === dbData.host && d.port === dbData.port));
+      const added = store.databases.find(d => engineOf(d) === engine.value && (fields.sqlite ? filePathOf(d) === fields.sqlite.path : d.name === dbData.name && d.host === dbData.host && d.port === dbData.port));
       if (added) {
         store.newlyAddedDbId = added.id;
         setTimeout(() => { store.newlyAddedDbId = null; }, 2000);
@@ -428,7 +432,7 @@ const urlPlaceholder = computed(() => `${engine.value === 'mariadb' ? 'mariadb' 
 <template>
   <AppModal
     :title="title"
-    :icon="isSqlite ? ICONS.file : ICONS.database"
+    :icon="isFile ? ICONS.file : ICONS.database"
     :meta="meta"
     :steps="isEditing ? [] : steps"
     :step="step"
@@ -450,11 +454,11 @@ const urlPlaceholder = computed(() => `${engine.value === 'mariadb' ? 'mariadb' 
       />
 
       <div class="space-y-4">
-        <!-- SQLite: a file -->
-        <template v-if="isSqlite">
-          <FormField :label="t('sqlModal.file')" for="sql-file" required :error="shown('file')" :hint="t('sqlModal.fileHint')">
+        <!-- SQLite, DuckDB: a file -->
+        <template v-if="isFile">
+          <FormField :label="t('sqlModal.file')" for="sql-file" required :error="shown('file')" :hint="t(isDuckdb ? 'sqlModal.duckdbFileHint' : 'sqlModal.fileHint')">
             <div class="flex gap-2">
-              <input id="sql-file" v-model="form.file" type="text" spellcheck="false" :class="monoInputClass" placeholder="/path/to/app.sqlite" />
+              <input id="sql-file" v-model="form.file" type="text" spellcheck="false" :class="monoInputClass" :placeholder="isDuckdb ? '/path/to/app.duckdb' : '/path/to/app.sqlite'" />
               <button type="button" :class="btnSecondary" class="shrink-0" @click="chooseFile">
                 <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
                   <path stroke-linecap="round" stroke-linejoin="round" :d="ICONS.folder" />
@@ -569,7 +573,7 @@ const urlPlaceholder = computed(() => `${engine.value === 'mariadb' ? 'mariadb' 
         </template>
 
         <!-- Connection test (the SSH fields have their own) -->
-        <div v-if="isSqlite || (mode !== 'ssh' && mode !== 'local')" class="flex items-center gap-3 pt-1 min-h-9">
+        <div v-if="isFile || (mode !== 'ssh' && mode !== 'local')" class="flex items-center gap-3 pt-1 min-h-9">
           <button type="button" :class="btnSecondary" :disabled="test.status === 'testing'" @click="testConnection">
             <svg v-if="test.status === 'testing'" class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24" aria-hidden="true">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
@@ -579,7 +583,7 @@ const urlPlaceholder = computed(() => `${engine.value === 'mariadb' ? 'mariadb' 
           </button>
           <span v-if="test.status === 'ok'" class="flex items-center gap-1.5 text-[12px] text-emerald-600 dark:text-emerald-400" role="status">
             <span class="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-            {{ isSqlite ? t('sqlModal.sqliteTestOk', { version: test.version, tables: test.tables }) : t('sqlModal.testOk', { version: `${label} ${test.version}`, tables: test.tables }) }}
+            {{ isFile ? t(isDuckdb ? 'sqlModal.duckdbTestOk' : 'sqlModal.sqliteTestOk', { version: test.version, tables: test.tables }) : t('sqlModal.testOk', { version: `${label} ${test.version}`, tables: test.tables }) }}
           </span>
           <span v-else-if="test.status === 'error'" class="flex items-start gap-1.5 text-[12px] text-red-600 dark:text-red-400 min-w-0" role="alert">
             <span class="w-1.5 h-1.5 mt-1.5 rounded-full bg-red-500 shrink-0" />
@@ -594,7 +598,7 @@ const urlPlaceholder = computed(() => `${engine.value === 'mariadb' ? 'mariadb' 
       <ModalHeading
         :eyebrow="t('dbModal.sections.backup')"
         :title="t('dbModal.backup.title')"
-        :subtitle="isSqlite ? t('sqlModal.sqliteBackupSubtitle') : t('sqlModal.backupSubtitle', { tool: dumpTool, engine: label })"
+        :subtitle="isFile ? t(isDuckdb ? 'sqlModal.duckdbBackupSubtitle' : 'sqlModal.sqliteBackupSubtitle') : t('sqlModal.backupSubtitle', { tool: dumpTool, engine: label })"
       />
       <div class="space-y-4">
         <FormField :label="t('database.output')" for="sql-output" required :error="shown('output')">
@@ -614,7 +618,7 @@ const urlPlaceholder = computed(() => `${engine.value === 'mariadb' ? 'mariadb' 
           </FormField>
         </div>
         <SwitchRow v-model="backup.encryptBackups" :title="t('database.wizard.encryptBackups')" :description="t('database.wizard.encryptBackupsDesc')" />
-        <SwitchRow v-model="backup.verifyBackups" :title="t('database.verifyBackups')" :description="isSqlite ? t('sqlModal.sqliteVerifyHint') : t('sqlModal.verifyHint')" />
+        <SwitchRow v-model="backup.verifyBackups" :title="t('database.verifyBackups')" :description="isFile ? t(isDuckdb ? 'sqlModal.duckdbVerifyHint' : 'sqlModal.sqliteVerifyHint') : t('sqlModal.verifyHint')" />
       </div>
     </template>
 

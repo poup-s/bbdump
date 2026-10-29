@@ -12,7 +12,7 @@ import { useI18n } from '../composables/useI18n';
 import { markdownLite, type Inline } from '../chat/markdownLite';
 import { PERIODS } from './dashboardProgram';
 import { MONGO_EXAMPLE, MONGO_EXAMPLE_LINKED, MONGO_TOOL } from './mongoDashboard';
-import { MYSQL_EXAMPLE, MYSQL_EXAMPLE_LINKED, MYSQL_TOOL, SQLITE_EXAMPLE, SQLITE_EXAMPLE_LINKED, SQLITE_TOOL } from './sqlDashboard';
+import { DUCKDB_EXAMPLE, DUCKDB_EXAMPLE_LINKED, DUCKDB_TOOL, MYSQL_EXAMPLE, MYSQL_EXAMPLE_LINKED, MYSQL_TOOL, SQLITE_EXAMPLE, SQLITE_EXAMPLE_LINKED, SQLITE_TOOL } from './sqlDashboard';
 import { change, formatLabel, formatValue } from './valueFormat';
 
 type Render<P> = (p: { props: P; renderNode: (value: unknown) => RenderNodeResult }) => VNode;
@@ -948,23 +948,28 @@ const MONGO_RULES = {
 };
 
 /**
- * How a MySQL / MariaDB or SQLite dashboard reads its data: the same rules as PostgreSQL, in the
- * engine's dialect, through the sql_* tools
+ * How a MySQL / MariaDB, SQLite or DuckDB dashboard reads its data: the same rules as
+ * PostgreSQL, in the engine's dialect, through the sql_* tools
  */
-function dialectRules(dialect: 'mysql' | 'sqlite') {
+function dialectRules(dialect: 'mysql' | 'sqlite' | 'duckdb') {
   const mysql = dialect === 'mysql';
-  const product = mysql ? 'MySQL / MariaDB' : 'SQLite';
+  const duckdb = dialect === 'duckdb';
+  const product = mysql ? 'MySQL / MariaDB' : duckdb ? 'DuckDB' : 'SQLite';
   return {
     app: `a database desktop app; this database is ${product}`,
     learn: `Learn the schema with sql_schema_overview (or sql_describe_table), then test every SELECT with sql_query (limit 5, the placeholders replaced by real values) before putting it in the dashboard. Only the sql_* tools work on this database; write ${product} SQL.`,
     query: `Query("${dialect}", {query: "SELECT …"}, {columns: [], rows: []})`,
     rules: [
-      mysql
+      duckdb
+        ? 'SQL: one SELECT per Query, no semicolon, with LIMIT for lists (50 rows for tables, 20 bars at most). Quote names with "double quotes" when needed. Conditional counts with count(*) FILTER (WHERE condition). Return dates and timestamps as they are (no strftime for display): bbdump formats them in the user\'s language. Group by day with CAST(col AS DATE), by week with CAST(date_trunc(\'week\', col) AS DATE), by month with CAST(date_trunc(\'month\', col) AS DATE). ILIKE and :: casts work. Files cannot be read (read_csv, read_parquet… are refused): only the tables of the database.'
+        : mysql
         ? 'SQL: one SELECT per Query, no semicolon, with LIMIT for lists (50 rows for tables, 20 bars at most). Quote names with `backticks` when needed. Conditional counts with SUM(condition). Return dates and timestamps as they are (no DATE_FORMAT for display): bbdump formats them in the user\'s language. Group by day with DATE(col), by week with DATE(col - INTERVAL WEEKDAY(col) DAY), by month with DATE_FORMAT(col, \'%Y-%m-01\'). No ILIKE, no :: casts (CAST(x AS SIGNED / DECIMAL(12,2) / CHAR)).'
         : 'SQL: one SELECT per Query, no semicolon, with LIMIT for lists (50 rows for tables, 20 bars at most). Quote names with "double quotes" when needed. Conditional counts with SUM(condition). Dates are text (ISO 8601, "2026-10-28 09:30:00") or numbers: return them as they are, bbdump formats them. Group by day with date(col), by week with date(col, \'weekday 0\', \'-6 days\'), by month with strftime(\'%Y-%m-01\', col); a UNIX time: date(col, \'unixepoch\'). No ILIKE, no :: casts (CAST(x AS INTEGER / REAL / TEXT)). Booleans are 0 / 1.',
       'Keep queries light: they run on every refresh. Prefer one query per block, aggregate in SQL, avoid scanning big tables without a date condition.',
-      `Filters: when the user wants to filter (a period, a category), add Filters([…]) at the top and use the placeholders in EVERY relevant query: created_at >= {{from}} AND created_at < {{to}} for the period (bbdump binds UTC date texts "YYYY-MM-DD HH:MM:SS"), ({{name}} IS NULL OR col = {{name}}) for a SelectFilter. bbdump binds them as ? parameters, as text (compared with numbers, ${mysql ? 'MySQL' : 'SQLite'} converts them). Do not use $variables, Select, Input, forms, buttons or the Query refresh interval.`,
-      mysql
+      `Filters: when the user wants to filter (a period, a category), add Filters([…]) at the top and use the placeholders in EVERY relevant query: created_at >= {{from}} AND created_at < {{to}} for the period (bbdump binds UTC date texts "YYYY-MM-DD HH:MM:SS"), ({{name}} IS NULL OR col = {{name}}) for a SelectFilter. bbdump binds them as ? parameters, as text (compared with numbers or dates, ${mysql ? 'MySQL' : duckdb ? 'DuckDB' : 'SQLite'} converts them). Do not use $variables, Select, Input, forms, buttons or the Query refresh interval.`,
+      duckdb
+        ? 'Search: to find people or things by typing, use SearchFilter (never a SelectFilter of hundreds of emails): ({{q}} IS NULL OR name ILIKE \'%\' || {{q}} || \'%\' OR email ILIKE …).'
+        : mysql
         ? 'Search: to find people or things by typing, use SearchFilter (never a SelectFilter of hundreds of emails): ({{q}} IS NULL OR name LIKE CONCAT(\'%\', {{q}}, \'%\') OR email LIKE …); LIKE ignores case.'
         : 'Search: to find people or things by typing, use SearchFilter (never a SelectFilter of hundreds of emails): ({{q}} IS NULL OR name LIKE \'%\' || {{q}} || \'%\' OR email LIKE …); LIKE ignores the case of ASCII letters.',
       'Linked blocks (master and detail): when the user wants to look at one record and what belongs to it, list the records in a Table with select {filter: "x", column: "id", label: "email"} (hide the id column with an empty label ""); a click sets {{x}}. Show the record with Record (its query returns the row WHERE id = {{x}}, nothing while {{x}} is NULL) and filter the related blocks with ({{x}} IS NULL OR fk = {{x}}). Do not filter the list itself by {{x}}, so the user can pick another one.',
@@ -972,8 +977,8 @@ function dialectRules(dialect: 'mysql' | 'sqlite') {
       'When asked to explain a block, answer in plain words for someone who does not know SQL: what is counted, what is left out, the period, the tables it comes from. No SQL, no code, no change to the dashboard.',
       'Column aliases in charts and Kpis are plucked (q.rows.alias): simple lowercase ascii aliases. Table headers in the user\'s language go in labels; formats (money:EUR, percent, integer, duration, bytes, date, datetime, text) in formats.',
     ],
-    tool: mysql ? MYSQL_TOOL : SQLITE_TOOL,
-    examples: mysql ? [MYSQL_EXAMPLE, MYSQL_EXAMPLE_LINKED] : [SQLITE_EXAMPLE, SQLITE_EXAMPLE_LINKED],
+    tool: mysql ? MYSQL_TOOL : duckdb ? DUCKDB_TOOL : SQLITE_TOOL,
+    examples: mysql ? [MYSQL_EXAMPLE, MYSQL_EXAMPLE_LINKED] : duckdb ? [DUCKDB_EXAMPLE, DUCKDB_EXAMPLE_LINKED] : [SQLITE_EXAMPLE, SQLITE_EXAMPLE_LINKED],
   };
 }
 
@@ -982,6 +987,7 @@ function rulesFor(engine: string) {
   if (engine === 'mongodb') return MONGO_RULES;
   if (engine === 'mysql' || engine === 'mariadb') return dialectRules('mysql');
   if (engine === 'sqlite') return dialectRules('sqlite');
+  if (engine === 'duckdb') return dialectRules('duckdb');
   return SQL_RULES;
 }
 

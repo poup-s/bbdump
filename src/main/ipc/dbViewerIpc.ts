@@ -27,7 +27,7 @@ export function registerDbViewerHandlers() {
     ipcMain.handle('test-database-connection', async (_, params: {
         id?: string; host: string; port: number; user: string; password?: string; database: string;
         connectionString?: string; sslMode?: DatabaseConfig['sslMode']; sslRootCert?: string;
-        ssh?: DatabaseConfig['ssh']; engine?: string; mongo?: DatabaseConfig['mongo']; sqlite?: DatabaseConfig['sqlite'];
+        ssh?: DatabaseConfig['ssh']; engine?: string; mongo?: DatabaseConfig['mongo']; sqlite?: DatabaseConfig['sqlite']; duckdb?: DatabaseConfig['duckdb'];
     }) => {
         const saved = params.id ? getConfig()?.databases?.find(db => db.id === params.id) : undefined;
         // Tested by the database's engine (a saved one keeps its own), when it is turned on
@@ -49,6 +49,7 @@ export function registerDbViewerHandlers() {
                 mongo: params.mongo,
                 // SQLite: the saved file when the dialog sends none (editing)
                 sqlite: params.sqlite ?? saved?.sqlite,
+                duckdb: params.duckdb ?? saved?.duckdb,
                 host: reached.host,
                 port: reached.port,
                 user: params.user,

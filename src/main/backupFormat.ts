@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as zlib from 'zlib';
 
-export type ArchiveEngine = 'postgresql' | 'mongodb' | 'mysql' | 'mariadb' | 'sqlite';
+export type ArchiveEngine = 'postgresql' | 'mongodb' | 'mysql' | 'mariadb' | 'sqlite' | 'duckdb';
 
 /** The first line bbdump writes before a MySQL / MariaDB dump (inside the gzip stream) */
 export const sqlDumpHeader = (engine: 'mysql' | 'mariadb') => `-- bbdump: ${engine} dump`;
@@ -22,6 +22,8 @@ export function archiveEngineOf(head: Uint8Array): ArchiveEngine | undefined {
     const text = (from: Uint8Array, length: number) => String.fromCharCode(...from.slice(0, length));
     if (head.length >= 5 && text(head, 5) === 'PGDMP') return 'postgresql';
     if (head.length >= 16 && text(head, 16) === 'SQLite format 3\0') return 'sqlite';
+    // A DuckDB database file: its magic after an 8-byte checksum
+    if (head.length >= 12 && String.fromCharCode(...head.slice(8, 12)) === 'DUCK') return 'duckdb';
     if (head.length >= 2 && head[0] === 0x1f && head[1] === 0x8b) {
         let inflated: Uint8Array = new Uint8Array();
         try {

@@ -188,8 +188,55 @@ describe('MCP server', { skip: built ? false : 'mcp-postgres is not built (npm r
     }
   });
 
+  const duckdbOnPath = (process.env.PATH || '').split(path.delimiter).some((dir) => fs.existsSync(path.join(dir, process.platform === 'win32' ? 'duckdb.exe' : 'duckdb')));
+  test('DuckDB through the duckdb tool: tables, keys, read-only queries, other files out of reach', { skip: duckdbOnPath ? false : 'the duckdb tool is not in the PATH' }, async () => {
+    const { execFileSync } = await import('node:child_process');
+    const dir = fs.mkdtempSync(path.join(fs.realpathSync(process.env.TMPDIR || '/tmp'), 'bbdump-mcp-duck-'));
+    const saved = process.env.BBDUMP_CONFIG_PATH;
+    process.env.BBDUMP_CONFIG_PATH = path.join(dir, 'config.json');
+    try {
+      const file = path.join(dir, 'shop.duckdb');
+      const env = { ...process.env };
+      for (const name of ['AI_AGENT', 'CLAUDECODE', 'CLAUDE_CODE']) delete env[name];
+      execFileSync('duckdb', [file], { env, input: `CREATE TABLE customers (id INTEGER PRIMARY KEY, name VARCHAR NOT NULL);
+        CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER REFERENCES customers(id), total DECIMAL(10,2), big BIGINT);
+        CREATE SCHEMA sales; CREATE TABLE sales.targets (month DATE, amount INTEGER);
+        CREATE VIEW paid AS SELECT * FROM orders WHERE total > 0;
+        INSERT INTO customers VALUES (1, 'Ana'), (2, 'Bo');
+        INSERT INTO orders VALUES (10, 1, 12.50, 9007199254740993), (11, 2, 0, 1);` });
+      fs.writeFileSync(path.join(dir, 'secret.txt'), 'not for the AI');
+      const client = await load('sql/client.js');
+      const catalog = await load('sql/catalog.js');
+      const info = await client.useSql({ id: 'd1', label: 'shop', engine: 'duckdb', file });
+      assert.equal(info.tables, 3);
+      const listed = await catalog.listTables();
+      assert.deepEqual(listed.tables.map((t) => [t.name, t.rows]), [['customers', 2], ['orders', 2], ['sales.targets', 0]]);
+      assert.deepEqual(listed.views, ['paid']);
+      const orders = await catalog.describeTable('orders');
+      assert.deepEqual(orders.primary_key, ['id']);
+      assert.deepEqual(orders.foreign_keys.map((k) => [k.columns, k.table, k.references]), [[['customer_id'], 'customers', ['id']]]);
+      assert.deepEqual((await catalog.describeTable('customers')).referenced_by.map((k) => k.table), ['orders']);
+      assert.equal((await catalog.describeTable('sales.targets')).columns.length, 2);
+      const read = await client.readQuery('SELECT id, big FROM orders WHERE customer_id = ? ORDER BY id', [1], { maxRows: 10 });
+      assert.deepEqual(read.fields, ['id', 'big']);
+      assert.equal(read.rows[0].big, 9007199254740993n);
+      const capped = await client.readQuery('FROM range(50)', [], { maxRows: 5 });
+      assert.equal(capped.rows.length, 5);
+      assert.equal(capped.truncated, true);
+      assert.deepEqual((await client.readQuery('SELECT * FROM customers WHERE id < 0')).fields, ['id', 'name']);
+      await assert.rejects(client.readQuery('DELETE FROM orders'), /read/i);
+      await assert.rejects(client.readQuery(`SELECT * FROM read_text(${JSON.stringify(path.join(dir, 'secret.txt')).replace(/"/g, "'")})`), /disabled|external|not allowed|Permission/i);
+      assert.throws(() => client.sqlActive('mcp.write'), /read-only/);
+      await client.clearSql();
+    } finally {
+      if (saved === undefined) delete process.env.BBDUMP_CONFIG_PATH;
+      else process.env.BBDUMP_CONFIG_PATH = saved;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('the helpers copied from src/shared are those of this build', () => {
-    for (const file of ['mongoUri.ts', 'documents.ts']) {
+    for (const file of ['mongoUri.ts', 'documents.ts', 'duckdbCli.ts']) {
       const copy = path.join(process.cwd(), 'mcp-postgres', 'src', 'shared', file);
       if (!fs.existsSync(copy)) continue;
       const source = fs.readFileSync(path.join(process.cwd(), 'src', 'shared', 'engines', file), 'utf8');

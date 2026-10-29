@@ -11,7 +11,7 @@ import { useFeatures } from '../composables/useFeatures';
 import { ipcRenderer } from '../electron';
 import { getErrorMessage } from '../utils';
 import { engineOf } from '../../../shared/engines/features';
-import { isMysqlFamily, manifestFor } from '../../../shared/engines/manifests';
+import { filePathOf, isMysqlFamily, manifestFor } from '../../../shared/engines/manifests';
 import AppModal from './ui/AppModal.vue';
 import { btnGhost, btnPrimary, selectClass } from './ui/classes';
 
@@ -217,7 +217,7 @@ onUnmounted(() => ipcRenderer.removeListener('sync-progress', onProgress));
     <div v-if="step === 0">
       <label class="block text-[12px] text-gray-500 dark:text-zinc-400 mb-1.5" for="sync-source">{{ t('sync.sourceLabel', { project: project?.name ?? '' }) }}</label>
       <select id="sync-source" v-model="sourceId" :class="selectClass" class="mb-4" :disabled="analyzing">
-        <option v-for="d in sources" :key="d.id" :value="d.id">{{ d.displayName || d.name }} — {{ d.sqlite ? (d.sqlite.path.split(/[\\/]/).pop()) : d.ssh ? `${d.ssh.host} (SSH)` : `${d.host}:${d.port}` }}{{ d.isLocalBbdump ? ` (${t('sync.local')})` : '' }}</option>
+        <option v-for="d in sources" :key="d.id" :value="d.id">{{ d.displayName || d.name }} — {{ filePathOf(d) ? filePathOf(d)!.split(/[\\/]/).pop() : d.ssh ? `${d.ssh.host} (SSH)` : `${d.host}:${d.port}` }}{{ d.isLocalBbdump ? ` (${t('sync.local')})` : '' }}</option>
       </select>
 
       <div v-if="analyzing" class="py-12 flex flex-col items-center gap-3" role="status">

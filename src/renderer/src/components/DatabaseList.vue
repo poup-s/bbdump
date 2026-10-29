@@ -14,6 +14,7 @@ import ProjectModal from './ProjectModal.vue';
 import AppModal from './ui/AppModal.vue';
 import { btnGhost, btnSecondary } from './ui/classes';
 import { engineOf } from '../../../shared/engines/features';
+import { filePathOf, isFileEngine } from '../../../shared/engines/manifests';
 import { formatMongoUri } from '../../../shared/engines/mongoUri';
 import { proxyProtocolOf } from '../../../shared/engines/proxy';
 // ProxyPortModal removed — config is now inline in ProjectSection
@@ -155,9 +156,9 @@ const copyConnectionUrl = async (db: Database) => {
       database: db.name,
       options: db.user ? [['authSource', db.mongo?.authSource || 'admin']] : [],
     });
-  } else if (engineOf(db) === 'sqlite') {
+  } else if (isFileEngine(engineOf(db))) {
     // A file, not a server: its path
-    url = db.sqlite?.path || '';
+    url = filePathOf(db) || '';
   } else if (engineOf(db) === 'mysql' || engineOf(db) === 'mariadb') {
     url = `${engineOf(db)}://${encodeURIComponent(db.user || '')}@${db.host}:${db.port}/${encodeURIComponent(db.name)}`;
   } else if (db.isLocalBbdump && window.electron?.platform === 'linux') {

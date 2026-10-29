@@ -34,18 +34,19 @@ after(async () => {
 process.on('exit', () => { try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* left in the temp folder */ } });
 
 describe('manifests', () => {
-  test('MySQL, MariaDB and SQLite are known, with a driver each', async () => {
-    assert.deepEqual(MANIFESTS.map(m => m.id), ['postgresql', 'mongodb', 'mysql', 'mariadb', 'sqlite']);
-    for (const id of ['mysql', 'mariadb', 'sqlite']) {
+  test('MySQL, MariaDB, SQLite and DuckDB are known, with a driver each', async () => {
+    assert.deepEqual(MANIFESTS.map(m => m.id), ['postgresql', 'mongodb', 'mysql', 'mariadb', 'sqlite', 'duckdb']);
+    for (const id of ['mysql', 'mariadb', 'sqlite', 'duckdb']) {
       assert.equal(manifestFor(id).queryLanguage, 'sql');
       assert.equal((await registry.getDriver(id)).manifest.id, id);
     }
     assert.ok(isMysqlFamily('mariadb') && isMysqlFamily('mysql') && !isMysqlFamily('sqlite'));
   });
 
-  test('SQLite has no server: no SSH, TLS, proxy or local server', () => {
+  test('SQLite and DuckDB have no server: no SSH, TLS, proxy or local server', () => {
     for (const key of ['connection.ssh', 'connection.tls', 'proxy.tcp', 'local.server']) {
       assert.equal(manifestFor('sqlite').features[key] ?? 'no', 'no', key);
+      assert.equal(manifestFor('duckdb').features[key] ?? 'no', 'no', key);
     }
     assert.equal(manifestFor('mysql').features['connection.tls'], 'yes');
     assert.equal(manifestFor('mariadb').defaultPort, 3306);
@@ -299,5 +300,47 @@ describe('copies made by bbdump (MySQL, MariaDB, SQLite)', () => {
     assert.equal(copy().portableMysql(view, 'shop'), 'CREATE ALGORITHM=UNDEFINED SQL SECURITY DEFINER VIEW `paid` AS select `orders`.`id` AS `id` from `orders`');
     assert.equal(copy().portableMysql("CREATE DEFINER=`app`@`localhost` TRIGGER `t` BEFORE INSERT ON `orders` FOR EACH ROW SET NEW.status = 'x'", 'shop'),
       "CREATE TRIGGER `t` BEFORE INSERT ON `orders` FOR EACH ROW SET NEW.status = 'x'");
+  });
+});
+
+describe('DuckDB helpers (no duckdb tool needed)', () => {
+  const duck = require(path.join(cwd, 'dist/shared/engines/duckdbCli.js'));
+
+  test('values bound as literals, never inside strings, quoted names or comments', () => {
+    assert.equal(duck.bindDuckdb("SELECT * FROM t WHERE a = ? AND b = '?' AND \"c?\" = ? -- ?\n/* ? */", ["O'Brien", 3]),
+      "SELECT * FROM t WHERE a = 'O''Brien' AND b = '?' AND \"c?\" = 3 -- ?\n/* ? */");
+    assert.equal(duck.bindDuckdb('SELECT ?, ?, ?, ?', [null, true, 12n, new Uint8Array([0, 255])]), "SELECT NULL, TRUE, 12, '\\x00\\xFF'::BLOB");
+    assert.equal(duck.duckdbLiteral('a\u0000b'), "'ab'");
+    assert.throws(() => duck.bindDuckdb('SELECT ?', []), /Not enough values/);
+  });
+
+  test('its JSON output: one array per statement, large integers exact', () => {
+    const out = duck.parseDuckdbJson('[{"n":9007199254740993,"s":"[x]"}]\n[{"m":1.5}]\n');
+    assert.equal(out.length, 2);
+    assert.equal(out[0][0].n, 9007199254740993n);
+    assert.equal(out[0][0].s, '[x]');
+    assert.equal(out[1][0].m, 1.5);
+    assert.deepEqual(duck.parseDuckdbJson('  '), []);
+  });
+
+  test('arguments by version, errors, and the tool found on the PATH', () => {
+    assert.deepEqual(duck.duckdbArgs('/x.duckdb', { readOnly: true, version: '2.0.1' }), ['-no-agent', '-json', '-bail', '-readonly', '/x.duckdb']);
+    assert.deepEqual(duck.duckdbArgs('/x.duckdb', { version: '1.4.2' }), ['-json', '-bail', '/x.duckdb']);
+    assert.equal(duck.duckdbVersionOf('v1.4.2 (Andium) 68d7555f68'), '1.4.2');
+    assert.equal(duck.duckdbError('duckdb agent mode is on\nCatalog Error: Table x does not exist!\nDid you mean "y"?'), 'Catalog Error: Table x does not exist!');
+    const dir = fs.mkdtempSync(path.join(tmp, 'bin-'));
+    const name = process.platform === 'win32' ? 'duckdb.exe' : 'duckdb';
+    fs.writeFileSync(path.join(dir, name), '');
+    assert.equal(duck.findDuckdbTool({ PATH: dir }), path.join(dir, name));
+  });
+
+  test('read-only check of the DuckDB dialect: its reading statements, files and extensions refused', () => {
+    for (const sql of ['SELECT 1', 'FROM orders', 'DESCRIBE orders', 'SUMMARIZE orders', 'PIVOT t ON y USING sum(v)', 'WITH a AS (SELECT 1) SELECT * FROM a']) {
+      assert.equal(guard.readOnlyProblem(sql, 'duckdb'), null, sql);
+    }
+    for (const sql of ["COPY orders TO '/tmp/x.csv'", "ATTACH '/tmp/other.duckdb'", 'INSTALL httpfs', 'LOAD httpfs', 'CALL pragma_version()', "EXPORT DATABASE '/tmp/x'", 'DELETE FROM orders']) {
+      assert.ok(guard.readOnlyProblem(sql, 'duckdb'), sql);
+    }
+    assert.equal(guard.quoteIdent('a"b', 'duckdb'), '"a""b"');
   });
 });

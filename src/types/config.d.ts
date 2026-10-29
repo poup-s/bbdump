@@ -13,6 +13,8 @@ export interface DatabaseConfig {
    * version without SQLite fails to connect instead of reaching another database.
    */
   sqlite?: SqliteSettings;
+  /** DuckDB only: its database file, as for SQLite (host/port/user stay empty) */
+  duckdb?: SqliteSettings;
   isLocalBbdump?: boolean;
   name: string;
   displayName?: string;

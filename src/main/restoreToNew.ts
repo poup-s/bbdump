@@ -22,9 +22,10 @@ import { logger } from './logger';
 import { getErrorMessage } from './utils';
 
 /** Engines restored into a new database by this module (PostgreSQL creates a local one) */
-export const RESTORE_TO_NEW_ENGINES = ['mysql', 'mariadb', 'mongodb', 'sqlite'];
+export const RESTORE_TO_NEW_ENGINES = ['mysql', 'mariadb', 'mongodb', 'sqlite', 'duckdb'];
 
 const SQLITE_FILE = /\.(sqlite3?|db3?|s3db|sl3)$/i;
+const DUCKDB_FILE = /\.(duckdb|ddb|db)$/i;
 
 export interface RestoreToNewParams {
   backupFile: string;
@@ -32,8 +33,10 @@ export interface RestoreToNewParams {
   serverOf?: string;
   /** MySQL, MariaDB, MongoDB: the new database's name */
   name?: string;
-  /** SQLite: the new file */
+  /** SQLite, DuckDB: the new file */
   file?: string;
+  /** The file's engine when the backup does not say (an old listing) */
+  engine?: string;
 }
 
 export interface RestoreToNewResult {
@@ -106,20 +109,25 @@ export async function restoreToNewDatabase(params: RestoreToNewParams): Promise<
     const backupEngine = listBackupEntries(config).find(e => e.file === params.backupFile || e.filename === params.backupFile)?.engine;
 
     if (params.file !== undefined) {
-      if (backupEngine && backupEngine !== 'sqlite') throw new Error('This backup is not a SQLite one');
+      // A file engine: SQLite or DuckDB, as the backup says
+      const fileEngine = backupEngine === 'duckdb' || params.engine === 'duckdb' ? 'duckdb' : 'sqlite';
+      if (backupEngine && backupEngine !== fileEngine) throw new Error(`This backup is not a ${fileEngine === 'duckdb' ? 'DuckDB' : 'SQLite'} one`);
+      const pattern = fileEngine === 'duckdb' ? DUCKDB_FILE : SQLITE_FILE;
       const file = path.resolve(String(params.file));
-      if (!SQLITE_FILE.test(file)) throw new Error('Choose a .sqlite or .db file');
+      if (!pattern.test(file)) throw new Error(fileEngine === 'duckdb' ? 'Choose a .duckdb file' : 'Choose a .sqlite or .db file');
       if (fs.existsSync(file)) throw new Error(`A file already exists at ${file}`);
       if (!fs.existsSync(path.dirname(file))) throw new Error(`The folder ${path.dirname(file)} does not exist`);
-      const name = path.basename(file).replace(SQLITE_FILE, '');
-      const template = config.databases.find(d => engineOf(d) === 'sqlite');
+      const name = path.basename(file).replace(pattern, '');
+      const template = config.databases.find(d => engineOf(d) === fileEngine);
       const entry: DatabaseConfig = {
-        ...(template ? newDatabaseEntry(template, name, file) : { id: randomUUID(), name, displayName: name, enabled: false } as DatabaseConfig),
-        engine: 'sqlite', host: '', port: 0, user: '', password: '', encrypted: false,
-        connectionString: undefined, ssh: undefined, sqlite: { path: file },
+        ...(template ? newDatabaseEntry(template, name) : { id: randomUUID(), name, displayName: name, enabled: false } as DatabaseConfig),
+        engine: fileEngine, host: '', port: 0, user: '', password: '', encrypted: false,
+        connectionString: undefined, ssh: undefined,
+        sqlite: fileEngine === 'sqlite' ? { path: file } : undefined,
+        duckdb: fileEngine === 'duckdb' ? { path: file } : undefined,
       };
       if (!entry.output) entry.output = template?.output ?? '';
-      undo = async () => { for (const f of [file, `${file}-wal`, `${file}-shm`, `${file}-journal`]) fs.rmSync(f, { force: true }); };
+      undo = async () => { for (const f of [file, `${file}-wal`, `${file}-shm`, `${file}-journal`, `${file}.wal`]) fs.rmSync(f, { force: true }); };
       const result = await restoreInto(entry, params.backupFile);
       if (!result.success) throw new Error(result.error || 'Restore failed');
       return save(entry, result);
@@ -128,7 +136,7 @@ export async function restoreToNewDatabase(params: RestoreToNewParams): Promise<
     const server = config.databases.find(d => d.id === params.serverOf);
     if (!server) throw new Error('Choose the server that receives the new database');
     const engine = engineOf(server);
-    if (!RESTORE_TO_NEW_ENGINES.includes(engine) || engine === 'sqlite') throw new Error('This server cannot receive a new database this way');
+    if (!RESTORE_TO_NEW_ENGINES.includes(engine) || engine === 'sqlite' || engine === 'duckdb') throw new Error('This server cannot receive a new database this way');
     if (backupEngine && backupEngine !== engine) throw new Error(`This backup comes from ${backupEngine}, the server runs ${engine}`);
     const name = String(params.name ?? '').trim();
     if (!validNewName(name, engine)) throw new Error('A database name of letters, digits and _ is needed');

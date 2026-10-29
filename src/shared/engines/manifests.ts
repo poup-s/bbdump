@@ -197,10 +197,51 @@ export const SQLITE: EngineManifest = {
     features: SQLITE_FEATURES,
 };
 
-export const MANIFESTS: readonly EngineManifest[] = [POSTGRESQL, MONGODB, MYSQL, MARIADB, SQLITE];
+/**
+ * DuckDB: a database file on this computer, reached through DuckDB's own command-line tool
+ * (installed by the user). Backups are DuckDB's COPY FROM DATABASE into a new file. No server:
+ * no SSH, TLS, proxy or local server.
+ */
+const DUCKDB_FEATURES = {
+    'connection.test': 'yes',
+    'stats.size': 'yes',
+    'backup.run': 'yes',
+    'backup.schedule': 'yes',
+    'backup.verify': 'yes',
+    'backup.encrypt': 'yes',
+    'restore.replace': 'yes',
+    'restore.toOther': 'yes',
+    'explorer.browse': 'yes',
+    'explorer.edit': 'yes',
+    'explorer.query': 'yes',
+    'explorer.diagram': 'yes',
+    // The AI reads (chat, dashboards, MCP); changes are made in bbdump
+    'mcp.read': 'yes',
+    'chat': 'yes',
+    'dashboards': 'yes',
+} as const satisfies Partial<Record<FeatureKey, Support>>;
+
+export const DUCKDB: EngineManifest = {
+    id: 'duckdb',
+    label: 'DuckDB',
+    uriSchemes: [],
+    queryLanguage: 'sql',
+    features: DUCKDB_FEATURES,
+};
+
+export const MANIFESTS: readonly EngineManifest[] = [POSTGRESQL, MONGODB, MYSQL, MARIADB, SQLITE, DUCKDB];
 
 /** Engines whose databases are tables queried in SQL (the table explorer, SQL dashboards) */
-export const SQL_ENGINES: readonly string[] = ['postgresql', 'mysql', 'mariadb', 'sqlite'];
+export const SQL_ENGINES: readonly string[] = ['postgresql', 'mysql', 'mariadb', 'sqlite', 'duckdb'];
+
+/** Engines whose database is a file on this computer (no server, host, port or account) */
+export const FILE_ENGINES: readonly string[] = ['sqlite', 'duckdb'];
+export const isFileEngine = (engine: string | undefined) => !!engine && FILE_ENGINES.includes(engine);
+/** The file of a SQLite or DuckDB database */
+export const filePathOf = (db: { sqlite?: { path: string }; duckdb?: { path: string } } | null | undefined): string | undefined =>
+    db?.sqlite?.path ?? db?.duckdb?.path;
+/** The file names each file engine takes (a new file must have one) */
+export const FILE_EXTENSION: Record<string, RegExp> = { sqlite: /\.(sqlite3?|db3?|s3db|sl3)$/i, duckdb: /\.(duckdb|ddb|db)$/i };
 
 /** MySQL-family engines (one driver, one dialect) */
 export const isMysqlFamily = (engine: string | undefined) => engine === 'mysql' || engine === 'mariadb';

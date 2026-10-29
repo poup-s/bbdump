@@ -14,6 +14,7 @@ const LOADERS: Record<string, () => Promise<EngineDriver>> = {
     mysql: async () => (await import('./mysql')).mysqlDriver,
     mariadb: async () => (await import('./mysql')).mariadbDriver,
     sqlite: async () => (await import('./sqlite')).sqliteDriver,
+    duckdb: async () => (await import('./duckdb')).duckdbDriver,
 };
 
 /** Engines with a driver in this version */

@@ -8,6 +8,8 @@ export interface Database {
     mongo?: { authSource?: string };
     /** SQLite only: the database file (see DatabaseConfig.sqlite) */
     sqlite?: { path: string };
+    /** DuckDB: its database file */
+    duckdb?: { path: string };
     name: string;
     displayName?: string;
     host: string;

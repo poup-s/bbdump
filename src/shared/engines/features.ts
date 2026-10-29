@@ -62,7 +62,7 @@ export function engineOf(db: { engine?: string } | null | undefined): string {
  * (features.json, e.g. mongodb: 'off' or 'beta') no longer applies. MongoDB, MySQL, MariaDB
  * and SQLite since 1.5.
  */
-export const STABLE_ENGINES: readonly string[] = [DEFAULT_ENGINE, 'mongodb', 'mysql', 'mariadb', 'sqlite'];
+export const STABLE_ENGINES: readonly string[] = [DEFAULT_ENGINE, 'mongodb', 'mysql', 'mariadb', 'sqlite', 'duckdb'];
 
 /** Levels before the user changes anything. Engines missing here are off. */
 export const DEFAULT_ROLLOUT: FeatureRollout = { engines: Object.fromEntries(STABLE_ENGINES.map(engine => [engine, 'on'])), disabled: [] };

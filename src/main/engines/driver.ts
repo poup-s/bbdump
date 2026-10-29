@@ -22,7 +22,7 @@ type Args<F> = Omit<FirstArg<F>, 'host' | 'port' | 'user' | 'password' | 'databa
  * What a dialog's connection test sends, already resolved by the handler: password decrypted
  * (or typed), SSH tunnel opened when there is one. `mongo` only for MongoDB, `sqlite` for SQLite.
  */
-export type ConnectionTestInput = FirstArg<typeof explorer.testConnection> & { mongo?: MongoSettings; sqlite?: SqliteSettings };
+export type ConnectionTestInput = FirstArg<typeof explorer.testConnection> & { mongo?: MongoSettings; sqlite?: SqliteSettings; duckdb?: SqliteSettings };
 
 export interface ConnectionFacet {
     /** Server version and number of entities (tables, collections) */
@@ -93,7 +93,7 @@ type RestoreArgs = Parameters<BackupManager['restoreBackup']>;
 
 export interface RestoreFacet {
     /** The target is reached (tunnel open, password decrypted); `mongo` only for MongoDB, `sqlite` for SQLite */
-    restore(backupFile: RestoreArgs[0], target: RestoreArgs[1] & { mongo?: MongoSettings; sqlite?: SqliteSettings }, options?: RestoreArgs[2]): ReturnType<BackupManager['restoreBackup']>;
+    restore(backupFile: RestoreArgs[0], target: RestoreArgs[1] & { mongo?: MongoSettings; sqlite?: SqliteSettings; duckdb?: SqliteSettings }, options?: RestoreArgs[2]): ReturnType<BackupManager['restoreBackup']>;
 }
 
 export interface EngineDriver {

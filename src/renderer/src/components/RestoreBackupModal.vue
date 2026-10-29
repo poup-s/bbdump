@@ -16,6 +16,7 @@ import ModalHeading from './ui/ModalHeading.vue';
 import FormField from './ui/FormField.vue';
 import SegmentedControl from './ui/SegmentedControl.vue';
 import { btnGhost, btnPrimary, btnSecondary, monoInputClass, panelClass, selectClass } from './ui/classes';
+import { FILE_EXTENSION, filePathOf, isFileEngine } from '../../../shared/engines/manifests';
 
 const ICON_RESTORE = 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15';
 const COUNTDOWN_SECONDS = 5;
@@ -31,7 +32,8 @@ const databases = computed(() => (store.databases || []).filter(db =>
   isEnabled(db, 'restore.replace') && (!fileEngine.value || engineOf(db) === fileEngine.value)));
 /** Backup of another engine than PostgreSQL: its new database goes on a saved server, or in a new file */
 const otherEngine = computed(() => (fileEngine.value && fileEngine.value !== 'postgresql' ? fileEngine.value : null));
-const isSqliteFile = computed(() => otherEngine.value === 'sqlite');
+/** SQLite, DuckDB: the new database is a new file */
+const isSqliteFile = computed(() => isFileEngine(otherEngine.value ?? undefined));
 const where = (d: Database) => (d.ssh ? `${d.ssh.host} (SSH)` : `${d.host}:${d.port}`);
 /** Servers a new database can be created on: one per server among the saved databases of the backup's engine */
 const newServers = computed(() => {
@@ -92,12 +94,12 @@ const newFileError = computed(() => {
   if (restoreMode.value !== 'new' || !isSqliteFile.value) return undefined;
   const file = newFile.value.trim();
   if (!file) return attempted.value ? t('modal.restoreNewFileRequired') : undefined;
-  if (!/\.(sqlite3?|db3?|s3db|sl3)$/i.test(file)) return t('databases.duplicateFileExtension');
-  if (store.databases.some(db => db.sqlite?.path === file)) return t('modal.restoreNewFileTaken');
+  if (!FILE_EXTENSION[otherEngine.value ?? '']?.test(file)) return t(otherEngine.value === 'duckdb' ? 'databases.duplicateFileExtensionDuckdb' : 'databases.duplicateFileExtension');
+  if (store.databases.some(db => filePathOf(db) === file)) return t('modal.restoreNewFileTaken');
   return undefined;
 });
 const chooseFile = async () => {
-  const file = await ipcRenderer.invoke('select-sqlite-copy-path', newFile.value || undefined) as string | null;
+  const file = await ipcRenderer.invoke('select-sqlite-copy-path', newFile.value || undefined, otherEngine.value ?? undefined) as string | null;
   if (file) newFile.value = file;
 };
 const newSteps = computed(() => {
@@ -168,8 +170,9 @@ const proceedToConfirm = () => {
     if (isSqliteFile.value) {
       const file = newFile.value.trim();
       if (!file) return;
-      const name = (file.split(/[\\/]/).pop() || file).replace(/\.(sqlite3?|db3?|s3db|sl3)$/i, '');
-      store.restoreTargetDb = { name, displayName: name, host: '', port: 0, user: '', password: '', output: '', engine: 'sqlite', isNew: true, newOn: { file } } as RestoreTarget;
+      const engine = otherEngine.value ?? 'sqlite';
+      const name = (file.split(/[\\/]/).pop() || file).replace(FILE_EXTENSION[engine] ?? /$^/, '');
+      store.restoreTargetDb = { name, displayName: name, host: '', port: 0, user: '', password: '', output: '', engine, isNew: true, newOn: { file } } as RestoreTarget;
     } else {
       const server = chosenServer.value;
       const name = newDbName.value.trim();
@@ -229,14 +232,14 @@ const selected = computed(() => databases.value.find(db => db.id === selectedDb.
 
       <FormField v-if="restoreMode === 'existing'" :label="t('modal.restoreTarget')" for="restore-target">
         <select id="restore-target" v-model="selectedDb" :class="selectClass">
-          <option v-for="db in databases" :key="db.id" :value="db.id">{{ dbLabel(db) }} — {{ db.host }}:{{ db.port }}</option>
+          <option v-for="db in databases" :key="db.id" :value="db.id">{{ dbLabel(db) }} — {{ filePathOf(db)?.split(/[\\/]/).pop() ?? `${db.host}:${db.port}` }}</option>
         </select>
       </FormField>
 
-      <!-- SQLite: a new file -->
-      <FormField v-else-if="isSqliteFile" :label="t('modal.restoreNewFile')" for="restore-new-file" required :error="newFileError" :hint="t('modal.restoreNewFileHint')">
+      <!-- SQLite, DuckDB: a new file -->
+      <FormField v-else-if="isSqliteFile" :label="t('modal.restoreNewFile')" for="restore-new-file" required :error="newFileError" :hint="t(otherEngine === 'duckdb' ? 'modal.restoreNewFileHintDuckdb' : 'modal.restoreNewFileHint')">
         <div class="flex gap-2">
-          <input id="restore-new-file" v-model="newFile" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" placeholder="/path/to/restored.sqlite" />
+          <input id="restore-new-file" v-model="newFile" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" :placeholder="otherEngine === 'duckdb' ? '/path/to/restored.duckdb' : '/path/to/restored.sqlite'" />
           <button type="button" :class="btnSecondary" class="shrink-0" @click="chooseFile">{{ t('sqlModal.fileChoose') }}</button>
         </div>
       </FormField>

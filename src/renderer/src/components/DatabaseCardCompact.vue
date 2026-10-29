@@ -8,7 +8,7 @@ import ActionMenu, { type ActionMenuItem } from './ActionMenu.vue';
 import FeatureGate from './ui/FeatureGate.vue';
 import { useFeatures } from '../composables/useFeatures';
 import { engineOf, type FeatureKey } from '../../../shared/engines/features';
-import { isMysqlFamily, manifestFor } from '../../../shared/engines/manifests';
+import { isFileEngine, isMysqlFamily, manifestFor } from '../../../shared/engines/manifests';
 
 const props = defineProps<{
   db: Database;
@@ -77,7 +77,7 @@ const onLoopback = computed(() => ['localhost', '127.0.0.1', '::1'].includes((pr
  */
 const isOnThisComputer = computed(() => (copiedByBbdump.value
   // Made by bbdump (its local server, or a copy): a port forward on 127.0.0.1 is not one
-  ? engine.value === 'sqlite' || (onLoopback.value && !props.db.ssh && !props.db.connectionString && (!!props.db.isLocalBbdump || !!props.db.syncSourceId))
+  ? isFileEngine(engine.value) || (onLoopback.value && !props.db.ssh && !props.db.connectionString && (!!props.db.isLocalBbdump || !!props.db.syncSourceId))
   : !!props.db.isLocalBbdump && onLoopback.value));
 
 /** Other databases of the same engine in this database's project (the sources "Update from…" can use) */

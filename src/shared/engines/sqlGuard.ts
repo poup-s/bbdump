@@ -4,7 +4,7 @@
  * comes first because MySQL commits DDL on its own, before the transaction could refuse it.
  */
 
-export type SqlDialect = 'mysql' | 'sqlite';
+export type SqlDialect = 'mysql' | 'sqlite' | 'duckdb';
 
 /**
  * The SQL without comments and literals (strings become '', quoted identifiers ""), so that a
@@ -72,6 +72,8 @@ const READ_STARTS: Record<SqlDialect, string[]> = {
     mysql: ['SELECT', 'WITH', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'TABLE', 'VALUES', '('],
     // PRAGMA only on a read-only connection, where a writing one fails anyway
     sqlite: ['SELECT', 'WITH', 'EXPLAIN', 'VALUES', '(', 'PRAGMA'],
+    // DuckDB also starts queries with FROM, and describes with DESCRIBE / SUMMARIZE / SHOW (the connection is read-only too)
+    duckdb: ['SELECT', 'WITH', 'FROM', 'EXPLAIN', 'VALUES', '(', 'DESCRIBE', 'DESC', 'SUMMARIZE', 'SHOW', 'TABLE', 'PIVOT', 'UNPIVOT'],
 };
 
 /** Why this SQL is not a single reading statement, or null when it is */
@@ -86,6 +88,8 @@ export function readOnlyProblem(sql: string, dialect: SqlDialect): string | null
     if (dialect === 'mysql' && /\bINTO\s+(OUTFILE|DUMPFILE|@)/.test(upper)) return 'SELECT … INTO is not allowed here';
     // SQLite: WITH … INSERT / UPDATE / DELETE
     if (first === 'WITH' && /\b(INSERT|UPDATE|DELETE|REPLACE)\b/.test(upper)) return 'Only reading statements are allowed here';
+    // DuckDB: COPY … TO and the file functions write or read files outside the database
+    if (dialect === 'duckdb' && /\b(COPY|EXPORT|ATTACH|INSTALL|LOAD|CALL)\b/.test(upper)) return 'Only reading statements are allowed here';
     return null;
 }
 

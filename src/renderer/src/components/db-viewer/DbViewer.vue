@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { filePathOf } from '../../../../shared/engines/manifests';
 import { ref, computed, nextTick, onMounted, watch } from 'vue';
 import { getErrorMessage } from '../../utils';
 import { store } from '../../store';
@@ -291,7 +292,7 @@ watch(() => store.viewerDb, (newDb, oldDb) => {
             </h3>
           </div>
           <div class="flex items-center gap-1.5 text-[10px] text-gray-500 dark:text-gray-400">
-            <span class="font-mono">{{ store.viewerDb?.host }}:{{ store.viewerDb?.port }}</span>
+            <span class="font-mono">{{ filePathOf(store.viewerDb)?.split(/[\\/]/).pop() ?? `${store.viewerDb?.host}:${store.viewerDb?.port}` }}</span>
             <span>•</span>
             <span>{{ t('viewer.tablesCount', { count: tables.length }) }}</span>
           </div>

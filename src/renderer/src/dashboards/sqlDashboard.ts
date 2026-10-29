@@ -1,11 +1,11 @@
 /**
- * Dashboards of MySQL / MariaDB and SQLite databases, what the AI is shown: the tool a block's
- * query uses (Query("mysql", …), Query("sqlite", …): the name says the dialect, so a dashboard
+ * Dashboards of MySQL / MariaDB, SQLite and DuckDB databases, what the AI is shown: the tool a
+ * block's query uses (Query("mysql", …), Query("sqlite", …), Query("duckdb", …): the name says the dialect, so a dashboard
  * only goes on a database that reads it) and two example programs per dialect (pure: tested
  * without a window, their queries run on real servers in the tests).
  */
 
-const tool = (name: 'mysql' | 'sqlite', dialect: string) => ({
+const tool = (name: 'mysql' | 'sqlite' | 'duckdb', dialect: string) => ({
   name,
   description: `Runs one read-only SELECT (${dialect}) on the database and returns its columns and rows (rows are objects keyed by column alias). At most 1000 rows, 30 s. Filter placeholders {{from}}, {{to}} and {{name}} are bound by bbdump as ? parameters.`,
   inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'One SELECT statement' } }, required: ['query'] },
@@ -15,6 +15,7 @@ const tool = (name: 'mysql' | 'sqlite', dialect: string) => ({
 
 export const MYSQL_TOOL = tool('mysql', 'MySQL / MariaDB');
 export const SQLITE_TOOL = tool('sqlite', 'SQLite');
+export const DUCKDB_TOOL = tool('duckdb', 'DuckDB');
 
 /** Query("…", {query: "…"}) of an example: the SQL quoted for OpenUI */
 const query = (name: string, sql: string) => `Query("${name}", {query: ${JSON.stringify(sql)}}, {columns: [], rows: []})`;
@@ -67,4 +68,23 @@ export const SQLITE_EXAMPLE_LINKED = `root = Dashboard([filters, people, profile
 users = ${query('sqlite', "SELECT u.id, u.name, u.email, u.created_at FROM users u WHERE ({{q}} IS NULL OR u.name LIKE '%' || {{q}} || '%' OR u.email LIKE '%' || {{q}} || '%') ORDER BY u.created_at DESC LIMIT 50")}
 picked = ${query('sqlite', 'SELECT u.name, u.email, u.phone, u.created_at, (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id) AS orders FROM users u WHERE u.id = {{user}}')}
 theirOrders = ${query('sqlite', 'SELECT o.id, o.status, o.total, o.created_at FROM orders o WHERE ({{user}} IS NULL OR o.user_id = {{user}}) ORDER BY o.created_at DESC LIMIT 50')}
+${LINKED_LAYOUT}`;
+
+// --- DuckDB ---------------------------------------------------------------------------------------
+
+const DUCKDB_CITY = '({{city}} IS NULL OR c.city = {{city}})';
+// The bound date texts are read as timestamps
+const DUCKDB_PERIOD = 'o.created_at >= {{from}} AND o.created_at < {{to}}';
+
+export const DUCKDB_EXAMPLE = `root = Dashboard([filters, figures, charts, latest])
+cities = ${query('duckdb', 'SELECT DISTINCT city AS value FROM customers WHERE city IS NOT NULL ORDER BY 1 LIMIT 100')}
+totals = ${query('duckdb', `SELECT count(*) AS orders, coalesce(sum(o.total), 0) AS revenue FROM orders o JOIN customers c ON c.id = o.customer_id WHERE ${DUCKDB_PERIOD} AND ${DUCKDB_CITY}`)}
+perWeek = ${query('duckdb', `SELECT CAST(date_trunc('week', o.created_at) AS DATE) AS week, count(*) FILTER (WHERE o.status = 'paid') AS paid, count(*) FILTER (WHERE o.status = 'cancelled') AS cancelled FROM orders o JOIN customers c ON c.id = o.customer_id WHERE ${DUCKDB_PERIOD} AND ${DUCKDB_CITY} GROUP BY week ORDER BY week`)}
+recent = ${query('duckdb', `SELECT o.id, c.name, o.status, o.total, o.created_at FROM orders o JOIN customers c ON c.id = o.customer_id WHERE ${DUCKDB_CITY} ORDER BY o.created_at DESC LIMIT 50`)}
+${LAYOUT}`;
+
+export const DUCKDB_EXAMPLE_LINKED = `root = Dashboard([filters, people, profile, orders])
+users = ${query('duckdb', "SELECT u.id, u.name, u.email, u.created_at FROM users u WHERE ({{q}} IS NULL OR u.name ILIKE '%' || {{q}} || '%' OR u.email ILIKE '%' || {{q}} || '%') ORDER BY u.created_at DESC LIMIT 50")}
+picked = ${query('duckdb', 'SELECT u.name, u.email, u.phone, u.created_at, (SELECT count(*) FROM orders o WHERE o.user_id = u.id) AS orders FROM users u WHERE u.id = {{user}}')}
+theirOrders = ${query('duckdb', 'SELECT o.id, o.status, o.total, o.created_at FROM orders o WHERE ({{user}} IS NULL OR o.user_id = {{user}}) ORDER BY o.created_at DESC LIMIT 50')}
 ${LINKED_LAYOUT}`;

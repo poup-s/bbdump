@@ -101,11 +101,12 @@ export function bindFilters(sql: string, values: Record<string, string | null | 
 
 /**
  * The engine a program's queries are written for: Query("sql", …) PostgreSQL, Query("mysql", …)
- * MySQL / MariaDB, Query("sqlite", …), Query("mongo", …); null when it has none yet. A dashboard
+ * MySQL / MariaDB, Query("sqlite", …), Query("duckdb", …), Query("mongo", …); null when it has none yet. A dashboard
  * only goes on a database of the same family (its SQL dialect, or MongoDB).
  */
-export function programEngine(program: string): 'postgresql' | 'mysql' | 'sqlite' | 'mongodb' | null {
+export function programEngine(program: string): 'postgresql' | 'mysql' | 'sqlite' | 'duckdb' | 'mongodb' | null {
   if (/\bQuery\(\s*"mongo"/.test(program)) return 'mongodb';
+  if (/\bQuery\(\s*"duckdb"/.test(program)) return 'duckdb';
   if (/\bQuery\(\s*"mysql"/.test(program)) return 'mysql';
   if (/\bQuery\(\s*"sqlite"/.test(program)) return 'sqlite';
   if (/\bQuery\(\s*"sql"/.test(program)) return 'postgresql';
@@ -129,7 +130,7 @@ const SQL_DATE_MIN = '1000-01-01 00:00:00';
 const SQL_DATE_MAX = '9999-12-31 23:59:59';
 
 /**
- * Filter placeholders of a MySQL / MariaDB or SQLite query as ? parameters (one per placeholder,
+ * Filter placeholders of a MySQL / MariaDB, SQLite or DuckDB query as ? parameters (one per placeholder,
  * in order): values never go into the SQL text. {{from}} / {{to}} become UTC date texts
  * ("all time": the year 1000 to 9999), other filters text, or null when the filter is "all".
  */
