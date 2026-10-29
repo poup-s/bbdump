@@ -76,6 +76,11 @@ const MONGODB_FEATURES = {
     'mcp.undo': 'yes',
     // Personal fields hidden from the AI, chosen by path (customer.email, items[].sku)
     'mask.fields': 'yes',
+    // Copied by bbdump itself (driver) into a new database on a MongoDB server it reaches, fields
+    // anonymized on the way; "Update from…" only writes into a database of this computer
+    'database.duplicate': 'yes',
+    'sync.fromSource': 'yes',
+    'sync.anonymize': 'yes',
     // The database chat (read only), through the mongo_* tools
     'chat': 'yes',
     // Dashboards made with the AI: each block is a read-only aggregation

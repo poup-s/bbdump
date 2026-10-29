@@ -30,6 +30,8 @@ const isAi = props.mode === 'ai';
 const isMongo = props.engine === 'mongodb';
 /** A text, its MongoDB wording when there is one */
 const tx = (key: string, mongoKey: string, params?: Record<string, unknown>) => (isMongo ? t(`aiMasking.mongo.${mongoKey}`, params) : t(key, params));
+/** The copy's texts: fields and documents for MongoDB, columns and rows for SQL */
+const dx = (key: string, params?: Record<string, unknown>) => t(isMongo ? `anonymize.mongo.${key}` : `anonymize.${key}`, params);
 /** mode "ai": masking on or off for this database */
 const enabled = ref(false);
 const saving = ref(false);
@@ -188,7 +190,7 @@ const confirm = () => {
         </svg>
         <p class="text-[12px] leading-relaxed text-sky-900 dark:text-sky-200">{{ t('aiMasking.safe') }}</p>
       </div>
-      <p class="mb-3 text-[12px] leading-relaxed text-gray-600 dark:text-zinc-400">{{ isAi ? tx('aiMasking.intro', 'intro') : t('anonymize.intro') }}</p>
+      <p class="mb-3 text-[12px] leading-relaxed text-gray-600 dark:text-zinc-400">{{ isAi ? tx('aiMasking.intro', 'intro') : dx('intro') }}</p>
 
       <div class="mb-3 flex flex-wrap items-center gap-2">
         <input v-model="search" type="search" data-own-enter :class="inputClass" class="flex-1 min-w-[12rem]" :placeholder="tx('anonymize.search', 'search')" :aria-label="tx('anonymize.search', 'search')" />
@@ -207,11 +209,11 @@ const confirm = () => {
               <svg class="w-3.5 h-3.5 shrink-0 text-gray-400 transition-transform" :class="isOpen(tb) ? 'rotate-90' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" /></svg>
               <span class="font-mono text-[13px] truncate" :class="emptied.has(tb.key) ? 'line-through text-gray-400 dark:text-zinc-500' : 'text-gray-900 dark:text-zinc-100'">{{ shortName(tb.key) }}</span>
               <span class="shrink-0 text-[11px] text-gray-400 dark:text-zinc-500 tabular-nums">{{ tx('anonymize.rows', 'documents', { count: fmt(tb.rows) }) }}</span>
-              <span v-if="anonymizedIn(tb) && !emptied.has(tb.key)" class="shrink-0 px-2 py-px rounded-full text-[11px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">{{ isAi ? tx('aiMasking.columnsCount', 'columnsCount', { count: anonymizedIn(tb) }) : t('anonymize.columnsCount', { count: anonymizedIn(tb) }) }}</span>
+              <span v-if="anonymizedIn(tb) && !emptied.has(tb.key)" class="shrink-0 px-2 py-px rounded-full text-[11px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">{{ isAi ? tx('aiMasking.columnsCount', 'columnsCount', { count: anonymizedIn(tb) }) : dx('columnsCount', { count: anonymizedIn(tb) }) }}</span>
             </button>
-            <label v-if="!isAi" class="shrink-0 flex items-center gap-1.5 text-[12px] text-gray-600 dark:text-zinc-400" :class="emptied.get(tb.key) ? 'cursor-not-allowed' : 'cursor-pointer'" :title="t('anonymize.copyRowsHint')">
+            <label v-if="!isAi" class="shrink-0 flex items-center gap-1.5 text-[12px] text-gray-600 dark:text-zinc-400" :class="emptied.get(tb.key) ? 'cursor-not-allowed' : 'cursor-pointer'" :title="dx('copyRowsHint')">
               <input type="checkbox" class="accent-emerald-600" :checked="!emptied.has(tb.key)" :disabled="!!emptied.get(tb.key)" @change="emptyChosen = toggled(emptyChosen, tb.key)" />
-              {{ t('anonymize.copyRows') }}
+              {{ dx('copyRows') }}
             </label>
           </div>
           <p v-if="emptied.get(tb.key)" class="px-3.5 -mt-1 pb-2 text-[11px] text-amber-700 dark:text-amber-400">{{ t('anonymize.emptiedVia', { table: shortName(emptied.get(tb.key)!) }) }}</p>
@@ -249,7 +251,7 @@ const confirm = () => {
     <template #footer>
       <button type="button" :class="btnGhost" @click="emit('close')">{{ t('common.cancel') }}</button>
       <span class="flex-1 text-[12px] text-gray-500 dark:text-zinc-400 tabular-nums">
-        <template v-if="!loading && !error">{{ isAi ? (enabled ? tx('aiMasking.summary', 'summary', { columns: summary.columns }) : t('aiMasking.summaryOff')) : t('anonymize.summary', { columns: summary.columns, tables: summary.tables }) }}</template>
+        <template v-if="!loading && !error">{{ isAi ? (enabled ? tx('aiMasking.summary', 'summary', { columns: summary.columns }) : t('aiMasking.summaryOff')) : dx('summary', { columns: summary.columns, tables: summary.tables }) }}</template>
       </span>
       <button type="button" :class="btnPrimary" :disabled="loading || !!error || saving" @click="confirm">{{ t(isAi ? 'aiMasking.save' : 'anonymize.confirm') }}</button>
     </template>

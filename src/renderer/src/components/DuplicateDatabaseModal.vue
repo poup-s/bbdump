@@ -49,8 +49,9 @@ const existingNames = ref(new Set<string>());
 const anonymizeOn = ref(false);
 const anonymizeChoices = ref<AnonymizeChoices | null>(null);
 const showAnonymize = ref(false);
-/** MySQL, MariaDB, SQLite: copied by bbdump itself */
-const sqlEngine = computed(() => ['mysql', 'mariadb', 'sqlite'].includes(engineOf(props.sourceDb)));
+/** MySQL, MariaDB, SQLite, MongoDB: copied by bbdump itself (no local PostgreSQL server needed) */
+const sqlEngine = computed(() => ['mysql', 'mariadb', 'sqlite', 'mongodb'].includes(engineOf(props.sourceDb)));
+const isMongo = computed(() => engineOf(props.sourceDb) === 'mongodb');
 const isSqlite = computed(() => engineOf(props.sourceDb) === 'sqlite');
 const familyOf = (db: Database) => (isMysqlFamily(engineOf(db)) ? 'mysql' : engineOf(db));
 const sqlForm = ref({ serverOf: '', file: '' });
@@ -206,7 +207,7 @@ const nameError = computed(() => {
   const name = duplicateForm.value.name.trim();
   if (sqlEngine.value) {
     if (!name) return attempted.value ? t('databases.duplicateNameRequired') : undefined;
-    if (!/^[A-Za-z_][A-Za-z0-9_$]{0,63}$/.test(name)) return t('databases.duplicateNameInvalid');
+    if (!(isMongo.value ? /^[A-Za-z0-9_-]{1,63}$/ : /^[A-Za-z_][A-Za-z0-9_$]{0,63}$/).test(name)) return t('databases.duplicateNameInvalid');
     // The same name on the chosen server (as bbdump knows it)
     const server = chosenServer.value;
     if (server && store.databases.some(d => familyOf(d) === familyOf(server) && d.host === server.host && d.port === server.port && d.name === name)) return t('createDatabase.errors.nameExists');
@@ -358,7 +359,7 @@ const duplicateToLocal = async () => {
         :eyebrow="t(sqlEngine ? 'databases.duplicateSqlEyebrow' : 'databases.duplicateEyebrow')"
         :title="t('databases.duplicateTitle', { name: sourceLabel })"
         :subtitle="t(sqlEngine
-          ? (anonymizeOn ? 'databases.duplicateSqlInfoAnonymized' : isSqlite ? 'databases.duplicateSqliteInfo' : 'databases.duplicateSqlInfo')
+          ? (isMongo ? (anonymizeOn ? 'databases.duplicateMongoInfoAnonymized' : 'databases.duplicateMongoInfo') : anonymizeOn ? 'databases.duplicateSqlInfoAnonymized' : isSqlite ? 'databases.duplicateSqliteInfo' : 'databases.duplicateSqlInfo')
           : (anonymizeOn ? 'databases.duplicateInfoAnonymized' : 'databases.duplicateInfo'))"
       />
       <div class="space-y-4">
@@ -386,7 +387,7 @@ const duplicateToLocal = async () => {
             <button type="button" :class="btnSecondary" class="shrink-0" @click="chooseFile">{{ t('sqlModal.fileChoose') }}</button>
           </div>
         </FormField>
-        <FormField v-else :label="t('database.name')" for="dup-name" required :error="nameError" :hint="t(sqlEngine ? 'databases.duplicateSqlNameHint' : 'createDatabase.nameHint')">
+        <FormField v-else :label="t('database.name')" for="dup-name" required :error="nameError" :hint="t(isMongo ? 'databases.duplicateMongoNameHint' : sqlEngine ? 'databases.duplicateSqlNameHint' : 'createDatabase.nameHint')">
           <input id="dup-name" v-model="duplicateForm.name" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" :placeholder="t('database.namePlaceholder')" />
         </FormField>
         <!-- MySQL / MariaDB: the server of the copy -->
@@ -423,7 +424,7 @@ const duplicateToLocal = async () => {
           <p v-if="extError" class="mt-1.5 text-[11px] text-red-600 dark:text-red-400 break-words">{{ extError }}</p>
         </div>
 
-        <SwitchRow v-model="anonymizeOn" :title="t('anonymize.switch')" :description="t(sqlEngine ? 'anonymize.switchHintSql' : 'anonymize.switchHint')">
+        <SwitchRow v-model="anonymizeOn" :title="t('anonymize.switch')" :description="t(isMongo ? 'anonymize.switchHintMongo' : sqlEngine ? 'anonymize.switchHintSql' : 'anonymize.switchHint')">
           <span v-if="anonymizeOn && anonymizeChoices" class="mt-1.5 flex items-center gap-2 text-[12px]">
             <span class="text-emerald-700 dark:text-emerald-400">{{ anonymizeSummary }}</span>
             <span role="button" tabindex="0" class="underline text-gray-600 dark:text-zinc-300 hover:text-gray-900 dark:hover:text-white" @click.stop="showAnonymize = true" @keydown.enter.stop.prevent="showAnonymize = true">{{ t('anonymize.edit') }}</span>
@@ -450,6 +451,7 @@ const duplicateToLocal = async () => {
     v-if="modelValue && showAnonymize && sourceDb"
     :source-id="sourceDb.id"
     :source-label="sourceLabel"
+    :engine="engineOf(sourceDb)"
     :initial="anonymizeChoices"
     @close="showAnonymize = false"
     @confirm="confirmAnonymize"

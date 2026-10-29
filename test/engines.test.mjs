@@ -155,7 +155,7 @@ describe('MongoDB, stable', () => {
   });
 
   test('nothing it cannot do', () => {
-    for (const key of ['explorer.browse', 'explorer.edit', 'explorer.query', 'explorer.diagram', 'database.duplicate', 'sync.fromSource', 'sync.anonymize']) {
+    for (const key of ['explorer.browse', 'explorer.edit', 'explorer.query', 'explorer.diagram', ]) {
       assert.equal(shared.resolveFeature('mongodb', key).reason, 'feature.unsupported', key);
     }
   });

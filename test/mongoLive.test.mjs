@@ -92,6 +92,7 @@ describe('MongoDB on a real server', { skip }, () => {
       await raw.db(NAME).dropDatabase().catch(() => {});
       await raw.db(COPY).dropDatabase().catch(() => {});
       await raw.db(`${NAME}_new`).dropDatabase().catch(() => {});
+      for (const suffix of ['dup', 'anon', 'gone']) await raw.db(`${NAME}_${suffix}`).dropDatabase().catch(() => {});
       await raw.close();
     }
     process.chdir(root);
@@ -272,6 +273,123 @@ describe('MongoDB on a real server', { skip }, () => {
       assert.equal(await raw.db(`${NAME}_new`).collection('orders').countDocuments(), await raw.db(NAME).collection('orders').countDocuments());
       const again = await restoreToNewDatabase({ backupFile: dumped.filePath, serverOf: 'm1', name: COPY });
       assert.equal(again.success, false, 'an existing database is never a new one');
+    });
+  });
+
+  describe('copy and update from another database (done by bbdump, no tools)', () => {
+    const counts = async (name) => Object.fromEntries(await Promise.all(['users', 'orders', 'items'].map(async c => [c, await raw.db(name).collection(c).countDocuments()])));
+
+    test('an exact copy: collections, options, documents with their types, indexes and views', async () => {
+      const cfg = require(path.join(root, 'dist/main/ipc/configIpc.js'));
+      const { duplicateMongoDatabase } = require(path.join(root, 'dist/main/sync/mongoCopyActions.js'));
+      // A validator and a unique index the copy must keep
+      await raw.db(NAME).createCollection('checked', { validator: { $jsonSchema: { required: ['code'] } } });
+      await raw.db(NAME).collection('checked').insertOne({ code: 'A1' });
+      await raw.db(NAME).collection('users').createIndex({ email: 1 }, { unique: true, name: 'email_unique' });
+      const result = await duplicateMongoDatabase({ sourceId: 'm1', name: `${NAME}_dup` }, () => {});
+      assert.equal(result.success, true, result.error);
+      assert.deepEqual(await counts(`${NAME}_dup`), await counts(NAME));
+      const copy = raw.db(`${NAME}_dup`);
+      const item = await copy.collection('items').findOne({ views: { $exists: true } }, { promoteLongs: false });
+      assert.ok(item.views instanceof BSON.Long, 'a long stays a long');
+      assert.ok(item.at instanceof Date);
+      const inView = async (name) => (await raw.db(name).collection('paris').find({}, { sort: { _id: 1 } }).toArray()).map(d => String(d._id));
+      assert.deepEqual(await inView(`${NAME}_dup`), await inView(NAME), 'the view works on the copy');
+      assert.ok((await inView(NAME)).length > 0);
+      assert.ok((await copy.collection('users').indexes()).some(i => i.name === 'email_unique' && i.unique));
+      const options = (await copy.listCollections({ name: 'checked' }).toArray())[0].options;
+      assert.deepEqual(options.validator, { $jsonSchema: { required: ['code'] } });
+      const saved = cfg.getConfig().databases.find(d => d.id === result.id);
+      assert.deepEqual([saved.engine, saved.name, saved.syncSourceId, saved.enabled], ['mongodb', `${NAME}_dup`, 'm1', false]);
+      // The same name again: refused, nothing changed
+      assert.equal((await duplicateMongoDatabase({ sourceId: 'm1', name: `${NAME}_dup` }, () => {})).success, false);
+    });
+
+    test('an anonymized copy: chosen fields replaced (types kept), links between collections kept', async () => {
+      const { duplicateMongoDatabase } = require(path.join(root, 'dist/main/sync/mongoCopyActions.js'));
+      const result = await duplicateMongoDatabase({
+        sourceId: 'm1', name: `${NAME}_anon`,
+        anonymize: {
+          columns: [
+            { table: `${NAME}.users`, column: 'email', kind: 'email' },
+            { table: `${NAME}.users`, column: 'name', kind: 'name' },
+            { table: `${NAME}.orders`, column: 'customer.name', kind: 'name' },
+            { table: `${NAME}.orders`, column: 'total', kind: 'noise' },
+            { table: `${NAME}.orders`, column: 'created_at', kind: 'month' },
+          ],
+          emptyTables: [`${NAME}.items`],
+        },
+      }, () => {});
+      assert.equal(result.success, true, result.error);
+      const source = raw.db(NAME);
+      const copy = raw.db(`${NAME}_anon`);
+      const real = await source.collection('users').find({}, { sort: { _id: 1 } }).toArray();
+      const fake = await copy.collection('users').find({}, { sort: { _id: 1 } }).toArray();
+      assert.equal(fake.length, real.length);
+      for (let i = 0; i < real.length; i++) {
+        assert.notEqual(fake[i].email, real[i].email);
+        assert.match(fake[i].email, /@example\.com$/);
+        assert.equal(fake[i].phone, real[i].phone, 'a field not chosen is copied as it is');
+      }
+      // The unique index still holds: fakes of a unique field stay unique
+      assert.equal(new Set(fake.map(u => u.email)).size, fake.length);
+      const order = await copy.collection('orders').findOne({}, { sort: { _id: 1 } });
+      const realOrder = await source.collection('orders').findOne({ _id: order._id });
+      assert.equal(order.user_id.toHexString(), realOrder.user_id.toHexString(), 'links (ObjectIds) are kept');
+      assert.notEqual(order.customer.name, realOrder.customer.name);
+      assert.equal(order.customer.city, realOrder.customer.city, 'the rest of a sub-document is kept');
+      assert.equal(typeof order.total, 'number');
+      assert.ok(Math.abs(order.total - realOrder.total) <= realOrder.total * 0.1 + 1e-9);
+      assert.ok(order.created_at instanceof Date);
+      assert.equal(order.created_at.getUTCDate(), 1, 'rounded to the month');
+      assert.equal(await copy.collection('items').countDocuments(), 0, 'copied without its documents');
+      assert.ok((await copy.listCollections({ name: 'items' }).toArray()).length, 'but created');
+    });
+
+    test('update from: the collections, indexes and documents the copy lacks', async () => {
+      const cfg = require(path.join(root, 'dist/main/ipc/configIpc.js'));
+      const sync = require(path.join(root, 'dist/main/sync/syncEngine.js'));
+      const config = cfg.getConfig();
+      const dup = config.databases.find(d => d.name === `${NAME}_dup`);
+      // Not in a project with the source yet: refused
+      await assert.rejects(sync.analyzeSync(dup.id, 'm1'), /same project/);
+      config.projects = [{ id: 'p1', name: 'P', color: '#000', databaseIds: ['m1', dup.id] }];
+      cfg.saveConfig(config);
+      // The source moves on: new documents, a new collection, a new index; the copy has a collection of its own
+      const source = raw.db(NAME);
+      await source.collection('orders').insertMany([{ status: 'paid', total: 99, created_at: new Date() }, { status: 'paid', total: 98, created_at: new Date(now - 200 * DAY) }]);
+      await source.collection('reviews').insertOne({ note: 5 });
+      await source.collection('orders').createIndex({ status: 1 }, { name: 'by_status' });
+      await raw.db(`${NAME}_dup`).collection('scratch').insertOne({ a: 1 });
+
+      const analysis = await sync.analyzeSync(dup.id, 'm1');
+      const byKind = (kind) => analysis.schema.filter(c => c.kind === kind).map(c => c.object);
+      assert.deepEqual(byKind('table'), ['reviews']);
+      assert.deepEqual(byKind('index'), ['orders.by_status']);
+      assert.deepEqual(byKind('local_only_table'), ['scratch']);
+      assert.equal(analysis.schema.find(c => c.kind === 'local_only_table').defaultSelected, false);
+      const orders = analysis.tables.find(t => t.key === 'orders');
+      assert.deepEqual([orders.missing, orders.missingExact, orders.timeColumn], [2, true, 'created_at']);
+      assert.ok(analysis.anonymize.some(a => a.table === 'users' && a.column === 'email' && a.kind === 'email'));
+
+      const result = await sync.applySync(dup.id, 'm1', {
+        changes: analysis.schema.filter(c => c.defaultSelected).map(c => c.id),
+        // Orders of the last 30 days only: the one of 200 days ago stays out
+        tables: [{ key: 'orders', recentDays: 30 }, { key: 'reviews' }],
+        anonymize: [],
+        backup: false,
+      }, () => {});
+      assert.equal(result.success, true, result.error);
+      assert.equal(result.schema.applied, 2);
+      assert.deepEqual(result.tables.map(t => [t.key, t.copied]), [['orders', 1], ['reviews', 1]]);
+      const target = raw.db(`${NAME}_dup`);
+      assert.equal(await target.collection('orders').countDocuments({ total: 99 }), 1);
+      assert.equal(await target.collection('orders').countDocuments({ total: 98 }), 0);
+      assert.ok((await target.collection('orders').indexes()).some(i => i.name === 'by_status'));
+      assert.equal(await target.collection('scratch').countDocuments(), 1, 'the local collection is kept');
+      // Twice: nothing more to copy
+      const again = await sync.analyzeSync(dup.id, 'm1');
+      assert.equal(again.tables.find(t => t.key === 'reviews').reason, 'up_to_date');
     });
   });
 });

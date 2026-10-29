@@ -86,6 +86,16 @@
     tables, columns, indexes, foreign keys and views the copy lacks, then the missing rows found
     key by key (optionally anonymized, or only the last days), after a backup if you want one.
     Only a database of this computer is written (a SQLite file, MySQL / MariaDB on localhost).
+- **Duplicate and Update from… for MongoDB.** **Duplicate** copies a MongoDB database into a new one
+  on the source's server, or on the server of another MongoDB database you saved: the collections
+  with their options (validators, capped and time series collections, collation), the documents with
+  their exact types, the indexes and the views. bbdump does it itself, with no tool to install.
+  With **Anonymize personal data**, the chosen fields (nested ones and array items included) are
+  replaced as the documents pass, dates and numbers keeping their type, a unique field staying
+  unique; a collection can also be copied without its documents. **Update from…** another MongoDB
+  database of the project adds what a database of this computer lacks: collections, indexes and
+  views, then the missing documents (by `_id`), optionally only the last days and anonymized, after
+  a backup if you want one. A copy that fails is removed.
 - **Restore into a new database**, for MySQL, MariaDB, MongoDB and SQLite too: **New database**
   in the restore dialog creates it on the server of a database of the same engine you saved
   (MySQL, MariaDB, MongoDB) or as a new file (SQLite), restores the backup into it and saves it in

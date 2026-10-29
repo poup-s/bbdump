@@ -25,10 +25,13 @@ export function isLocalEngine(value: unknown): value is LocalEngine {
 const BREW_FORMULA: Record<LocalEngine, string> = { mysql: 'mysql', mariadb: 'mariadb', mongodb: 'mongodb/brew/mongodb-community' };
 const BREW_SERVICE: Record<LocalEngine, string> = { mysql: 'mysql', mariadb: 'mariadb', mongodb: 'mongodb-community' };
 
-/** Homebrew: the commands, in order (MongoDB's formula lives in MongoDB's own tap) */
+/**
+ * Homebrew: the commands, in order. MongoDB's formula lives in MongoDB's own tap, which
+ * Homebrew 7 loads only once trusted (`brew trust`; older versions have no such command).
+ */
 export function macosLocalSteps(engine: LocalEngine, brew: string): string[][] {
     return [
-        ...(engine === 'mongodb' ? [[brew, 'tap', 'mongodb/brew']] : []),
+        ...(engine === 'mongodb' ? [[brew, 'tap', 'mongodb/brew'], [brew, 'trust', '--tap', 'mongodb/brew']] : []),
         [brew, 'install', BREW_FORMULA[engine]],
         [brew, 'services', 'start', BREW_SERVICE[engine]],
     ];

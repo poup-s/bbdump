@@ -264,7 +264,12 @@ async function waitForPort(port: number, seconds: number): Promise<boolean> {
     return false;
 }
 
-const lastLines = (text: string, count: number) => text.split('\n').map(l => l.trim()).filter(Boolean).slice(-count).join('\n');
+/** What to show of a failed command: its error lines when it printed some, else its last lines */
+export function lastLines(text: string, count: number): string {
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const errors = lines.filter(l => /\[ERROR\]|^Error:|\berror:/i.test(l));
+    return (errors.length ? errors : lines).slice(-count).join('\n');
+}
 
 export async function installLocalServer(engine: LocalEngine, onLine: (line: string) => void): Promise<{ success: boolean; error?: string }> {
     const system = systemOs();
@@ -276,6 +281,8 @@ export async function installLocalServer(engine: LocalEngine, onLine: (line: str
             for (const step of macosLocalSteps(engine, brew)) {
                 onLine(`brew ${step.slice(1).join(' ')}`);
                 const result = await runBrew(step, onLine);
+                // `brew trust` only exists since Homebrew 7: older versions load any tap
+                if (result.code !== 0 && step[1] === 'trust' && /unknown command/i.test(result.output)) continue;
                 if (result.code !== 0) return { success: false, error: lastLines(result.output, 5) || `brew ${step[1]} failed` };
             }
         } else if (system === 'linux') {

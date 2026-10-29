@@ -112,6 +112,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/mongo-bin"
           docker cp ${{ job.services.mongo.id }}:/usr/bin/mongodump "$RUNNER_TEMP/mongo-bin/"
           docker cp ${{ job.services.mongo.id }}:/usr/bin/mongorestore "$RUNNER_TEMP/mongo-bin/"
+          # MongoDB's shell, to check the project proxy with it
+          docker cp -L ${{ job.services.mongo.id }}:/usr/bin/mongosh "$RUNNER_TEMP/mongo-bin/" || echo "no mongosh in the image"
           echo "$RUNNER_TEMP/mongo-bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/mongo-bin/mongodump" --version
 

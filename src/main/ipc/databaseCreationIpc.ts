@@ -239,12 +239,26 @@ export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWin
         }
     });
 
-    /** MySQL, MariaDB, SQLite: a copy made by bbdump (a new database on a server it reaches, or a new file) */
+    /** MySQL, MariaDB, SQLite, MongoDB: a copy made by bbdump (a new database on a server it reaches, or a new file) */
     ipcMain.handle('duplicate-sql-database', async (_, params: unknown) => {
         const p = (params ?? {}) as Record<string, unknown>;
         const sourceId = String(p.sourceId ?? '');
         requireFeature(engineOf(getConfig().databases.find(d => d.id === sourceId)), 'database.duplicate');
         const anonymize = p.anonymize as AnonymizeChoices | undefined;
+        const send = (step: string, message: string, progress: number) => getMainWindow()?.webContents.send('duplicate-progress', { step, message, progress });
+        // MongoDB: a new database on a MongoDB server bbdump reaches, copied with the driver
+        if (engineOf(getConfig().databases.find(d => d.id === sourceId)) === 'mongodb') {
+            const { duplicateMongoDatabase } = await import('../sync/mongoCopyActions');
+            return duplicateMongoDatabase({
+                sourceId,
+                name: typeof p.name === 'string' ? p.name : undefined,
+                serverOf: typeof p.serverOf === 'string' ? p.serverOf : undefined,
+                anonymize: anonymize ? {
+                    columns: Array.isArray(anonymize.columns) ? anonymize.columns : [],
+                    emptyTables: Array.isArray(anonymize.emptyTables) ? anonymize.emptyTables : [],
+                } : undefined,
+            }, send);
+        }
         const { duplicateSqlDatabase } = await import('../sync/sqlCopyActions');
         return duplicateSqlDatabase({
             sourceId,

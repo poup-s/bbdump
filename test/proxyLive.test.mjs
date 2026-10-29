@@ -9,7 +9,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as net from 'node:net';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
+
+// The proxy runs in this process: a client must run without blocking it
+const run = promisify(execFile);
 
 const require = createRequire(import.meta.url);
 const root = process.cwd();
@@ -119,8 +123,8 @@ for (const [engine, env] of [['mysql', 'BBDUMP_TEST_MYSQL'], ['mariadb', 'BBDUMP
     test("the server's own command-line client works through it", { skip: hasTool('mysql') ? false : 'no mysql client' }, async () => {
       const { listen, project } = await start();
       try {
-        const out = execFileSync('mysql', ['-h127.0.0.1', `-P${listen}`, '-uapp', '-panything', '-N', '-e', 'SELECT COUNT(*) FROM items'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-        assert.match(out.trim(), /^\d+$/);
+        const { stdout } = await run('mysql', ['-h127.0.0.1', `-P${listen}`, '-uapp', '-panything', '-N', '-e', 'SELECT COUNT(*) FROM items'], { encoding: 'utf8', timeout: 20000 });
+        assert.match(stdout.trim(), /^\d+$/);
       } finally {
         proxy.stopProxy(project);
       }
@@ -182,6 +186,19 @@ describe('MongoDB through the project proxy', { skip: mongoServer ? false : 'BBD
       assert.equal(await admin.db('myapp').collection('items').countDocuments(), 0);
     });
   }
+
+  test("mongosh, MongoDB's own shell, works through it", { skip: hasTool('mongosh') ? false : 'no mongosh' }, async () => {
+    const { listen, project } = await start(users.sha256);
+    try {
+      const { stdout } = await run('mongosh', ['--quiet', `mongodb://127.0.0.1:${listen}/myapp?directConnection=true`, '--eval',
+        'db.items.insertOne({ _id: "shell", label: "from mongosh" }); print(JSON.stringify({ db: db.getName(), n: db.items.countDocuments({ _id: { $in: [1, 2, "shell"] } }), cols: db.getCollectionNames() }))'], { encoding: 'utf8', timeout: 60000 });
+      const out = JSON.parse(stdout.trim().split('\n').pop());
+      assert.deepEqual([out.n, out.cols], [3, ['items']]);
+    } finally {
+      proxy.stopProxy(project);
+    }
+    assert.equal((await admin.db(name).collection('items').findOne({ _id: 'shell' })).label, 'from mongosh');
+  });
 
   test('a wrong saved password: the app gets the reason', async () => {
     const { listen, project } = await start(users.sha256, 'wrong');

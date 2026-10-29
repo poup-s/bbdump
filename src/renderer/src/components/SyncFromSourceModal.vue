@@ -57,8 +57,12 @@ const serverLine = (side: { id: string; host: string; version: number }) => {
 /** The update stopped at the backup: nothing else ran */
 const backupFailed = computed(() => !!result.value && !result.value.success && !progress.value.backupDone);
 /** How rows already there and orphans are handled, said in the target engine's terms */
+/** MongoDB: collections, documents and fields where SQL says tables, rows and columns */
+const MONGO_TEXTS = new Set(['rows', 'inTables', 'dataTitle', 'filter', 'previewData', 'previewAnon', 'skipped', 'anonymizeHint', 'reason.too_large', 'kinds.table', 'kinds.local_only_table', 'notes.must_satisfy']);
+const st = (key: string, params?: Record<string, unknown>) => t(engineOf(target.value) === 'mongodb' && MONGO_TEXTS.has(key) ? `sync.mongo.${key}` : `sync.${key}`, params);
 const keepLocalKey = computed(() => {
   const engine = engineOf(target.value);
+  if (engine === 'mongodb') return 'sync.keepLocalMongo';
   return engine === 'sqlite' ? 'sync.keepLocalSqlite' : isMysqlFamily(engine) ? 'sync.keepLocalMysql' : 'sync.keepLocal';
 });
 const sourceId = ref('');
@@ -133,7 +137,7 @@ const setRecent = (key: string, value: string) => {
 const tableNote = (tb: TablePlan) => {
   if (!tb.primaryKey) return t('sync.reason.no_primary_key');
   if (!copyable(tb)) return t('sync.reason.up_to_date');
-  if (tb.reason === 'too_large' && !selectedTables.value.has(tb.key)) return t('sync.reason.too_large');
+  if (tb.reason === 'too_large' && !selectedTables.value.has(tb.key)) return st('reason.too_large');
   return '';
 };
 
@@ -246,8 +250,8 @@ onUnmounted(() => ipcRenderer.removeListener('sync-progress', onProgress));
           </div>
           <div class="rounded-xl bg-gray-50 dark:bg-zinc-800/40 px-4 py-3">
             <div class="text-[12px] text-gray-500 dark:text-zinc-400">{{ t('sync.data') }}</div>
-            <div class="text-xl font-semibold text-gray-900 dark:text-zinc-50">{{ t('sync.rows', { count: fmt(missingAll) }) }}</div>
-            <div class="text-[12px] text-gray-500 dark:text-zinc-400">{{ t('sync.inTables', { count: missingTables.length }) }}</div>
+            <div class="text-xl font-semibold text-gray-900 dark:text-zinc-50">{{ st('rows', { count: fmt(missingAll) }) }}</div>
+            <div class="text-[12px] text-gray-500 dark:text-zinc-400">{{ st('inTables', { count: missingTables.length }) }}</div>
           </div>
         </div>
       </template>
@@ -262,15 +266,15 @@ onUnmounted(() => ipcRenderer.removeListener('sync-progress', onProgress));
           <label class="flex items-start gap-3 px-3.5 py-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-zinc-800/40">
             <input type="checkbox" class="mt-0.5 accent-emerald-600" :checked="selectedChanges.has(c.id)" @change="selectedChanges = toggled(selectedChanges, c.id)" />
             <span class="flex-1 min-w-0">
-              <span class="text-[11px] text-gray-500 dark:text-zinc-400 mr-1.5">{{ t(`sync.kinds.${c.kind}`) }}</span>
+              <span class="text-[11px] text-gray-500 dark:text-zinc-400 mr-1.5">{{ st(`kinds.${c.kind}`) }}</span>
               <span class="font-mono text-[12px] break-all" :class="c.destructive ? 'text-amber-700 dark:text-amber-400' : 'text-gray-900 dark:text-zinc-100'">{{ c.object }}</span>
-              <span v-if="c.noteCode || c.note" class="block text-[11px] text-gray-400 dark:text-zinc-500">{{ c.noteCode ? t(`sync.notes.${c.noteCode}`, c.noteParams ?? {}) : c.note }}</span>
+              <span v-if="c.noteCode || c.note" class="block text-[11px] text-gray-400 dark:text-zinc-500">{{ c.noteCode ? st(`notes.${c.noteCode}`, c.noteParams ?? {}) : c.note }}</span>
             </span>
           </label>
         </li>
       </ul>
 
-      <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-gray-400 dark:text-zinc-500 mb-2">{{ t('sync.dataTitle') }}</div>
+      <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-gray-400 dark:text-zinc-500 mb-2">{{ st('dataTitle') }}</div>
       <ul class="mb-4 rounded-xl border border-gray-200 dark:border-zinc-800 divide-y divide-gray-100 dark:divide-zinc-800 overflow-hidden">
         <li v-for="tb in analysis.tables" :key="tb.key" class="flex items-center gap-3 px-3.5 py-2" :class="copyable(tb) ? '' : 'opacity-60'">
           <input type="checkbox" class="accent-emerald-600" :checked="selectedTables.has(tb.key)" :disabled="!copyable(tb)" :aria-label="tb.key" @change="toggleTable(tb)" />
@@ -279,7 +283,7 @@ onUnmounted(() => ipcRenderer.removeListener('sync-progress', onProgress));
             v-if="tb.timeColumn && selectedTables.has(tb.key)"
             class="h-7 rounded-md border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-[11px] px-1.5"
             :value="selectedTables.get(tb.key) ?? ''"
-            :aria-label="t('sync.filter')"
+            :aria-label="st('filter')"
             @change="setRecent(tb.key, ($event.target as HTMLSelectElement).value)"
           >
             <option value="">{{ t('sync.allRows') }}</option>
@@ -296,7 +300,7 @@ onUnmounted(() => ipcRenderer.removeListener('sync-progress', onProgress));
           <input v-model="anonymizeOn" type="checkbox" class="accent-emerald-600" />
           <span class="flex-1">
             <span class="block text-[13px] text-gray-900 dark:text-zinc-100">{{ t('sync.anonymize') }}</span>
-            <span class="block text-[11px] text-gray-500 dark:text-zinc-400">{{ t('sync.anonymizeHint') }}</span>
+            <span class="block text-[11px] text-gray-500 dark:text-zinc-400">{{ st('anonymizeHint') }}</span>
           </span>
         </label>
         <div v-if="anonymizeOn" class="flex flex-wrap gap-1.5 px-3.5 pb-3">
@@ -318,8 +322,8 @@ onUnmounted(() => ipcRenderer.removeListener('sync-progress', onProgress));
       <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-gray-400 dark:text-zinc-500 mb-2">{{ t('sync.previewTitle', { name: analysis.target.name }) }}</div>
       <pre class="mb-3 max-h-64 overflow-auto rounded-xl border border-gray-200 dark:border-zinc-800 bg-gray-50 dark:bg-zinc-950 px-3.5 py-2.5 text-[11px] leading-relaxed font-mono text-gray-700 dark:text-zinc-300 whitespace-pre-wrap">{{ previewSql }}</pre>
       <p class="mb-3 text-[12px] text-gray-600 dark:text-zinc-400">
-        {{ t('sync.previewData', { rows: fmt(missingSelected), tables: selectedTables.size }) }}
-        <template v-if="anonymizeOn && selectedAnon.size"> · {{ t('sync.previewAnon', { count: selectedAnon.size }) }}</template>
+        {{ st('previewData', { rows: fmt(missingSelected), tables: selectedTables.size }) }}
+        <template v-if="anonymizeOn && selectedAnon.size"> · {{ st('previewAnon', { count: selectedAnon.size }) }}</template>
       </p>
       <label class="flex items-start gap-3 rounded-xl border border-gray-200 dark:border-zinc-800 px-3.5 py-2.5 cursor-pointer mb-2">
         <input v-model="backup" type="checkbox" class="mt-0.5 accent-emerald-600" />
@@ -358,7 +362,7 @@ onUnmounted(() => ipcRenderer.removeListener('sync-progress', onProgress));
             <div class="h-full transition-all" :class="tableResult(key)?.error ? 'bg-red-500' : 'bg-emerald-500'" :style="{ width: `${tableWidth(key)}%` }" />
           </div>
           <p v-if="tableResult(key)?.error" class="mt-1 text-[11px] text-red-700 dark:text-red-400">{{ tableResult(key)?.error }}</p>
-          <p v-else-if="tableResult(key)?.skipped" class="mt-1 text-[11px] text-amber-700 dark:text-amber-400">{{ t('sync.skipped', { count: fmt(tableResult(key)?.skipped ?? 0) }) }}</p>
+          <p v-else-if="tableResult(key)?.skipped" class="mt-1 text-[11px] text-amber-700 dark:text-amber-400">{{ st('skipped', { count: fmt(tableResult(key)?.skipped ?? 0) }) }}</p>
         </li>
       </ul>
     </div>

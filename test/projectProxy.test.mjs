@@ -176,7 +176,11 @@ describe('proxy targets and URLs', () => {
 describe('local servers: what each system runs', () => {
   test('Homebrew: install then start with brew services (MongoDB from its tap)', () => {
     assert.deepEqual(local.macosLocalSteps('mysql', '/opt/homebrew/bin/brew'), [['/opt/homebrew/bin/brew', 'install', 'mysql'], ['/opt/homebrew/bin/brew', 'services', 'start', 'mysql']]);
-    assert.deepEqual(local.macosLocalSteps('mongodb', 'brew')[0], ['brew', 'tap', 'mongodb/brew']);
+    assert.deepEqual(local.macosLocalSteps('mongodb', 'brew').slice(0, 2), [['brew', 'tap', 'mongodb/brew'], ['brew', 'trust', '--tap', 'mongodb/brew']]);
+    // A failed install shows its error lines, not Homebrew's notes printed after them
+    const { lastLines } = require(path.join(root, 'dist/main/localEngineServer.js'));
+    assert.equal(lastLines("==> Pouring x\n2026 0 [ERROR] mariadbd: unknown variable 'mysqlx-bind-address=127.0.0.1'\n==> Caveats\nTo start mariadb now", 5), "2026 0 [ERROR] mariadbd: unknown variable 'mysqlx-bind-address=127.0.0.1'");
+    assert.equal(lastLines('a\nb\nc', 2), 'b\nc');
     assert.equal(local.manualLocalInstall('mariadb', 'macos'), 'brew install mariadb && brew services start mariadb');
   });
 

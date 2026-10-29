@@ -108,15 +108,29 @@ async function exactCount(client: PoolClient, t: CatalogTable): Promise<number> 
   return Number((await client.query(`SELECT count(*) AS n FROM ${rel}`)).rows[0].n);
 }
 
-/** MySQL, MariaDB, SQLite: their own engine (sqlCopy.ts), the same analysis and choices */
-async function sqlEngineOf(targetId: string) {
-  const { isSqlCopyEngine } = await import('./sqlCopyActions');
-  return isSqlCopyEngine(getConfig().databases.find(d => d.id === targetId));
+interface OwnEngine {
+  pair(targetId: string, sourceId: string, writable: boolean): unknown;
+  analyze(targetId: string, sourceId: string, writable: boolean): Promise<SyncAnalysis>;
+  apply(targetId: string, sourceId: string, choices: SyncChoices, onProgress: (p: SyncProgress) => void): Promise<Pick<SyncResult, 'schema' | 'tables'>>;
+}
+
+/**
+ * MySQL, MariaDB, SQLite (sqlCopy.ts) and MongoDB (mongoCopy.ts): their own engine, the same
+ * analysis and choices. Null for PostgreSQL (this file).
+ */
+async function ownEngine(targetId: string): Promise<OwnEngine | null> {
+  const db = getConfig().databases.find(d => d.id === targetId);
+  if (db?.engine === 'mongodb') {
+    const m = await import('./mongoCopyActions');
+    return { pair: m.mongoPair, analyze: m.analyzeMongoPair, apply: m.applyMongoPair };
+  }
+  const s = await import('./sqlCopyActions');
+  return s.isSqlCopyEngine(db) ? { pair: s.sqlPair, analyze: s.analyzeSqlPair, apply: s.applySqlPair } : null;
 }
 
 export async function analyzeSync(targetId: string, sourceId: string): Promise<SyncAnalysis> {
-  const sql = await sqlEngineOf(targetId);
-  if (sql) (await import('./sqlCopyActions')).sqlPair(targetId, sourceId, true);
+  const own = await ownEngine(targetId);
+  if (own) own.pair(targetId, sourceId, true);
   else pair(targetId, sourceId);
 
   // Remember the source for next time
@@ -126,7 +140,7 @@ export async function analyzeSync(targetId: string, sourceId: string): Promise<S
     saved.syncSourceId = sourceId;
     saveConfig(config);
   }
-  if (sql) return (await import('./sqlCopyActions')).analyzeSqlPair(targetId, sourceId, true);
+  if (own) return own.analyze(targetId, sourceId, true);
   return analyze(targetId, sourceId, onTarget);
 }
 
@@ -135,7 +149,8 @@ export async function analyzeSync(targetId: string, sourceId: string): Promise<S
  * two saved databases, e.g. for the MCP server's compare_databases. Nothing is remembered.
  */
 export async function compareDatabases(sourceId: string, targetId: string): Promise<SyncAnalysis> {
-  if (await sqlEngineOf(targetId)) return (await import('./sqlCopyActions')).analyzeSqlPair(targetId, sourceId, false);
+  const own = await ownEngine(targetId);
+  if (own) return own.analyze(targetId, sourceId, false);
   pair(targetId, sourceId, false);
   return analyze(targetId, sourceId, onSource);
 }
@@ -189,8 +204,8 @@ async function analyze(
 export async function applySync(targetId: string, sourceId: string, choices: SyncChoices, onProgress: (p: SyncProgress) => void): Promise<SyncResult> {
   const result: SyncResult = { success: false, schema: { applied: 0, failed: [] }, tables: [] };
   try {
-    const sql = await sqlEngineOf(targetId);
-    if (sql) (await import('./sqlCopyActions')).sqlPair(targetId, sourceId, true);
+    const own = await ownEngine(targetId);
+    if (own) own.pair(targetId, sourceId, true);
     else pair(targetId, sourceId);
 
     if (choices.backup) {
@@ -200,8 +215,8 @@ export async function applySync(targetId: string, sourceId: string, choices: Syn
       result.backupFile = backup.filePath;
     }
 
-    if (sql) {
-      const applied = await (await import('./sqlCopyActions')).applySqlPair(targetId, sourceId, choices, onProgress);
+    if (own) {
+      const applied = await own.apply(targetId, sourceId, choices, onProgress);
       onProgress({ stage: 'done' });
       logger.info(`Sync ${sourceId} → ${targetId}: ${applied.schema.applied} schema change(s), ${applied.tables.reduce((n, t) => n + t.copied, 0)} row(s) copied`);
       return { ...result, ...applied, success: true };
