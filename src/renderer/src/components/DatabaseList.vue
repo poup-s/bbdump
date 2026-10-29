@@ -47,13 +47,13 @@ const openDuplicateModal = (db: Database, projectId?: string | null) => {
   showDuplicateModal.value = true;
 };
 
-const onDuplicateSuccess = async (newDbName: string) => {
+const onDuplicateSuccess = async (newDbName: string, newDbId?: string) => {
     // Refresh config
     const config = await ipcRenderer.invoke('get-config');
     store.databases = config.databases;
 
-    // Find the newly added DB by name to get its id
-    const newDb = store.databases.find((d) => d.name === newDbName);
+    // The newly added DB: by its id when the copy gives it, else by name
+    const newDb = store.databases.find((d) => (newDbId ? d.id === newDbId : d.name === newDbName));
     if (newDb) {
       store.newlyAddedDbId = newDb.id;
       setTimeout(() => {

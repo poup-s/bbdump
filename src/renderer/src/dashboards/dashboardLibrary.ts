@@ -863,7 +863,7 @@ export const dashboardLibrary = createLibrary({
     defineUi({ name: 'DonutChart', description: 'Shares of a whole (at most 8 slices): DonutChart(q.rows.label, q.rows.value, title?, unit?, format?, select?) — select {filter}: a click on a slice sets {{filter}} to its label', props: single(), component: DonutBlock }),
     defineUi({
       name: 'MultiLineChart',
-      description: 'Several values over time, one colour each with a legend: MultiLineChart(q.rows.week, [{label: "Photos", values: q.rows.photos}, {label: "Logins", values: q.rows.logins}], title?, unit?, format?)',
+      description: 'Several values of the same unit over time (one scale), one colour each with a legend: MultiLineChart(q.rows.week, [{label: "Photos", values: q.rows.photos}, {label: "Logins", values: q.rows.logins}], title?, unit?, format?)',
       props: multi(),
       component: renderMultiLine,
     }),
@@ -1008,7 +1008,8 @@ export function dashboardSystemPrompt(database: string, engine = 'postgresql'): 
       'Query defaults are always exactly {columns: [], rows: []}: no sample data.',
       ...how.rules,
       'Key figures: one Kpis block per figure, side by side in a Row (figures = Row([ordersKpi, revenueKpi])), so the user can move and resize each one.',
-      'Key figures: add previous (the same measure over the previous period, with the same filters) when it helps, format, and trend (a short series) for the main ones. Several values over time: MultiLineChart, MultiBarChart or StackedBarChart, never several charts or a table instead.',
+      'Key figures: add previous (the same measure over the previous period, with the same filters) when it helps, format, and trend (a short series) for the main ones. Several values over time: MultiLineChart, MultiBarChart or StackedBarChart, never several charts or a table instead, as long as they share a unit (all money, all counts…).',
+      'One chart has one scale: values of different units or sizes (revenue in € and a number of orders, a total and a rate) go in separate charts side by side in a Row, never in the same chart, where the small one would be flat.',
       'A request the components cannot do exactly: build the closest thing, then say in one sentence what differs. Do not refuse.',
       'An empty dashboard: write the whole program in one ```openui-lang block. An existing one: output only the changed or new statements, keeping the names of the blocks (the user\'s layout is attached to them).',
       `End every answer with up to 3 short next steps the user may want, written as requests in the same language as your notes (${language} unless the request is in another one), in a \`\`\`suggestions block (one per line). When you need the user to choose, ask the question and put the choices there instead. If the request is only a question, answer in text without code.`,

@@ -40,6 +40,19 @@ function fileOf(dbId: string): string {
     return file;
 }
 
+/**
+ * A connection of its own to a file, for copies and updates (foreign keys left off, as SQLite's
+ * default: rows are copied in any order). `create`: a new file, refused if it exists.
+ */
+export function openSqliteFile(file: string, options: { readOnly?: boolean; create?: boolean } = {}): DatabaseSync {
+    if (options.create ? fs.existsSync(file) : !fs.existsSync(file)) {
+        throw new Error(options.create ? `A file already exists at ${file}` : `The SQLite file was not found: ${file}`);
+    }
+    const db = new (lib().DatabaseSync)(file, { readOnly: !!options.readOnly });
+    db.exec('PRAGMA busy_timeout = 2000');
+    return db;
+}
+
 /** Opens the file (never creates it), runs `fn`, closes it (once its promise settles, for an async `fn`) */
 function withDb<T>(file: string, mode: 'read' | 'write', fn: (db: DatabaseSync) => T): T {
     if (!fs.existsSync(file)) throw new Error(`The SQLite file was not found: ${file}`);

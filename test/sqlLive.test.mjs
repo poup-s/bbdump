@@ -95,6 +95,7 @@ after(async () => {
     if (!c) continue;
     await c.query(`DROP DATABASE IF EXISTS \`${e.name}\``).catch(() => {});
     await c.query(`DROP DATABASE IF EXISTS \`${e.name}_copy\``).catch(() => {});
+    for (const suffix of ['dup', 'anon']) await c.query(`DROP DATABASE IF EXISTS \`${e.name}_${suffix}\``).catch(() => {});
     await c.end();
   }
   await require(path.join(root, 'dist/main/engines/mysql.js')).closeMysqlPools();
@@ -222,6 +223,110 @@ for (const label of ['SQLite', 'MySQL', 'MariaDB']) {
       const catalog = await registry.facetForDb(e.copy, 'explorer.browse', 'catalog');
       const schema = (await catalog.listNamespaces(e.copy)).schemas[0].name;
       assert.deepEqual((await catalog.listEntities(e.copy, schema)).tables.map(x => x.name), ['customers', 'orders', 'users']);
+    });
+
+    test('copy (exact, then anonymized), then update the copy from its source', async () => {
+      const cfg = require(path.join(root, 'dist/main/ipc/configIpc.js'));
+      const actions = require(path.join(root, 'dist/main/sync/sqlCopyActions.js'));
+      const sync = require(path.join(root, 'dist/main/sync/syncEngine.js'));
+      const isSqlite = e.engine === 'sqlite';
+      const where = (suffix) => (isSqlite ? { file: path.join(tmp, `shop_${suffix}.sqlite`) } : { name: `${e.name}_${suffix}` });
+      const query = async (id, sql) => (await (await registry.facetForDb(id, 'explorer.query', 'query')).run(id, { sql })).rows;
+      const n = async (id, table) => Number((await query(id, `SELECT COUNT(*) AS n FROM ${table}`))[0].n);
+      /** Statements on the source, outside bbdump */
+      const onSource = async (statements) => {
+        if (isSqlite) {
+          const { DatabaseSync } = require('node:sqlite');
+          const db = new DatabaseSync(cfg.getConfig().databases.find(d => d.id === e.id).sqlite.path);
+          for (const sql of statements) db.exec(sql);
+          db.close();
+          return;
+        }
+        const mysql = require(path.join(root, 'node_modules/mysql2/promise'));
+        const c = await mysql.createConnection({ host: e.host, port: e.port, user: 'root', password, database: e.name });
+        for (const sql of statements) await c.query(sql);
+        await c.end();
+      };
+
+      // A view and a trigger come along; a MySQL procedure is named as not copied
+      await onSource([
+        "CREATE VIEW paid_orders AS SELECT id, total FROM orders WHERE status = 'paid'",
+        isSqlite
+          ? 'CREATE TRIGGER orders_stamp AFTER INSERT ON orders BEGIN SELECT 1; END'
+          : 'CREATE TRIGGER orders_stamp BEFORE INSERT ON orders FOR EACH ROW SET NEW.status = LOWER(NEW.status)',
+        ...(isSqlite ? [] : ['CREATE PROCEDURE noop() SELECT 1']),
+      ]);
+      const triggers = async (id) => (isSqlite
+        ? await query(id, "SELECT name FROM sqlite_master WHERE type = 'trigger'")
+        : await query(id, 'SELECT TRIGGER_NAME AS name FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE()')).map(r => r.name);
+
+      const steps = [];
+      const plain = await actions.duplicateSqlDatabase({ sourceId: e.id, ...where('dup') }, (step) => steps.push(step));
+      assert.equal(plain.success, true, plain.error);
+      assert.equal(steps.at(-1), 'complete');
+      assert.deepEqual([await n(plain.id, 'customers'), await n(plain.id, 'orders'), await n(plain.id, 'users')], [3, 12, 2]);
+      const saved = cfg.getConfig().databases.find(d => d.id === plain.id);
+      assert.deepEqual([saved.syncSourceId, saved.enabled, saved.engine], [e.id, false, e.engine]);
+      // The same name again: refused, nothing changed
+      const again = await actions.duplicateSqlDatabase({ sourceId: e.id, ...where('dup') }, () => {});
+      assert.equal(again.success, false);
+      assert.equal(cfg.getConfig().databases.filter(d => d.syncSourceId === e.id).length, 1);
+
+      // Anonymized: the real emails and phones never reach the copy; keys and links stay
+      const ns = isSqlite ? 'main' : e.name;
+      const anon = await actions.duplicateSqlDatabase({
+        sourceId: e.id, ...where('anon'),
+        anonymize: { columns: [{ table: `${ns}.customers`, column: 'email', kind: 'email' }, { table: `${ns}.users`, column: 'phone', kind: 'phone' }], emptyTables: [`${ns}.users`] },
+      }, () => {});
+      assert.equal(anon.success, true, anon.error);
+      const emails = (await query(anon.id, 'SELECT email FROM customers ORDER BY id')).map(r => r.email);
+      assert.equal(emails.length, 3);
+      assert.ok(emails.every(m => /@example\.com$/.test(m) && !SHOP.customers.some(c => c[2] === m)), emails.join(', '));
+      assert.equal(new Set(emails).size, 3, 'a unique column keeps distinct fakes');
+      assert.equal(await n(anon.id, 'users'), 0);
+      assert.equal(await n(anon.id, 'orders'), 12);
+      assert.equal(Number((await query(anon.id, 'SELECT COUNT(*) AS n FROM orders o JOIN customers c ON c.id = o.customer_id'))[0].n), 12);
+      for (const id of [plain.id, anon.id]) {
+        assert.equal(await n(id, 'paid_orders'), 8);
+        assert.deepEqual(await triggers(id), ['orders_stamp']);
+      }
+      if (!isSqlite) assert.match((anon.warnings ?? []).join(' '), /procedure noop/);
+
+      // The source moves on: a new table, a new column, an index, new rows; one row lost in the copy
+      await onSource([
+        'CREATE TABLE tags (id INTEGER PRIMARY KEY, label VARCHAR(40))',
+        "INSERT INTO tags (id, label) VALUES (1, 'vip'), (2, 'new')",
+        "ALTER TABLE customers ADD COLUMN note VARCHAR(80) DEFAULT 'none'",
+        'CREATE INDEX idx_orders_status ON orders (status)',
+        `INSERT INTO orders (id, customer_id, user_id, total, status, created_at) VALUES (13, 1, 1, 99, 'paid', '${utc(now)}'), (14, 2, 2, 5, 'paid', '${utc(now)}')`,
+      ]);
+      await (await registry.facetForDb(plain.id, 'explorer.query', 'query')).runMutation(plain.id, { sql: 'DELETE FROM orders WHERE id = 5' });
+      // Only a database of this computer, in the same project, is updated
+      await assert.rejects(sync.analyzeSync(plain.id, e.id), /same project/);
+      const config = cfg.getConfig();
+      config.projects = [{ id: `p-${e.engine}`, name: 'Shop', color: 'blue', databaseIds: [e.id, plain.id] }];
+      cfg.saveConfig(config);
+
+      const analysis = await sync.analyzeSync(plain.id, e.id);
+      const ids = analysis.schema.filter(c => c.defaultSelected).map(c => c.id).sort();
+      assert.deepEqual(ids, ['column:customers.note', 'index:orders.idx_orders_status', 'table:tags']);
+      const orders = analysis.tables.find(t => t.key === `${ns}.orders`);
+      assert.deepEqual([orders.missing, orders.missingExact, orders.defaultSelected], [3, true, true]);
+      assert.equal(analysis.tables.find(t => t.key === `${ns}.customers`).reason, 'up_to_date');
+      const result = await sync.applySync(plain.id, e.id, {
+        changes: analysis.schema.filter(c => c.defaultSelected).map(c => c.id),
+        tables: analysis.tables.filter(t => t.defaultSelected).map(t => ({ key: t.key })),
+        anonymize: [],
+        backup: false,
+      }, () => {});
+      assert.equal(result.success, true, result.error);
+      assert.deepEqual(result.schema, { applied: 3, failed: [] });
+      assert.deepEqual([await n(plain.id, 'orders'), await n(plain.id, 'tags')], [14, 2]);
+      assert.equal((await query(plain.id, 'SELECT note FROM customers WHERE id = 1'))[0].note, 'none');
+      // Nothing left to do
+      const after = await sync.analyzeSync(plain.id, e.id);
+      assert.deepEqual(after.schema.filter(c => c.defaultSelected), []);
+      assert.ok(after.tables.every(t => t.reason === 'up_to_date'), JSON.stringify(after.tables));
     });
   });
 }

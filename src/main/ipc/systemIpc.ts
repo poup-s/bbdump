@@ -332,6 +332,16 @@ export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null
         return result.filePaths[0];
     });
 
+    /** Where to write a copy of a SQLite database (a new file) */
+    ipcMain.handle('select-sqlite-copy-path', async (_, suggested?: string) => {
+        const result = await dialog.showSaveDialog({
+            defaultPath: typeof suggested === 'string' ? suggested : undefined,
+            filters: [{ name: 'SQLite', extensions: ['sqlite', 'sqlite3', 'db'] }],
+            properties: ['createDirectory', 'showOverwriteConfirmation'],
+        });
+        return result.canceled || !result.filePath ? null : result.filePath;
+    });
+
     ipcMain.handle('select-directory', async () => {
         const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] });
         if (result.canceled || result.filePaths.length === 0) return null;

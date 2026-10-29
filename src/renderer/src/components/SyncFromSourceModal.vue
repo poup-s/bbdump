@@ -10,6 +10,8 @@ import { useToast } from '../composables/useToast';
 import { useFeatures } from '../composables/useFeatures';
 import { ipcRenderer } from '../electron';
 import { getErrorMessage } from '../utils';
+import { engineOf } from '../../../shared/engines/features';
+import { isMysqlFamily, manifestFor } from '../../../shared/engines/manifests';
 import AppModal from './ui/AppModal.vue';
 import { btnGhost, btnPrimary, selectClass } from './ui/classes';
 
@@ -42,7 +44,23 @@ const target = computed(() => store.syncTargetDb);
 /** Sources: the other databases of the target's project */
 const project = computed(() => store.projects.find(p => target.value && p.databaseIds?.includes(target.value.id)) ?? null);
 const { isEnabled } = useFeatures();
-const sources = computed(() => store.databases.filter(d => d.id !== target.value?.id && !!project.value?.databaseIds?.includes(d.id) && isEnabled(d, 'sync.fromSource')));
+/** A database is updated from one of its engine (MySQL and MariaDB count as one) */
+const familyOf = (db: { engine?: string } | null | undefined) => (isMysqlFamily(engineOf(db ?? undefined)) ? 'mysql' : engineOf(db ?? undefined));
+const sources = computed(() => store.databases.filter(d => d.id !== target.value?.id && !!project.value?.databaseIds?.includes(d.id)
+  && isEnabled(d, 'sync.fromSource') && familyOf(d) === familyOf(target.value)));
+/** "host · PG 16" for PostgreSQL; the engine (and the file name for SQLite) for the others, which report no version */
+const serverLine = (side: { id: string; host: string; version: number }) => {
+  const db = store.databases.find(d => d.id === side.id);
+  if (!side.version) return engineOf(db) === 'sqlite' ? (db?.sqlite?.path ?? '').split(/[\\/]/).pop() || 'SQLite' : `${side.host} · ${manifestFor(engineOf(db))?.label ?? ''}`;
+  return `${side.host} · PG ${Math.floor(side.version / 10000)}`;
+};
+/** The update stopped at the backup: nothing else ran */
+const backupFailed = computed(() => !!result.value && !result.value.success && !progress.value.backupDone);
+/** How rows already there and orphans are handled, said in the target engine's terms */
+const keepLocalKey = computed(() => {
+  const engine = engineOf(target.value);
+  return engine === 'sqlite' ? 'sync.keepLocalSqlite' : isMysqlFamily(engine) ? 'sync.keepLocalMysql' : 'sync.keepLocal';
+});
 const sourceId = ref('');
 const step = ref(0);
 const analysis = ref<Analysis | null>(null);
@@ -195,7 +213,7 @@ onUnmounted(() => ipcRenderer.removeListener('sync-progress', onProgress));
     <div v-if="step === 0">
       <label class="block text-[12px] text-gray-500 dark:text-zinc-400 mb-1.5" for="sync-source">{{ t('sync.sourceLabel', { project: project?.name ?? '' }) }}</label>
       <select id="sync-source" v-model="sourceId" :class="selectClass" class="mb-4" :disabled="analyzing">
-        <option v-for="d in sources" :key="d.id" :value="d.id">{{ d.displayName || d.name }} — {{ d.host }}:{{ d.port }}{{ d.isLocalBbdump ? ` (${t('sync.local')})` : '' }}</option>
+        <option v-for="d in sources" :key="d.id" :value="d.id">{{ d.displayName || d.name }} — {{ d.sqlite ? (d.sqlite.path.split(/[\\/]/).pop()) : d.ssh ? `${d.ssh.host} (SSH)` : `${d.host}:${d.port}` }}{{ d.isLocalBbdump ? ` (${t('sync.local')})` : '' }}</option>
       </select>
 
       <div v-if="analyzing" class="py-12 flex flex-col items-center gap-3" role="status">
@@ -211,13 +229,13 @@ onUnmounted(() => ipcRenderer.removeListener('sync-progress', onProgress));
           <div class="flex-1 min-w-0">
             <div class="text-[11px] text-gray-500 dark:text-zinc-400">{{ t('sync.sourceReadOnly') }}</div>
             <div class="text-[13px] font-medium text-gray-900 dark:text-zinc-100 truncate">{{ analysis.source.name }}</div>
-            <div class="font-mono text-[11px] text-gray-400 dark:text-zinc-500 truncate">{{ analysis.source.host }} · PG {{ Math.floor(analysis.source.version / 10000) }}</div>
+            <div class="font-mono text-[11px] text-gray-400 dark:text-zinc-500 truncate">{{ serverLine(analysis.source) }}</div>
           </div>
           <svg class="w-4 h-4 shrink-0 text-gray-300 dark:text-zinc-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
           <div class="flex-1 min-w-0 text-right">
             <div class="text-[11px] text-gray-500 dark:text-zinc-400">{{ t('sync.target') }}</div>
             <div class="text-[13px] font-medium text-emerald-700 dark:text-emerald-400 truncate">{{ analysis.target.name }}</div>
-            <div class="font-mono text-[11px] text-gray-400 dark:text-zinc-500 truncate">{{ analysis.target.host }} · PG {{ Math.floor(analysis.target.version / 10000) }}</div>
+            <div class="font-mono text-[11px] text-gray-400 dark:text-zinc-500 truncate">{{ serverLine(analysis.target) }}</div>
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
@@ -310,7 +328,7 @@ onUnmounted(() => ipcRenderer.removeListener('sync-progress', onProgress));
           <span class="block text-[11px] text-gray-500 dark:text-zinc-400">{{ t('sync.backupHint') }}</span>
         </span>
       </label>
-      <p class="text-[11px] text-gray-500 dark:text-zinc-400">{{ t('sync.keepLocal') }}</p>
+      <p class="text-[11px] text-gray-500 dark:text-zinc-400">{{ t(keepLocalKey) }}</p>
     </div>
 
     <!-- 3 · Apply -->
@@ -321,8 +339,8 @@ onUnmounted(() => ipcRenderer.removeListener('sync-progress', onProgress));
       <p v-if="result?.error" class="mb-3 rounded-xl border border-red-200 dark:border-red-900/60 bg-red-50/60 dark:bg-red-950/20 px-3.5 py-2.5 text-[12px] text-red-700 dark:text-red-400" role="alert">{{ result.error }}</p>
       <ul class="space-y-3">
         <li v-if="backup">
-          <div class="flex text-[13px] mb-1"><span class="flex-1">{{ t('sync.stepBackup') }}</span><span class="text-[11px] text-gray-400">{{ progress.backupDone || result ? t('sync.finished') : t('sync.running') }}</span></div>
-          <div class="h-[3px] rounded-full bg-gray-100 dark:bg-zinc-800 overflow-hidden"><div class="h-full bg-emerald-500 transition-all" :style="{ width: progress.backupDone || result ? '100%' : '35%' }" /></div>
+          <div class="flex text-[13px] mb-1"><span class="flex-1">{{ t('sync.stepBackup') }}</span><span class="text-[11px]" :class="backupFailed ? 'text-red-600 dark:text-red-400' : 'text-gray-400'">{{ backupFailed ? t('sync.stepFailed') : progress.backupDone || result ? t('sync.finished') : t('sync.running') }}</span></div>
+          <div class="h-[3px] rounded-full bg-gray-100 dark:bg-zinc-800 overflow-hidden"><div class="h-full transition-all" :class="backupFailed ? 'bg-red-500' : 'bg-emerald-500'" :style="{ width: progress.backupDone || result ? '100%' : '35%' }" /></div>
         </li>
         <li v-if="selectedChanges.size">
           <div class="flex text-[13px] mb-1"><span class="flex-1">{{ t('sync.stepSchema', { count: selectedChanges.size }) }}</span><span class="text-[11px] text-gray-400 tabular-nums">{{ result ? `${result.schema.applied}/${selectedChanges.size}` : `${progress.schema.done}/${progress.schema.total}` }}</span></div>

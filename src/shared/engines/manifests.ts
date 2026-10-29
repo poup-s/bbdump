@@ -105,6 +105,10 @@ const MYSQL_FEATURES = {
     'backup.encrypt': 'yes',
     // The tables of the backup replace those of the target (no transaction around DDL: "back up first" stays on)
     'restore.replace': 'yes',
+    // Copied by bbdump itself into a new database on a server it reaches (no dump tools);
+    // "Update from…" only writes into a database of this computer
+    'database.duplicate': 'yes',
+    'sync.fromSource': 'yes',
     'explorer.browse': 'yes',
     'explorer.edit': 'yes',
     'explorer.query': 'yes',
@@ -148,6 +152,9 @@ const SQLITE_FEATURES = {
     'backup.verify': 'yes',
     'backup.encrypt': 'yes',
     'restore.replace': 'yes',
+    // A copy is a new file; "Update from…" writes into a file (always on this computer)
+    'database.duplicate': 'yes',
+    'sync.fromSource': 'yes',
     'explorer.browse': 'yes',
     'explorer.edit': 'yes',
     'explorer.query': 'yes',

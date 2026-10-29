@@ -239,6 +239,25 @@ export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWin
         }
     });
 
+    /** MySQL, MariaDB, SQLite: a copy made by bbdump (a new database on a server it reaches, or a new file) */
+    ipcMain.handle('duplicate-sql-database', async (_, params: unknown) => {
+        const p = (params ?? {}) as Record<string, unknown>;
+        const sourceId = String(p.sourceId ?? '');
+        requireFeature(engineOf(getConfig().databases.find(d => d.id === sourceId)), 'database.duplicate');
+        const anonymize = p.anonymize as AnonymizeChoices | undefined;
+        const { duplicateSqlDatabase } = await import('../sync/sqlCopyActions');
+        return duplicateSqlDatabase({
+            sourceId,
+            name: typeof p.name === 'string' ? p.name : undefined,
+            serverOf: typeof p.serverOf === 'string' ? p.serverOf : undefined,
+            file: typeof p.file === 'string' ? p.file : undefined,
+            anonymize: anonymize ? {
+                columns: Array.isArray(anonymize.columns) ? anonymize.columns : [],
+                emptyTables: Array.isArray(anonymize.emptyTables) ? anonymize.emptyTables : [],
+            } : undefined,
+        }, (step, message, progress) => getMainWindow()?.webContents.send('duplicate-progress', { step, message, progress }));
+    });
+
     ipcMain.handle('duplicate-external-to-local', async (_, params: {
         sourceDb: Partial<DatabaseConfig>;
         targetName: string;

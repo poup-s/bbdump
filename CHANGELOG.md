@@ -76,7 +76,21 @@
   - **Server via SSH** (MySQL and MariaDB), as for PostgreSQL: bbdump opens the tunnel with your
     own `ssh`, finds the `mysql://` / `mariadb://` URL in the server's `.env` files (only their
     names leave the server), and backups, the explorer and AI assistants all go through it.
-  Not yet: copying or updating a database from another one.
+  - **Duplicate**: MySQL and MariaDB into a new database on the source's server, or on the server
+    of another database of the same engine you saved (a local one, for example); SQLite into a new
+    file (SQLite's own exact copy). bbdump copies the tables, their rows, views and triggers itself:
+    no dump tool needed, SSH included; procedures and events are named as not copied. With
+    **Anonymize personal data**, the chosen columns are replaced as the rows pass, so the real
+    values are never written to the copy. A copy that fails is removed.
+  - **Update from…** another database of the same engine and project, as for PostgreSQL: the
+    tables, columns, indexes, foreign keys and views the copy lacks, then the missing rows found
+    key by key (optionally anonymized, or only the last days), after a backup if you want one.
+    Only a database of this computer is written (a SQLite file, MySQL / MariaDB on localhost).
+
+### Changed
+
+- **Dashboards**: the AI no longer puts values of different units on one chart (revenue in € and a
+  number of orders), where the smaller one was flat; it makes two charts side by side.
 
 ### Security
 

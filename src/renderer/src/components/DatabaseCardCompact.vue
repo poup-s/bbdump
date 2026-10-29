@@ -68,9 +68,16 @@ const ICONS = {
   disconnect: 'M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25',
 };
 
-/** A database of the local server, at an address of this computer (TCP loopback or Unix socket) */
-const isOnThisComputer = computed(() => !!props.db.isLocalBbdump
-  && (['localhost', '127.0.0.1', '::1'].includes((props.db.host || '').toLowerCase()) || (props.db.host || '').startsWith('/')));
+/** MySQL, MariaDB, SQLite: bbdump copies and updates them itself (no local PostgreSQL server needed) */
+const copiedByBbdump = computed(() => ['mysql', 'mariadb', 'sqlite'].includes(engine.value));
+const onLoopback = computed(() => ['localhost', '127.0.0.1', '::1'].includes((props.db.host || '').toLowerCase()) || (props.db.host || '').startsWith('/'));
+/**
+ * A database "Update from…" may write: PostgreSQL on the local server; a SQLite file; MySQL /
+ * MariaDB on this computer without SSH. Never a remote database.
+ */
+const isOnThisComputer = computed(() => (copiedByBbdump.value
+  ? engine.value === 'sqlite' || (onLoopback.value && !props.db.ssh)
+  : !!props.db.isLocalBbdump && onLoopback.value));
 
 /** Other databases in this database's project (the sources "Update from…" can use) */
 const projectSiblings = computed(() => {
@@ -103,14 +110,14 @@ const menuItems = computed<ActionMenuItem[]>(() => allMenuItems.value.filter(ite
 const allMenuItems = computed<ActionMenuItem[]>(() => [
   // Behind SSH there is no URL another app could use (the project proxy is the way)
   ...(props.db.ssh ? [] : [{ key: 'copy-url', label: t('databases.copyUrl'), icon: ICONS.url }]),
-  // Duplicate to a local database (needs a local server)
-  ...(!isRemoteOnly() ? [{ key: 'duplicate', label: t('cardAction.duplicate'), icon: ICONS.duplicate }] : []),
+  // Duplicate: PostgreSQL to a local database (needs a local server); the others by bbdump itself
+  ...(!isRemoteOnly() || copiedByBbdump.value ? [{ key: 'duplicate', label: t('cardAction.duplicate'), icon: ICONS.duplicate }] : []),
   { key: 'edit', label: t('cardAction.edit'), icon: ICONS.edit },
   // Extensions of a database on the local server
   ...(props.db.isLocalBbdump && !isRemoteOnly() ? [{ key: 'addons', label: t('postgresConfig.extensions'), icon: ICONS.puzzle }] : []),
   // A local database can catch up with another database of its project (e.g. prod)
   // Never for a remote database: local server flag AND an address on this computer
-  ...(isOnThisComputer.value && !isRemoteOnly() && projectSiblings.value > 0 ? [{ key: 'sync', label: t('sync.menu'), icon: ICONS.sync }] : []),
+  ...(isOnThisComputer.value && (!isRemoteOnly() || copiedByBbdump.value) && projectSiblings.value > 0 ? [{ key: 'sync', label: t('sync.menu'), icon: ICONS.sync }] : []),
   // A dashboard of this database, made with the AI
   { key: 'dashboard', label: t('dashboards.fromDatabase'), icon: ICONS.chart },
   // Changes made by AI clients through MCP, and their undo

@@ -43,8 +43,8 @@ describe('manifests', () => {
     assert.ok(isMysqlFamily('mariadb') && isMysqlFamily('mysql') && !isMysqlFamily('sqlite'));
   });
 
-  test('SQLite has no server: no SSH, TLS, proxy or local server; nothing copies a database yet', () => {
-    for (const key of ['connection.ssh', 'connection.tls', 'proxy.tcp', 'local.server', 'database.duplicate', 'sync.fromSource']) {
+  test('SQLite has no server: no SSH, TLS, proxy or local server', () => {
+    for (const key of ['connection.ssh', 'connection.tls', 'proxy.tcp', 'local.server']) {
       assert.equal(manifestFor('sqlite').features[key] ?? 'no', 'no', key);
     }
     assert.equal(manifestFor('mysql').features['connection.tls'], 'yes');
@@ -53,6 +53,13 @@ describe('manifests', () => {
 
   test('MySQL and MariaDB can be reached through SSH, like PostgreSQL and MongoDB', () => {
     for (const id of ['mysql', 'mariadb']) assert.equal(manifestFor(id).features['connection.ssh'], 'yes', id);
+  });
+
+  test('MySQL, MariaDB and SQLite can be copied and updated from another database', () => {
+    for (const id of ['mysql', 'mariadb', 'sqlite']) {
+      assert.equal(manifestFor(id).features['database.duplicate'], 'yes', id);
+      assert.equal(manifestFor(id).features['sync.fromSource'], 'yes', id);
+    }
   });
 });
 
@@ -229,5 +236,68 @@ describe('journal rows and dashboards (pure)', () => {
     const { pgTypeOf } = require(path.join(cwd, 'dist/main/sqlMasking.js'));
     assert.deepEqual(['varchar(120)', 'tinyint(1)', 'int(11)', 'decimal(10,2)', 'double', 'datetime', 'date', 'json', 'blob', 'any'].map(t => pgTypeOf(t, t === 'tinyint(1)' ? 'bool' : undefined)),
       ['text', 'boolean', 'integer', 'numeric', 'double precision', 'timestamp without time zone', 'date', 'json', 'bytea', 'text']);
+  });
+});
+
+describe('copies made by bbdump (MySQL, MariaDB, SQLite)', () => {
+  const fakes = () => require(path.join(cwd, 'dist/main/sync/fakeValues.js'));
+  const copy = () => require(path.join(cwd, 'dist/main/sync/sqlCopy.js'));
+
+  test('fake values: deterministic, the right shape, null kept, unique columns kept distinct', () => {
+    const { fakeValue } = fakes();
+    const email = fakeValue('alice@company.fr', 'email');
+    assert.match(email, /^[a-z]+\.[a-z]+\.[0-9a-f]{4}@example\.com$/);
+    assert.equal(fakeValue('alice@company.fr', 'email'), email, 'same value, same fake');
+    assert.equal(fakeValue(null, 'email'), null);
+    assert.match(fakeValue('0612345678', 'phone'), /^\+000\d{9}$/);
+    assert.match(fakeValue('Alice Martin', 'name', { wide: true }), / [0-9A-F]{12}$/);
+    assert.equal(fakeValue('Bordeaux', 'city', { maxLength: 4 }).length, 4);
+    assert.equal(fakeValue('alice@company.fr', 'partial'), '***ce@company.fr');
+    assert.equal(fakeValue('0612345678', 'partial'), '********78');
+    assert.match(fakeValue('FR7630006000011234567890189', 'secret'), /^XXXX[0-9A-F]{8}$/);
+    const many = new Set(Array.from({ length: 300 }, (_, i) => fakeValue(`user${i}@x.io`, 'email', { wide: true })));
+    assert.equal(many.size, 300);
+  });
+
+  test('fake values: numbers within 10 %, dates moved by 30 days at most or rounded down', () => {
+    const { fakeValue } = fakes();
+    for (const salary of [1000, 2500, 31999]) {
+      const v = fakeValue(salary, 'noise', { type: 'integer' });
+      assert.ok(Number.isInteger(v) && Math.abs(v - salary) <= salary * 0.1 + 1, `${salary} → ${v}`);
+    }
+    assert.match(fakeValue('1234.50', 'noise', { type: 'numeric' }), /^\d+\.\d{2}$/);
+    assert.equal(fakeValue('1987-06-15', 'year', { type: 'date' }), '1987-01-01');
+    assert.equal(fakeValue('1987-06-15 08:30:00', 'month', { type: 'timestamp without time zone' }), '1987-06-01 00:00:00');
+    const shifted = fakeValue('2026-03-10 14:00:00', 'noise', { type: 'timestamp without time zone' });
+    const days = Math.abs(Date.parse(shifted.replace(' ', 'T') + 'Z') - Date.parse('2026-03-10T14:00:00Z')) / 86400000;
+    assert.ok(days <= 30 && shifted.endsWith('14:00:00'), shifted);
+  });
+
+  test('a MySQL CREATE TABLE read line by line: columns, indexes, foreign keys', () => {
+    const ddl = [
+      'CREATE TABLE `orders` (',
+      '  `id` int NOT NULL AUTO_INCREMENT,',
+      '  `customer_id` int NOT NULL,',
+      "  `status` varchar(20) NOT NULL DEFAULT 'paid',",
+      '  `odd``name` text,',
+      '  PRIMARY KEY (`id`),',
+      '  UNIQUE KEY `uniq_ref` (`customer_id`,`status`),',
+      '  KEY `idx_status` (`status`),',
+      '  FULLTEXT KEY `ft_name` (`odd``name`),',
+      '  CONSTRAINT `orders_ibfk_1` FOREIGN KEY (`customer_id`) REFERENCES `customers` (`id`) ON DELETE CASCADE',
+      ') ENGINE=InnoDB AUTO_INCREMENT=401 DEFAULT CHARSET=utf8mb4',
+    ].join('\n');
+    const parsed = copy().parseMysqlCreateTable(ddl);
+    assert.deepEqual([...parsed.columns.keys()], ['id', 'customer_id', 'status', 'odd`name']);
+    assert.equal(parsed.columns.get('status'), "`status` varchar(20) NOT NULL DEFAULT 'paid'");
+    assert.deepEqual(parsed.indexes.map(i => [i.name, i.unique, i.columns.join('+')]), [['uniq_ref', true, 'customer_id+status'], ['idx_status', false, 'status'], ['ft_name', false, 'odd`name']]);
+    assert.deepEqual(parsed.foreignKeys.map(f => [f.name, f.references, f.columns[0], f.refColumns[0]]), [['orders_ibfk_1', 'customers', 'customer_id', 'id']]);
+  });
+
+  test('views and triggers made portable: no DEFINER, no qualifier of the source database', () => {
+    const view = 'CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`%` SQL SECURITY DEFINER VIEW `paid` AS select `shop`.`orders`.`id` AS `id` from `shop`.`orders`';
+    assert.equal(copy().portableMysql(view, 'shop'), 'CREATE ALGORITHM=UNDEFINED SQL SECURITY DEFINER VIEW `paid` AS select `orders`.`id` AS `id` from `orders`');
+    assert.equal(copy().portableMysql("CREATE DEFINER=`app`@`localhost` TRIGGER `t` BEFORE INSERT ON `orders` FOR EACH ROW SET NEW.status = 'x'", 'shop'),
+      "CREATE TRIGGER `t` BEFORE INSERT ON `orders` FOR EACH ROW SET NEW.status = 'x'");
   });
 });
