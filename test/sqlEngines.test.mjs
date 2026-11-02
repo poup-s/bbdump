@@ -365,6 +365,13 @@ describe('SQL Server helpers (no server needed)', () => {
     const plain = ss.sqlserverConnection({ host: 'h', port: 1500, user: 'u', database: 'd', sslMode: 'disable' });
     assert.deepEqual([plain.port, plain.encrypt, plain.label], [1500, false, 'h:1500']);
     assert.equal(ss.sqlserverIdent('a]b'), '[a]]b]');
+    // Through an SSH tunnel: the tunnel's end, no instance to look up, the certificate checked against the server's name
+    const tunnelled = ss.sqlserverConnection({ host: '127.0.0.1', port: 51234, user: 'u', password: 'p', database: 'd', sslMode: 'verify-ca', viaTunnel: true, tlsServerName: 'db.example.com', connectionString: 'Server=elsewhere;Database=other' });
+    assert.deepEqual([tunnelled.server, tunnelled.port, tunnelled.instanceName, tunnelled.database, tunnelled.encrypt, tunnelled.trustServerCertificate, tunnelled.serverName],
+      ['127.0.0.1', 51234, undefined, 'd', true, false, 'db.example.com']);
+    assert.equal(ss.tlsNameBehindSsh({ host: 'vps', remoteHost: 'localhost' }), 'vps');
+    assert.equal(ss.tlsNameBehindSsh({ host: 'vps', remoteHost: 'sql.internal' }), 'sql.internal');
+    assert.equal(ss.tlsNameBehindSsh(undefined), undefined);
   });
 
   test('read-only T-SQL: statements without ";" and the words that change things are refused', () => {

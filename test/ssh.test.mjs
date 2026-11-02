@@ -82,6 +82,25 @@ describe('MongoDB URLs on the server', () => {
   });
 });
 
+describe('SQL Server connection strings on the server', () => {
+  test('the search finds ADO.NET strings and sqlserver:// URLs (names only), DATABASE_URL first', { skip: process.platform === 'win32' }, () => {
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bbdump-envsearch-mssql-'));
+    const write = (rel, text) => { fs.mkdirSync(path.dirname(path.join(home, rel)), { recursive: true }); fs.writeFileSync(path.join(home, rel), text); };
+    write('srv/api/.env', 'ConnectionStrings__Default="Server=localhost,1433;Database=shop;User Id=sa;Password=hidden1"\nDATABASE_URL=sqlserver://sa:hidden2@localhost:1433/shop\nDATA_SOURCE_NAME=Data Source=db;Initial Catalog=x;Pwd=hidden3\nCACHE=redis://localhost\n');
+    write('srv/other/.env', 'DATABASE_URL=postgresql://a:b@localhost/c\n');
+    try {
+      const out = execFileSync('sh', ['-s'], { input: ssh.envSearchScript('sqlserver'), env: { ...process.env, HOME: home }, encoding: 'utf8', timeout: 60000 });
+      assert.ok(!out.includes('hidden'), 'no secret leaves the server');
+      const mine = ssh.parseEnvSearch(out, 'sqlserver').filter(m => m.file.startsWith(home));
+      assert.deepEqual(mine.map(m => [path.relative(home, m.file), m.variables]), [['srv/api/.env', ['DATABASE_URL', 'ConnectionStrings__Default', 'DATA_SOURCE_NAME']]]);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('MySQL / MariaDB URLs on the server', () => {
   test('the search finds mysql:// and mariadb:// URLs (names only), DATABASE_URL first', { skip: process.platform === 'win32' }, () => {
     const fs = require('node:fs');
