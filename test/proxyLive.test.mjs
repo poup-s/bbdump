@@ -255,9 +255,12 @@ describe('SQL Server through the project proxy', { skip: sqlServer ? false : 'BB
     try {
       for (let round = 0; round < 2; round++) {
         const app = await appPool(listen).connect();
-        const { recordset } = await app.request().query(`SELECT DB_NAME() AS db, SUSER_NAME() AS who,
-          (SELECT encrypt_option FROM sys.dm_exec_connections WHERE session_id = @@SPID) AS encrypted, (SELECT COUNT(*) FROM items) AS n`);
-        assert.deepEqual(recordset[0], { db: name, who: login, encrypted: 'TRUE', n: 2 });
+        const { recordset } = await app.request().query('SELECT DB_NAME() AS db, SUSER_NAME() AS who, @@SPID AS spid, (SELECT COUNT(*) FROM items) AS n');
+        const { spid, ...seen } = recordset[0];
+        assert.deepEqual(seen, { db: name, who: login, n: 2 });
+        // The server sees the proxy's connection encrypted (asked as sa: the login cannot view server state)
+        const encrypted = await admin.request().input('spid', mssql.Int, spid).query('SELECT encrypt_option FROM sys.dm_exec_connections WHERE session_id = @spid');
+        assert.equal(encrypted.recordset[0]?.encrypt_option, 'TRUE');
         // Results and statements longer than a packet, parameters, a write
         const big = await app.request().input('label', mssql.NVarChar, 'deux é').query("SELECT REPLICATE(CAST('x' AS nvarchar(max)), 100000) AS big, (SELECT id FROM items WHERE label = @label) AS id");
         assert.deepEqual([big.recordset[0].big.length, big.recordset[0].id], [100000, 2]);
