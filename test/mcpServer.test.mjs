@@ -247,6 +247,60 @@ describe('MCP server', { skip: built ? false : 'mcp-postgres is not built (npm r
     }
   });
 
+  test('DuckDB masking for the AI: masked columns faked wherever they come from, others shown, expressions starred', { skip: duckdbOnPath ? false : 'the duckdb tool is not in the PATH' }, async () => {
+    const { execFileSync } = await import('node:child_process');
+    const dir = fs.mkdtempSync(path.join(fs.realpathSync(process.env.TMPDIR || '/tmp'), 'bbdump-mcp-duckmask-'));
+    const saved = process.env.BBDUMP_CONFIG_PATH;
+    process.env.BBDUMP_CONFIG_PATH = path.join(dir, 'config.json');
+    const client = await load('sql/client.js');
+    try {
+      const file = path.join(dir, 'shop.duckdb');
+      const env = { ...process.env };
+      for (const name of ['AI_AGENT', 'CLAUDECODE', 'CLAUDE_CODE']) delete env[name];
+      execFileSync('duckdb', [file], { env, input: `CREATE TABLE customers (id INTEGER PRIMARY KEY, email VARCHAR, city VARCHAR);
+        CREATE SCHEMA crm; CREATE TABLE crm.contacts (id INTEGER, email VARCHAR);
+        CREATE TABLE orders (id INTEGER PRIMARY KEY, customer_id INTEGER, total INTEGER);
+        CREATE VIEW mails AS SELECT email FROM customers;
+        INSERT INTO customers VALUES (1, 'ana@corp.fr', 'Paris'), (2, 'bo@corp.fr', 'Lyon');
+        INSERT INTO crm.contacts VALUES (1, 'zoe@corp.fr');
+        INSERT INTO orders VALUES (10, 1, 12), (11, 2, 30);` });
+      fs.writeFileSync(path.join(dir, 'ai-masking.json'), JSON.stringify({ version: 1, databases: { dm: { enabled: true, columns: [
+        { table: 'main.customers', column: 'email', kind: 'email' }, { table: 'crm.contacts', column: 'email', kind: 'email' },
+      ] } } }));
+      const tools = await load('sql/tools.js');
+      await client.useSql({ id: 'dm', label: 'shop', engine: 'duckdb', file });
+      const shown = async (sql, values = []) => tools.protect(await client.readQuery(sql, values), { sql, values });
+      const real = /(ana|bo|zoe)@corp\.fr/;
+
+      const plain = await shown('SELECT id, email, city FROM customers ORDER BY id');
+      assert.deepEqual(plain.masked, ['email']);
+      assert.ok(plain.rows.every(r => /@example\.com$/.test(r.email)), JSON.stringify(plain.rows));
+      assert.deepEqual(plain.rows.map(r => [r.id, r.city]), [[1, 'Paris'], [2, 'Lyon']], 'columns left clear stay as they are');
+      const star = await shown('SELECT * FROM customers c JOIN orders o ON o.customer_id = c.id WHERE o.total > ? ORDER BY c.id', [20]);
+      assert.deepEqual(star.masked, ['email']);
+      assert.equal(star.rows[0].city, 'Lyon');
+      assert.doesNotMatch(JSON.stringify(star.rows), real);
+      const aliased = await shown('SELECT c.email AS who, o.total FROM orders o, customers c WHERE c.id = o.customer_id');
+      assert.deepEqual(aliased.masked, ['who']);
+      const other = await shown('SELECT email FROM crm.contacts');
+      assert.match(other.rows[0].email, /@example\.com$/);
+      // Not followed (expression, view, CTE): starred, never shown as is
+      for (const sql of ['SELECT upper(email) AS e FROM customers', 'SELECT * FROM mails', 'WITH x AS (SELECT email FROM customers) SELECT email FROM x', 'SELECT email FROM customers UNION SELECT email FROM crm.contacts']) {
+        const result = await shown(sql);
+        assert.doesNotMatch(JSON.stringify(result.rows), real, sql);
+        assert.ok(result.masked.length, sql);
+      }
+      // No masking for this database: rows as read
+      fs.writeFileSync(path.join(dir, 'ai-masking.json'), JSON.stringify({ version: 1, databases: {} }));
+      assert.equal((await shown('SELECT email FROM customers ORDER BY id')).rows[0].email, 'ana@corp.fr');
+    } finally {
+      await client.clearSql();
+      if (saved === undefined) delete process.env.BBDUMP_CONFIG_PATH;
+      else process.env.BBDUMP_CONFIG_PATH = saved;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('the helpers copied from src/shared are those of this build', () => {
     for (const file of ['mongoUri.ts', 'documents.ts', 'duckdbCli.ts', 'sqlserverUri.ts']) {
       const copy = path.join(process.cwd(), 'mcp-postgres', 'src', 'shared', file);

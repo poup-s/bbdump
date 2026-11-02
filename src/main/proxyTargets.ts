@@ -5,6 +5,7 @@
 import type { DatabaseConfig } from '../types/config';
 import { proxyProtocolOf } from '../shared/engines/proxy';
 import { mysqlConnection, type MysqlConnection } from '../shared/engines/mysqlUri';
+import { sqlserverConnection, tlsNameBehindSsh, type SqlServerConnection } from '../shared/engines/sqlserverUri';
 import { mongoConnection, mongoOption, parseMongoUri } from '../shared/engines/mongoUri';
 import type { TargetCredentials } from './pgProtocol';
 import type { MongoProxyTarget } from './mongoProxy';
@@ -15,7 +16,8 @@ export { proxyProtocolOf, type ProxyProtocol } from '../shared/engines/proxy';
 export type ProxyTarget =
     | (TargetCredentials & { engine: 'postgresql' })
     | { engine: 'mysql'; host: string; port: number; database: string; conn: MysqlConnection }
-    | { engine: 'mongodb'; host: string; port: number; database: string; mongo: MongoProxyTarget };
+    | { engine: 'mongodb'; host: string; port: number; database: string; mongo: MongoProxyTarget }
+    | { engine: 'sqlserver'; host: string; port: number; database: string; conn: SqlServerConnection };
 
 
 function postgresTarget(db: DatabaseConfig): TargetCredentials {
@@ -59,6 +61,15 @@ export function proxyTargetFor(db: DatabaseConfig, tunnel?: { host: string; port
             database: db.name, sslMode: db.sslMode as never, sslRootCert: db.sslRootCert, viaTunnel: !!tunnel,
         });
         return { engine: 'mysql', host: conn.host, port: conn.port, database: conn.database, conn };
+    }
+    if (protocol === 'sqlserver') {
+        const conn = sqlserverConnection({
+            connectionString: tunnel ? undefined : db.connectionString, host: tunnel?.host ?? db.host, port: tunnel?.port ?? db.port, user: db.user, password: db.password,
+            database: db.name, sslMode: db.sslMode as never, sslRootCert: db.sslRootCert, viaTunnel: !!tunnel,
+            tlsServerName: tunnel ? tlsNameBehindSsh(db.ssh) : undefined,
+        });
+        // A named instance: its port is asked to the SQL Server Browser on each connection
+        return { engine: 'sqlserver', host: conn.server, port: conn.port ?? 1434, database: conn.database, conn };
     }
     if (protocol === 'mongodb') {
         const { uri, database } = mongoConnection({

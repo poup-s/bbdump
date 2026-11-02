@@ -1,7 +1,8 @@
-// The local server of MySQL, MariaDB and MongoDB, against servers on this computer: what
-// answers, the account bbdump keeps, a database created then deleted with it. Skipped unless
-// BBDUMP_TEST_MYSQL / BBDUMP_TEST_MARIADB (127.0.0.1:port, root password
-// BBDUMP_TEST_MYSQL_PASSWORD) or BBDUMP_TEST_MONGO (127.0.0.1:port, no login) are set.
+// The local server of MySQL, MariaDB, MongoDB and SQL Server, against servers on this computer:
+// what answers, the account bbdump keeps, a database created then deleted with it. Skipped unless
+// BBDUMP_TEST_MYSQL / BBDUMP_TEST_MARIADB (127.0.0.1:port, root password BBDUMP_TEST_MYSQL_PASSWORD),
+// BBDUMP_TEST_MONGO (127.0.0.1:port, no login) or BBDUMP_TEST_SQLSERVER (sa password
+// BBDUMP_TEST_SQLSERVER_PASSWORD) are set.
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -105,5 +106,47 @@ describe('local MongoDB server', { skip: mongo ? false : 'BBDUMP_TEST_MONGO is n
     const other = await server.localServerState('mongodb', Number(process.env.BBDUMP_TEST_MYSQL.split(':')[1]));
     assert.equal(other.running, true);
     assert.equal(other.answering, undefined);
+  });
+});
+
+// SQL Server: BBDUMP_TEST_SQLSERVER (127.0.0.1:port), sa password BBDUMP_TEST_SQLSERVER_PASSWORD
+const sqlServer = process.env.BBDUMP_TEST_SQLSERVER;
+describe('local SQL Server', { skip: sqlServer ? false : 'BBDUMP_TEST_SQLSERVER is not set' }, () => {
+  const port = Number((sqlServer ?? ':0').split(':')[1]);
+  const saPassword = process.env.BBDUMP_TEST_SQLSERVER_PASSWORD ?? '';
+  const name = `bbdump_local_${suffix}`;
+
+  test('told by its PRELOGIN, then the sa account typed once, then a database created and deleted with it', async () => {
+    const first = await server.localServerState('sqlserver', port);
+    assert.deepEqual([first.running, first.answering, first.account], [true, 'sqlserver', 'needed']);
+    assert.match(first.version, /^1\d\.\d+\.\d+$/);
+    assert.equal((await server.saveLocalAccount('sqlserver', port, 'sa', 'not-the-password')).success, false);
+    const right = await server.saveLocalAccount('sqlserver', port, 'sa', saPassword);
+    assert.equal(right.success, true, right.error);
+    const saved = JSON.parse(fs.readFileSync('local-servers.json', 'utf8'))[`sqlserver:${port}`];
+    assert.equal(saved.user, 'sa');
+    assert.notEqual(saved.password, saPassword, 'kept encrypted');
+    assert.equal((await server.localServerState('sqlserver', port)).account, 'ready');
+
+    const created = await server.createLocalEngineDatabase('sqlserver', name, port, 'Local shop');
+    assert.equal(created.success, true, created.error);
+    const entry = cfg.getConfig().databases.find(d => d.id === created.id);
+    assert.deepEqual([entry.engine, entry.host, entry.port, entry.user, entry.sslMode, entry.isLocalBbdump], ['sqlserver', '127.0.0.1', port, 'sa', 'require', true]);
+    const registry = require(path.join(root, 'dist/main/engines/registry.js'));
+    const query = await registry.facetForDb(created.id, 'explorer.query', 'query');
+    assert.deepEqual((await query.run(created.id, { sql: 'SELECT DB_NAME() AS db' })).rows[0], { db: name });
+
+    assert.equal((await server.createLocalEngineDatabase('sqlserver', name, port)).success, false);
+    assert.equal((await server.createLocalEngineDatabase('sqlserver', 'tempdb', port)).success, false);
+    // Dropped even with bbdump's own connection still open on it
+    const dropped = await server.dropLocalEngineDatabase(created.id);
+    assert.equal(dropped.success, true, dropped.error);
+    assert.equal((await server.dropLocalEngineDatabase(created.id)).gone, true);
+    await require(path.join(root, 'dist/main/engines/sqlserver.js')).closeSqlServerPools();
+  });
+
+  test('a MySQL port is not taken for SQL Server', { skip: process.env.BBDUMP_TEST_MYSQL ? false : 'no MySQL server' }, async () => {
+    const other = await server.localServerState('sqlserver', Number(process.env.BBDUMP_TEST_MYSQL.split(':')[1]));
+    assert.deepEqual([other.running, other.answering], [true, undefined]);
   });
 });

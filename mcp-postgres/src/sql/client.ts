@@ -440,8 +440,8 @@ export function sqlActive(feature: MongoFeature = 'mcp.read'): ActiveSql {
 export interface ReadResult {
   rows: Row[];
   fields: string[];
-  /** Table and column each result column comes from, when the engine says so */
-  origins: Array<{ table: string | null; column: string | null }>;
+  /** Table and column each result column comes from, when the engine says so (schema: MySQL's database) */
+  origins: Array<{ schema?: string | null; table: string | null; column: string | null }>;
   truncated: boolean;
   duration: number;
 }
@@ -484,7 +484,7 @@ export async function readQuery(sql: string, values: unknown[] = [], options: { 
       return {
         rows: rows.slice(0, maxRows),
         fields: (fields ?? []).map((f) => f.name),
-        origins: (fields ?? []).map((f: FieldPacket & { orgTable?: string; orgName?: string }) => ({ table: f.orgTable || null, column: f.orgName || null })),
+        origins: (fields ?? []).map((f: FieldPacket & { db?: string; orgTable?: string; orgName?: string }) => ({ schema: f.db || null, table: f.orgTable || null, column: f.orgName || null })),
         truncated: rows.length > maxRows,
         duration,
       };

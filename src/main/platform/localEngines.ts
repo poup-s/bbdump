@@ -1,19 +1,21 @@
 /**
- * The local server of MySQL, MariaDB and MongoDB: how each system installs and starts it.
+ * The local server of MySQL, MariaDB, MongoDB and SQL Server: how each system installs and starts it.
  * Pure (commands and scripts only): localEngineServer.ts runs them.
  * - macOS: Homebrew (mysql, mariadb, mongodb/brew/mongodb-community), started with brew services.
  * - Linux: the distribution's packages through pkexec, with an account for bbdump created by
  *   the script (MySQL and MariaDB only: MongoDB is not in the distributions' repositories).
  * - Windows: winget (MongoDB silently; MariaDB with its installer, which asks for the root
  *   password). MySQL has no winget server package: its installer, by hand.
+ * - SQL Server, everywhere: Microsoft's container (Developer edition) through Docker, which the
+ *   user installs; it restarts with Docker. Without Docker, the command to type.
  */
 import type { LinuxFamily } from '../../types/setup';
 
-export type LocalEngine = 'mysql' | 'mariadb' | 'mongodb';
+export type LocalEngine = 'mysql' | 'mariadb' | 'mongodb' | 'sqlserver';
 
-export const LOCAL_ENGINES: readonly LocalEngine[] = ['mysql', 'mariadb', 'mongodb'];
+export const LOCAL_ENGINES: readonly LocalEngine[] = ['mysql', 'mariadb', 'mongodb', 'sqlserver'];
 
-export const LOCAL_ENGINE_PORT: Record<LocalEngine, number> = { mysql: 3306, mariadb: 3306, mongodb: 27017 };
+export const LOCAL_ENGINE_PORT: Record<LocalEngine, number> = { mysql: 3306, mariadb: 3306, mongodb: 27017, sqlserver: 1433 };
 
 /** The account bbdump creates when it can (Homebrew MariaDB, Linux): never root itself */
 export const LOCAL_ACCOUNT = 'bbdump';
@@ -22,14 +24,15 @@ export function isLocalEngine(value: unknown): value is LocalEngine {
     return typeof value === 'string' && (LOCAL_ENGINES as readonly string[]).includes(value);
 }
 
-const BREW_FORMULA: Record<LocalEngine, string> = { mysql: 'mysql', mariadb: 'mariadb', mongodb: 'mongodb/brew/mongodb-community' };
-const BREW_SERVICE: Record<LocalEngine, string> = { mysql: 'mysql', mariadb: 'mariadb', mongodb: 'mongodb-community' };
+type BrewEngine = Exclude<LocalEngine, 'sqlserver'>;
+const BREW_FORMULA: Record<BrewEngine, string> = { mysql: 'mysql', mariadb: 'mariadb', mongodb: 'mongodb/brew/mongodb-community' };
+const BREW_SERVICE: Record<BrewEngine, string> = { mysql: 'mysql', mariadb: 'mariadb', mongodb: 'mongodb-community' };
 
 /**
  * Homebrew: the commands, in order. MongoDB's formula lives in MongoDB's own tap, which
  * Homebrew 7 loads only once trusted (`brew trust`; older versions have no such command).
  */
-export function macosLocalSteps(engine: LocalEngine, brew: string): string[][] {
+export function macosLocalSteps(engine: BrewEngine, brew: string): string[][] {
     return [
         ...(engine === 'mongodb' ? [[brew, 'tap', 'mongodb/brew'], [brew, 'trust', '--tap', 'mongodb/brew']] : []),
         [brew, 'install', BREW_FORMULA[engine]],
@@ -37,7 +40,7 @@ export function macosLocalSteps(engine: LocalEngine, brew: string): string[][] {
     ];
 }
 
-export function macosStartStep(engine: LocalEngine, brew: string): string[] {
+export function macosStartStep(engine: BrewEngine, brew: string): string[] {
     return [brew, 'services', 'start', BREW_SERVICE[engine]];
 }
 
@@ -46,10 +49,12 @@ export const SERVER_BINARIES: Record<LocalEngine, string[]> = {
     mysql: ['mysqld'],
     mariadb: ['mariadbd', 'mysqld'],
     mongodb: ['mongod'],
+    sqlserver: ['sqlservr'],
 };
 
 /** Homebrew's own copies (found even when its bin folder is not in the app's PATH) */
 export function brewBinaryCandidates(engine: LocalEngine): string[] {
+    if (engine === 'sqlserver') return [];
     const name = engine === 'mongodb' ? 'mongodb-community' : engine;
     return ['/opt/homebrew/opt', '/usr/local/opt'].flatMap(prefix => SERVER_BINARIES[engine].map(bin => `${prefix}/${name}/bin/${bin}`));
 }
@@ -58,7 +63,7 @@ interface LinuxPackages { install: string; packages: string[]; service: string; 
 
 /** The distribution's packages of a server, or null when it has none (MongoDB, MySQL on Arch / SUSE) */
 export function linuxLocalPackages(engine: LocalEngine, family: LinuxFamily): LinuxPackages | null {
-    if (engine === 'mongodb' || family === 'unknown') return null;
+    if (engine === 'mongodb' || engine === 'sqlserver' || family === 'unknown') return null;
     if (engine === 'mariadb') {
         if (family === 'debian') return { install: 'DEBIAN_FRONTEND=noninteractive apt-get install -y', packages: ['mariadb-server'], service: 'mariadb', client: 'mariadb' };
         if (family === 'fedora') return { install: 'dnf install -y', packages: ['mariadb-server'], service: 'mariadb', client: 'mariadb' };
@@ -138,7 +143,8 @@ export function linuxLocalScript(engine: LocalEngine, family: LinuxFamily, passw
 
 export function linuxStartScript(engine: LocalEngine, family: LinuxFamily): string | null {
     const spec = linuxLocalPackages(engine, family);
-    const service = spec?.service ?? (engine === 'mongodb' ? 'mongod' : null);
+    // SQL Server installed with Microsoft's packages (not by bbdump): its service
+    const service = spec?.service ?? (engine === 'mongodb' ? 'mongod' : engine === 'sqlserver' ? 'mssql-server' : null);
     if (!service) return null;
     return [
         '#!/bin/bash',
@@ -163,10 +169,53 @@ export function wingetLocalArgs(engine: LocalEngine): string[] | null {
 }
 
 /** Windows services of each server (their installers' names) */
-export const WINDOWS_SERVICES: Record<LocalEngine, string[]> = { mysql: ['MySQL84', 'MySQL80', 'MySQL'], mariadb: ['MariaDB', 'MySQL'], mongodb: ['MongoDB'] };
+export const WINDOWS_SERVICES: Record<LocalEngine, string[]> = { mysql: ['MySQL84', 'MySQL80', 'MySQL'], mariadb: ['MariaDB', 'MySQL'], mongodb: ['MongoDB'], sqlserver: ['MSSQLSERVER', 'MSSQL$SQLEXPRESS'] };
+
+// --- SQL Server in Docker ------------------------------------------------------------------------
+
+export const SQLSERVER_CONTAINER = 'bbdump-sqlserver';
+export const SQLSERVER_VOLUME = 'bbdump-sqlserver-data';
+export const SQLSERVER_IMAGE = 'mcr.microsoft.com/mssql/server:2022-latest';
+/** The administrator of the container: its password is generated by bbdump */
+export const SQLSERVER_ADMIN = 'sa';
+
+/** Docker's own copies (found even when its folder is not in the app's PATH) */
+export function dockerCandidates(platform: NodeJS.Platform = process.platform): string[] {
+    if (platform === 'darwin') return ['/usr/local/bin/docker', '/opt/homebrew/bin/docker', '/Applications/Docker.app/Contents/Resources/bin/docker'];
+    if (platform === 'win32') return ['C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe'];
+    return ['/usr/bin/docker', '/usr/local/bin/docker', '/snap/bin/docker'];
+}
+
+/** A password SQL Server's policy accepts (upper and lower case, digit, symbol), from bbdump's random hex */
+export function sqlServerPassword(hex: string): string {
+    if (!/^[0-9a-f]{24,128}$/.test(hex)) throw new Error('Invalid generated password');
+    return `Bb1-${hex}`;
+}
+
+/** The container's settings, given in a file (never on the command line, where the process list shows it) */
+export function sqlServerEnvFile(password: string): string {
+    if (!/^Bb1-[0-9a-f]{24,128}$/.test(password)) throw new Error('Invalid generated password');
+    return ['ACCEPT_EULA=Y', 'MSSQL_PID=Developer', `MSSQL_SA_PASSWORD=${password}`, ''].join('\n');
+}
+
+/**
+ * docker's steps: the image (only built for x86-64: Apple Silicon runs it through Rosetta), then
+ * the container, reachable from this computer only, its data in a volume, restarted with Docker
+ */
+export function dockerSqlServerSteps(envFile: string): string[][] {
+    return [
+        ['pull', '--platform', 'linux/amd64', SQLSERVER_IMAGE],
+        ['run', '-d', '--name', SQLSERVER_CONTAINER, '--platform', 'linux/amd64', '--restart', 'unless-stopped',
+            '-p', `127.0.0.1:${LOCAL_ENGINE_PORT.sqlserver}:1433`, '-v', `${SQLSERVER_VOLUME}:/var/opt/mssql`, '--env-file', envFile, SQLSERVER_IMAGE],
+    ];
+}
 
 /** What to type by hand when bbdump cannot install it */
 export function manualLocalInstall(engine: LocalEngine, os: 'macos' | 'linux' | 'windows', family: LinuxFamily = 'unknown'): string {
+    // Docker first (https://docs.docker.com/get-docker/), then a password of your own for sa
+    if (engine === 'sqlserver') {
+        return `docker run -d --name ${SQLSERVER_CONTAINER} --platform linux/amd64 -e ACCEPT_EULA=Y -e MSSQL_PID=Developer -e MSSQL_SA_PASSWORD='<password>' -p 127.0.0.1:1433:1433 -v ${SQLSERVER_VOLUME}:/var/opt/mssql ${SQLSERVER_IMAGE}`;
+    }
     if (os === 'macos') return macosLocalSteps(engine, 'brew').map(step => step.join(' ')).join(' && ');
     if (os === 'windows') {
         const args = wingetLocalArgs(engine);

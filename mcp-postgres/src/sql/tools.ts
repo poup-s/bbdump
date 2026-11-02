@@ -12,6 +12,7 @@ import { toCsv, toMarkdown } from '../sql.js';
 import { fakeValue, readMaskingFile, rulesFromFile, type MaskKind } from '../masking.js';
 import { activeSql, explainSqlServer, keepReachable, readQuery, sqlActive, sqlError, type ReadResult } from './client.js';
 import { describeTable, listTables, schemaOverview } from './catalog.js';
+import { originsOf } from './origins.js';
 
 type Row = Record<string, unknown>;
 
@@ -39,17 +40,24 @@ const isClear = (value: unknown) => value === null || typeof value === 'number' 
  * Rows for the AI: chosen columns replaced by their fake, and columns of unknown origin (an
  * expression, a view) partly starred when the database has masked columns at all.
  */
-async function protect(result: ReadResult): Promise<{ rows: Row[]; masked: string[] }> {
+export async function protect(result: ReadResult, query: { sql: string; values: unknown[] }): Promise<{ rows: Row[]; masked: string[] }> {
   const masking = rules();
   if (!masking || !masking.size) return { rows: result.rows, masked: [] };
   const db = sqlActive();
-  const schema = db.database;
+  // SQL Server and DuckDB name tables schema.table outside dbo / main; the others have one schema
+  const several = db.engine === 'sqlserver' || db.engine === 'duckdb';
+  const home = db.engine === 'sqlserver' ? 'dbo' : db.engine === 'duckdb' ? 'main' : db.database;
   const { tables } = await listTables();
-  const base = new Set(tables.map((t) => t.name));
+  const base = new Set(tables.map((t) => (several && t.name.includes('.') ? t.name : `${home}.${t.name}`)));
+  // Their drivers do not say where a column comes from: read it from the query
+  const origins = several && result.rows.length
+    ? await originsOf(db.engine, { file: db.file }, query.sql, query.values, result.fields.length)
+    : result.origins;
   const plan = result.fields.map((field, i) => {
-    const origin = result.origins[i];
-    if (origin?.table && origin.column && base.has(origin.table)) {
-      return { field, kind: masking.get(`${schema}.${origin.table}.${origin.column}`) ?? null, unknown: false };
+    const origin = origins[i];
+    const table = origin?.table ? `${origin.schema ?? home}.${origin.table}` : '';
+    if (origin?.table && origin.column && base.has(table)) {
+      return { field, kind: masking.get(`${table}.${origin.column}`) ?? null, unknown: false };
     }
     // Unknown origin: never sent as is
     return { field, kind: 'partial' as MaskKind, unknown: true };
@@ -136,7 +144,7 @@ export function registerSqlTools(server: McpServer) {
     annotations: READ,
   }, async ({ sql, params, limit, format }) => run(async () => {
     const result = await readQuery(sql, params ?? [], { maxRows: limit });
-    const shown = await protect(result);
+    const shown = await protect(result, { sql, values: params ?? [] });
     const masking = shown.masked.length ? { masked_columns: shown.masked, masking: MASKING_NOTE } : {};
     return rowsResult(result.fields, shown.rows, format, {
       rows: shown.rows.length,

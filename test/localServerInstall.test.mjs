@@ -1,7 +1,7 @@
 // The local server installed for real by bbdump, on a machine without it: Linux (the
-// distribution's packages, through BBDUMP_PKEXEC=sudo in place of pkexec) or Windows (winget).
-// It installs software: only run on a throwaway machine (the CI). Skipped unless
-// BBDUMP_TEST_LOCAL_INSTALL names the engine (mariadb, mysql, mongodb).
+// distribution's packages, through BBDUMP_PKEXEC=sudo in place of pkexec), Windows (winget) or
+// SQL Server in Docker. It installs software: only run on a throwaway machine (the CI). Skipped
+// unless BBDUMP_TEST_LOCAL_INSTALL names the engine (mariadb, mysql, mongodb, sqlserver).
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -28,12 +28,14 @@ before(() => {
 });
 after(async () => {
   await require(path.join(root, 'dist/main/engines/mysql.js')).closeMysqlPools().catch(() => {});
+  await require(path.join(root, 'dist/main/engines/sqlserver.js')).closeSqlServerPools().catch(() => {});
   process.chdir(root);
 });
 
 /** Stops the installed server with the system's own tools (to check bbdump starts it again) */
 function stopService() {
-  if (process.platform === 'win32') execFileSync('net', ['stop', 'MongoDB'], { stdio: 'inherit' });
+  if (engine === 'sqlserver') execFileSync('docker', ['stop', 'bbdump-sqlserver'], { stdio: 'inherit' });
+  else if (process.platform === 'win32') execFileSync('net', ['stop', 'MongoDB'], { stdio: 'inherit' });
   else execFileSync('sudo', ['systemctl', 'stop', engine === 'mysql' ? 'mysql' : 'mariadb'], { stdio: 'inherit' });
 }
 
@@ -63,6 +65,13 @@ describe(`local ${engine} server installed by bbdump`, { skip: engine ? false : 
       await client.db(name).collection('items').insertOne({ a: 1 });
       assert.equal(await client.db(name).collection('items').countDocuments(), 1);
       await client.close();
+    } else if (engine === 'sqlserver') {
+      // The container's sa, with the password bbdump generated
+      assert.equal(entry.user, 'sa');
+      const registry = require(path.join(root, 'dist/main/engines/registry.js'));
+      const query = await registry.facetForDb(created.id, 'explorer.query', 'query');
+      assert.deepEqual((await query.run(created.id, { sql: 'SELECT DB_NAME() AS db' })).rows[0], { db: name });
+      await require(path.join(root, 'dist/main/engines/sqlserver.js')).closeSqlServerPools();
     } else {
       // Through bbdump's own facets, with the account the install created
       assert.equal(entry.user, 'bbdump');

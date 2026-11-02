@@ -224,6 +224,8 @@ const DUCKDB_FEATURES = {
     // Each change of the AI is one run of the duckdb tool (it commits it), with its undo point
     'mcp.write': 'beta',
     'mcp.undo': 'beta',
+    // Personal columns hidden from the AI: where a result column comes from is read from the query's parse tree
+    'mask.fields': 'beta',
     'chat': 'yes',
     'dashboards': 'yes',
 } as const satisfies Partial<Record<FeatureKey, Support>>;
@@ -257,9 +259,16 @@ const SQLSERVER_FEATURES = {
     'database.duplicate': 'beta',
     'sync.fromSource': 'beta',
     'sync.anonymize': 'beta',
+    // The project proxy: bbdump answers the app's login (no encryption on 127.0.0.1) and logs in
+    // with the saved account, TLS carried in TDS as the protocol wants
+    'proxy.tcp': 'beta',
+    // The local server: Microsoft's container (Developer edition) in Docker, its sa password generated
+    'local.server': 'beta',
     'mcp.read': 'beta',
     'mcp.write': 'beta',
     'mcp.undo': 'beta',
+    // Personal columns hidden from the AI: where a result column comes from is asked to SQL Server
+    'mask.fields': 'beta',
     'chat': 'beta',
     'dashboards': 'beta',
 } as const satisfies Partial<Record<FeatureKey, Support>>;

@@ -10,6 +10,7 @@ import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
+import { useFeatures } from '../composables/useFeatures';
 import { ipcRenderer } from '../electron';
 import type { Database, SslMode } from '../types';
 import { engineOf } from '../../../shared/engines/features';
@@ -43,6 +44,7 @@ const ICONS = {
 
 const { t } = useI18n();
 const { addToast } = useToast();
+const { isEnabled } = useFeatures();
 
 const isEditing = computed(() => !!store.editingDatabase);
 /** mysql, mariadb, sqlserver, sqlite or duckdb: the database's own when editing */
@@ -62,8 +64,8 @@ const step = ref(0);
 const section = ref<'connection' | 'backup' | 'schedule'>('connection');
 const mode = ref<'url' | 'manual' | 'ssh' | 'local'>('url');
 /** On this computer: the local server's port, and the engine that answers once bbdump can create a database there */
-const localPort = ref(MYSQL_DEFAULT_PORT);
-const localReady = ref<'mysql' | 'mariadb' | 'mongodb' | null>(null);
+const localPort = ref(isSqlServer.value ? SQLSERVER_DEFAULT_PORT : MYSQL_DEFAULT_PORT);
+const localReady = ref<'mysql' | 'mariadb' | 'mongodb' | 'sqlserver' | null>(null);
 /** Server via SSH: the tunnel's settings, and the database as the shared SSH fields edit it */
 const emptySsh = (): NonNullable<Database['ssh']> => ({ host: '', remoteHost: 'localhost', remotePort: defaultPort.value, envFile: '', envVar: 'DATABASE_URL' });
 const sshDraft = ref<NonNullable<Database['ssh']>>(emptySsh());
@@ -449,7 +451,7 @@ const modeOptions = computed(() => [
   { value: 'ssh' as const, label: t('ssh.modeShort'), icon: ICONS.terminal },
   // SQL Server: no local server yet
   // A new database on this computer's server (adding only)
-  ...(isEditing.value || isSqlServer.value ? [] : [{ value: 'local' as const, label: t('localServer.mode'), icon: ICONS.computer }]),
+  ...(isEditing.value || (isSqlServer.value && !isEnabled({ engine: 'sqlserver' }, 'local.server')) ? [] : [{ value: 'local' as const, label: t('localServer.mode'), icon: ICONS.computer }]),
 ]);
 const title = computed(() => (isEditing.value ? t('sqlModal.editTitle', { engine: label.value }) : t('sqlModal.addTitle', { engine: label.value })));
 const meta = computed(() => (isEditing.value ? label.value : `${label.value} · ${step.value + 1} / 2`));
@@ -536,7 +538,7 @@ const verifyHint = computed(() => {
 
           <!-- On this computer: a new database on the local server -->
           <template v-else-if="mode === 'local'">
-            <LocalServerPanel v-model:port="localPort" v-model:ready="localReady" :engine="engine === 'mariadb' ? 'mariadb' : 'mysql'" />
+            <LocalServerPanel v-model:port="localPort" v-model:ready="localReady" :engine="engine === 'mariadb' || engine === 'sqlserver' ? engine : 'mysql'" />
             <p v-if="shown('local')" class="text-[12px] text-red-600 dark:text-red-400" role="alert">{{ shown('local') }}</p>
             <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_6rem] gap-3">
               <FormField :label="t('localServer.newName')" for="sql-local-name" required :error="shown('name')">

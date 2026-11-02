@@ -174,16 +174,19 @@ jobs:
         run: node --test --test-timeout=180000 test/sqlserverLive.test.mjs
 
       # The project proxy (an app's login answered by bbdump) and the local server (account, databases)
-      - name: Project proxy and local server on the three servers
+      - name: Project proxy and local server on the four servers
         env:
           BBDUMP_TEST_MYSQL: 127.0.0.1:3306
           BBDUMP_TEST_MARIADB: 127.0.0.1:3307
           BBDUMP_TEST_MYSQL_PASSWORD: ci-root-pw
           BBDUMP_TEST_MONGO: 127.0.0.1:27017
+          BBDUMP_TEST_SQLSERVER: 127.0.0.1:1433
+          BBDUMP_TEST_SQLSERVER_PASSWORD: Ci-Sql-Pw-2026!
         run: node --test test/proxyLive.test.mjs test/localServerLive.test.mjs
 
   # The local server installed for real by bbdump on a machine without it: Linux packages (sudo in
-  # place of pkexec) and winget on Windows. Then a database created on it, and the server restarted.
+  # place of pkexec), winget on Windows, Docker for SQL Server. Then a database created on it, and
+  # the server restarted.
   local-server:
     strategy:
       fail-fast: false
@@ -192,6 +195,8 @@ jobs:
           - { os: ubuntu-24.04, engine: mariadb }
           - { os: ubuntu-24.04, engine: mysql }
           - { os: windows-latest, engine: mongodb }
+          # SQL Server: Microsoft's container, through the runner's Docker
+          - { os: ubuntu-24.04, engine: sqlserver }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

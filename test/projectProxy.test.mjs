@@ -167,6 +167,19 @@ describe('proxy targets and URLs', () => {
     assert.equal(proxyProtocolOf({ engine: 'mariadb' }), 'mysql');
     assert.equal(proxyProtocolOf({}), 'postgresql');
     assert.equal(proxyProtocolOf({ engine: 'sqlite' }), null);
+    assert.equal(proxyProtocolOf({ engine: 'sqlserver' }), 'sqlserver');
+    assert.equal(proxyUrl('sqlserver', 14330, 'shop'), 'sqlserver://127.0.0.1:14330;database=shop;user=shop;password=shop;encrypt=false');
+  });
+
+  test('SQL Server: the fields, TLS, a named instance and the tunnel', () => {
+    const saved = { engine: 'sqlserver', name: 'shop', host: 'db.example.com', port: 1433, user: 'app', password: 'pw', sslMode: 'verify-full' };
+    const t = targets.proxyTargetFor(saved);
+    assert.equal(t.engine, 'sqlserver');
+    assert.deepEqual([t.conn.server, t.conn.port, t.conn.user, t.conn.password, t.conn.database, t.conn.encrypt, t.conn.trustServerCertificate], ['db.example.com', 1433, 'app', 'pw', 'shop', true, false]);
+    const named = targets.proxyTargetFor({ ...saved, host: 'pc\\SQLEXPRESS', port: 1433 });
+    assert.deepEqual([named.conn.server, named.conn.instanceName, named.conn.port], ['pc', 'SQLEXPRESS', undefined]);
+    const tunnelled = targets.proxyTargetFor({ ...saved, ssh: { host: 'vps.example.com', remoteHost: 'localhost' } }, { host: '127.0.0.1', port: 41000 });
+    assert.deepEqual([tunnelled.conn.server, tunnelled.conn.port, tunnelled.conn.serverName], ['127.0.0.1', 41000, 'vps.example.com']);
   });
 
   test('MySQL: the fields, TLS and the tunnel', () => {
@@ -222,6 +235,21 @@ describe('local servers: what each system runs', () => {
     assert.equal(local.wingetLocalArgs('mysql'), null);
     assert.match(local.manualLocalInstall('mysql', 'windows'), /dev\.mysql\.com/);
   });
+
+  test('SQL Server: Microsoft\'s container in Docker, its password in a file, never on the command line', () => {
+    const password = local.sqlServerPassword('a'.repeat(48));
+    assert.match(password, /^Bb1-a{48}$/, 'upper and lower case, digit and symbol: the server\'s policy');
+    assert.throws(() => local.sqlServerPassword("x'; rm"), /Invalid generated password/);
+    assert.equal(local.sqlServerEnvFile(password), `ACCEPT_EULA=Y\nMSSQL_PID=Developer\nMSSQL_SA_PASSWORD=${password}\n`);
+    const [pull, run] = local.dockerSqlServerSteps('/tmp/env');
+    assert.deepEqual(pull, ['pull', '--platform', 'linux/amd64', local.SQLSERVER_IMAGE]);
+    assert.ok(run.includes('127.0.0.1:1433:1433'), 'reachable from this computer only');
+    assert.deepEqual(run.slice(run.indexOf('--env-file'), run.indexOf('--env-file') + 2), ['--env-file', '/tmp/env']);
+    assert.ok(!run.join(' ').includes(password));
+    assert.match(local.manualLocalInstall('sqlserver', 'macos'), /^docker run .*MSSQL_SA_PASSWORD='<password>'/);
+    assert.equal(local.linuxLocalScript('sqlserver', 'debian', 'c'.repeat(48)), null);
+    assert.equal(local.LOCAL_ENGINE_PORT.sqlserver, 1433);
+  });
 });
 
 describe('copies: names and anonymized fields', () => {
@@ -229,6 +257,7 @@ describe('copies: names and anonymized fields', () => {
     const { validLocalName } = require(path.join(root, 'dist/main/localEngineServer.js'));
     for (const name of ['mysql', 'sys', 'information_schema', 'performance_schema', 'MySQL']) assert.equal(validLocalName('mysql', name), false, name);
     for (const name of ['admin', 'local', 'config']) assert.equal(validLocalName('mongodb', name), false, name);
+    for (const name of ['master', 'model', 'msdb', 'tempdb', 'TempDB']) assert.equal(validLocalName('sqlserver', name), false, name);
     assert.equal(validLocalName('mysql', 'shop'), true);
     assert.equal(restoreToNew.validNewName('admin', 'mongodb'), false);
     assert.equal(restoreToNew.validNewName('Config', 'mongodb'), false);

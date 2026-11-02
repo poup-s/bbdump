@@ -134,6 +134,10 @@
     you ask, or only those of the last days).
   - AI assistants (MCP) can insert, update and delete rows: each change waits for your approval in
     bbdump and keeps an undo point, undone by the assistant or from the AI journal.
+  - **Anonymize for AI**: the personal columns you choose reach the AI anonymized. bbdump reads
+    each query to know where a column of the result comes from (a column of a table, through an
+    alias, a join or `*`); a column it cannot follow (an expression, a view, a `WITH` or a
+    `UNION`) is partly starred.
 - **SQL Server and Azure SQL databases (beta).** **Add an external connection** offers SQL Server:
   a connection string (`sqlserver://…`, a JDBC URL, or `Server=…;Initial Catalog=…` as Azure shows
   it) or the address field by field, a named instance (`host\SQLEXPRESS`) included, with TLS
@@ -165,6 +169,17 @@
   - The **database chat**, **dashboards** and AI assistants (MCP) work in T-SQL. Assistants can also
     insert, update and delete rows, each change in one transaction, approved by you in bbdump, with
     an undo point (rows given back with their ids and dates).
+  - **Anonymize for AI**: the personal columns you choose reach the AI anonymized. SQL Server says
+    where each column of a result comes from (an alias or a join included); an expression is
+    partly starred.
+  - The **project proxy**: an app connects to `127.0.0.1` with any login and `encrypt=false`; bbdump
+    logs in to SQL Server with the saved account, through TLS when the database asks for it and
+    through SSH when it is reached that way. Windows and Entra ID logins are not relayed, and an
+    app that insists on encryption (`Encrypt=strict`) is refused.
+  - **This computer**: bbdump runs SQL Server (Developer edition, free for development) in Docker,
+    with an `sa` password it generates and keeps encrypted, then creates your database on it;
+    Docker restarts it. Without Docker, the command to type is shown. A SQL Server already
+    running here asks for its administrator account once.
 
 ### Changed
 

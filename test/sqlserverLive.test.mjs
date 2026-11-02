@@ -319,6 +319,27 @@ describe('SQL Server for real', { skip: server ? false : 'BBDUMP_TEST_SQLSERVER 
       await assert.rejects(client.readQuery('SELECT 1 AS x DELETE FROM orders'), /allowed/);
       assert.ok((await client.explainSqlServer('SELECT * FROM orders WHERE id = 1')).rows.length > 0);
 
+      // Masking for the AI: SQL Server says where each column comes from; expressions are starred
+      fs.writeFileSync(path.join(tmp, 'ai-masking.json'), JSON.stringify({ version: 1, databases: { [ids.source]: { enabled: true, columns: [
+        { table: 'dbo.customers', column: 'email', kind: 'email' },
+      ] } } }));
+      const tools = await mcp('sql/tools.js');
+      const shown = async (sql, values = []) => tools.protect(await client.readQuery(sql, values), { sql, values });
+      const real = /(alice|bruno|odd)@example\.com/;
+      const plain = await shown('SELECT id, name, email FROM customers WHERE city = ? ORDER BY id', ['Paris']);
+      assert.deepEqual(plain.masked, ['email']);
+      assert.deepEqual(plain.rows.map(r => r.name), ['Alice', 'a.b% (odd)'], 'columns left clear stay as they are');
+      assert.doesNotMatch(JSON.stringify(plain.rows), real);
+      const joined = await shown('SELECT TOP (3) o.id, c.email AS who FROM orders o JOIN customers c ON c.id = o.customer_id ORDER BY o.id');
+      assert.deepEqual(joined.masked, ['who']);
+      assert.doesNotMatch(JSON.stringify(joined.rows), real);
+      for (const sql of ['SELECT UPPER(email) AS e FROM customers', 'SELECT email FROM customers UNION SELECT name FROM users']) {
+        const result = await shown(sql);
+        assert.doesNotMatch(JSON.stringify(result.rows).toLowerCase(), real, sql);
+        assert.ok(result.masked.length, sql);
+      }
+      fs.rmSync(path.join(tmp, 'ai-masking.json'));
+
       // Changes: one transaction, ? as @pN, the identity given read back; a failure leaves nothing
       const { encodeRow } = require(path.join(root, 'dist/shared/engines/sqlRows.js'));
       const before = (await client.readQuery('SELECT * FROM users WHERE id = 2')).rows;

@@ -1,5 +1,6 @@
 /**
- * Project proxy: PostgreSQL here, MySQL / MariaDB (mysqlProxy.ts) and MongoDB (mongoProxy.ts).
+ * Project proxy: PostgreSQL here, MySQL / MariaDB (mysqlProxy.ts), MongoDB (mongoProxy.ts) and
+ * SQL Server (sqlserverProxy.ts).
  *
  * Each project gets a local listening port (e.g. 54320).
  * Clients connect with any credentials — the proxy always replies AuthOk.
@@ -26,6 +27,7 @@ import {
 import type { ProxyTarget } from './proxyTargets';
 import { proxyMysqlConnection } from './mysqlProxy';
 import { proxyMongoConnection } from './mongoProxy';
+import { proxySqlServerConnection } from './sqlserverProxy';
 
 export { TargetCredentials } from './pgProtocol';
 export type { ProxyTarget } from './proxyTargets';
@@ -157,6 +159,20 @@ class TcpProxyManager {
         if (target.engine === 'mysql') {
             try {
                 watchServer(await proxyMysqlConnection(clientSocket, target.conn, log));
+                if (serverSocket) {
+                    clientSocket.pipe(serverSocket);
+                    (serverSocket as net.Socket).pipe(clientSocket);
+                }
+            } catch (err) {
+                logger.error(`[proxy:${projectId}] Connection error: ${getErrorMessage(err)}`);
+                cleanup();
+            }
+            return;
+        }
+        // SQL Server: the PRELOGIN and login answered by bbdump, then a plain pipe
+        if (target.engine === 'sqlserver') {
+            try {
+                watchServer(await proxySqlServerConnection(clientSocket, target.conn, log));
                 if (serverSocket) {
                     clientSocket.pipe(serverSocket);
                     (serverSocket as net.Socket).pipe(clientSocket);

@@ -1,5 +1,5 @@
 /**
- * The local server of MySQL, MariaDB and MongoDB: what runs on this computer, installing and
+ * The local server of MySQL, MariaDB, MongoDB and SQL Server: what runs on this computer, installing and
  * starting it, the account bbdump uses, and the databases created on it (saved with
  * isLocalBbdump: deleting one in bbdump drops it on the server).
  *
@@ -8,7 +8,10 @@
  * MariaDB only lets the system user in through its socket: on request bbdump creates a
  * "bbdump" account there. Otherwise the user types an administrator account once.
  * MongoDB installed by Homebrew or winget has no login: none is needed.
+ * SQL Server: bbdump runs Microsoft's container in Docker with a generated sa password (saved like
+ * the accounts above); a server installed otherwise asks for its administrator once.
  */
+import { spawn } from 'child_process';
 import { randomBytes, randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
@@ -23,14 +26,16 @@ import { getErrorMessage } from './utils';
 import { app } from 'electron';
 import { quoteIdent } from '../shared/engines/sqlGuard';
 import { parseGreeting, readPacket } from './mysqlProxy';
+import { ENCRYPT, TDS, buildPrelogin, parsePrelogin, readTdsMessage, tdsPackets } from './sqlserverProxy';
 import { defaultWhich, firstExisting, isPortOpen, run } from './platform/probe';
 import { defaultBrewPath, runBrew } from './platform/macos';
 import { runScriptWithPkexec } from './platform/linux';
 import { detectEnvironment, installFamily } from './platform/environment';
 import { wingetCandidates } from './platform/windows';
 import {
-    LOCAL_ACCOUNT, LOCAL_ENGINE_PORT, SERVER_BINARIES, WINDOWS_SERVICES, brewBinaryCandidates, linuxLocalScript, linuxStartScript,
-    macosLocalSteps, macosStartStep, manualLocalInstall, wingetLocalArgs, type LocalEngine,
+    LOCAL_ACCOUNT, LOCAL_ENGINE_PORT, SERVER_BINARIES, SQLSERVER_ADMIN, SQLSERVER_CONTAINER, WINDOWS_SERVICES, brewBinaryCandidates, dockerCandidates,
+    dockerSqlServerSteps, linuxLocalScript, linuxStartScript, macosLocalSteps, macosStartStep, manualLocalInstall, sqlServerEnvFile, sqlServerPassword,
+    wingetLocalArgs, type LocalEngine,
 } from './platform/localEngines';
 
 type SystemOs = 'macos' | 'linux' | 'windows';
@@ -63,7 +68,7 @@ export interface LocalServerState {
 
 interface SavedAccount { user: string; password: string }
 const accountsFile = () => path.join(pathManager.appDataPath, 'local-servers.json');
-const accountKey = (engine: LocalEngine, port: number) => `${engine === 'mongodb' ? 'mongodb' : 'mysql'}:${port}`;
+const accountKey = (engine: LocalEngine, port: number) => `${engine === 'mongodb' || engine === 'sqlserver' ? engine : 'mysql'}:${port}`;
 
 function readAccounts(): Record<string, { user: string; password: string; savedAt?: string }> {
     try {
@@ -181,9 +186,89 @@ async function mongoAccess(port: number, account?: SavedAccount): Promise<{ ok: 
     }
 }
 
+/** A SQL Server on a port: its PRELOGIN answer gives its version (no login needed) */
+async function sqlServerGreeting(port: number): Promise<{ version: string } | null> {
+    const socket = net.createConnection({ host: '127.0.0.1', port });
+    try {
+        await new Promise<void>((resolve, reject) => {
+            socket.setTimeout(1500, () => reject(new Error('timeout')));
+            socket.once('connect', resolve);
+            socket.once('error', reject);
+        });
+        socket.setTimeout(0);
+        socket.write(tdsPackets(TDS.PRELOGIN, buildPrelogin([[0, Buffer.alloc(6)], [1, Buffer.from([ENCRYPT.NOT_SUP])]])));
+        const answer = await Promise.race([readTdsMessage(socket), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000))]);
+        const version = answer.type === TDS.RESPONSE ? parsePrelogin(answer.payload).get(0) : undefined;
+        if (!version || version.length < 4) return null;
+        return { version: `${version[0]}.${version[1]}.${version.readUInt16BE(2)}` };
+    } catch {
+        return null;
+    } finally {
+        socket.destroy();
+    }
+}
+
+/** A login to the local SQL Server (its certificate is its own: not checked on this computer) */
+async function sqlServerLogin(port: number, account: SavedAccount, database = 'master') {
+    const mssql = await import('mssql');
+    const pool = new mssql.ConnectionPool({
+        server: '127.0.0.1', port, user: account.user, password: account.password, database,
+        options: { encrypt: true, trustServerCertificate: true }, connectionTimeout: 8000,
+    });
+    return pool.connect();
+}
+
+async function canLogInSqlServer(port: number, account: SavedAccount): Promise<boolean> {
+    try {
+        await (await sqlServerLogin(port, account)).close();
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+async function dockerPath(): Promise<string | null> {
+    return (await defaultWhich('docker')) ?? firstExisting(dockerCandidates());
+}
+
+/** bbdump's SQL Server container exists (running or not) */
+async function sqlServerContainer(docker: string | null): Promise<boolean> {
+    if (!docker) return false;
+    const result = await run(docker, ['container', 'inspect', '--format', '{{.State.Status}}', SQLSERVER_CONTAINER], 10000).catch(() => null);
+    return !!result && result.code === 0;
+}
+
+/** A command's output, line by line, as it comes (docker pull's progress) */
+function runLines(file: string, args: string[], onLine: (line: string) => void, timeoutMs: number): Promise<{ code: number | null; output: string }> {
+    return new Promise((resolve) => {
+        let output = '';
+        const child = spawn(file, args, { windowsHide: true });
+        const timer = setTimeout(() => child.kill(), timeoutMs);
+        const take = (chunk: Buffer) => {
+            const text = chunk.toString('utf8');
+            output = (output + text).slice(-20000);
+            for (const line of text.split(/\r?\n|\r/)) if (line.trim()) onLine(line.trim());
+        };
+        child.stdout.on('data', take);
+        child.stderr.on('data', take);
+        child.on('error', (error) => { clearTimeout(timer); resolve({ code: null, output: `${output}\n${error.message}` }); });
+        child.on('close', (code) => { clearTimeout(timer); resolve({ code, output }); });
+    });
+}
+
+/** SQL Server takes a while to accept logins after its port opens (longer under Rosetta) */
+async function waitForSqlServerLogin(port: number, account: SavedAccount, seconds: number): Promise<boolean> {
+    for (let i = 0; i < seconds; i += 3) {
+        if (await canLogInSqlServer(port, account)) return true;
+        await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+    return false;
+}
+
 /** The account bbdump logs in with, or null */
 async function workingAccount(engine: LocalEngine, port: number): Promise<SavedAccount | null> {
     const saved = savedAccount(engine, port);
+    if (engine === 'sqlserver') return saved && await canLogInSqlServer(port, saved) ? saved : null;
     if (engine === 'mongodb') {
         if ((await mongoAccess(port)).ok) return { user: '', password: '' };
         return saved && (await mongoAccess(port, saved)).ok ? saved : null;
@@ -204,6 +289,12 @@ async function windowsService(engine: LocalEngine): Promise<string | null> {
 }
 
 async function installedBinary(engine: LocalEngine): Promise<boolean> {
+    if (engine === 'sqlserver') {
+        if (await sqlServerContainer(await dockerPath())) return true;
+        if (process.platform === 'linux' && fs.existsSync('/opt/mssql/bin/sqlservr')) return true;
+        if (process.platform === 'win32') return (await windowsService(engine)) !== null;
+        return false;
+    }
     if (process.platform === 'darwin' && firstExisting(brewBinaryCandidates(engine))) return true;
     for (const name of SERVER_BINARIES[engine]) if (await defaultWhich(name)) return true;
     if (process.platform === 'win32') return (await windowsService(engine)) !== null;
@@ -238,9 +329,10 @@ export async function localServerState(engine: LocalEngine, port = LOCAL_ENGINE_
     const base = {
         engine, port, os: system,
         installCommand: manualLocalInstall(engine, system, family),
-        canInstall: system === 'macos' ? !!(await brewPath())
-            : system === 'windows' ? !!wingetLocalArgs(engine) && !!(await wingetPath())
-                : !!linuxLocalScript(engine, family, '0'.repeat(32)) && !!(await rootRunner()),
+        canInstall: engine === 'sqlserver' ? !!(await dockerPath())
+            : system === 'macos' ? !!(await brewPath())
+                : system === 'windows' ? !!wingetLocalArgs(engine) && !!(await wingetPath())
+                    : !!linuxLocalScript(engine, family, '0'.repeat(32)) && !!(await rootRunner()),
     };
     if (!(await isPortOpen(port, '127.0.0.1', 1500))) {
         return { ...base, installed, running: false, account: 'unknown', canCreateAccount: false, canStart: installed };
@@ -253,6 +345,15 @@ export async function localServerState(engine: LocalEngine, port = LOCAL_ENGINE_
         return {
             ...base, installed: true, running: true, answering: 'mongodb', version: access.version,
             account: account ? 'ready' : 'needed', user: account?.user || undefined, canCreateAccount: false, canStart: false,
+        };
+    }
+    if (engine === 'sqlserver') {
+        const answer = await sqlServerGreeting(port);
+        if (!answer) return { ...base, installed, running: true, account: 'unknown', canCreateAccount: false, canStart: false };
+        const account = await workingAccount(engine, port);
+        return {
+            ...base, installed: true, running: true, answering: 'sqlserver', version: answer.version,
+            account: account ? 'ready' : 'needed', user: account?.user, canCreateAccount: false, canStart: false,
         };
     }
     const greeting = await mysqlGreeting(port);
@@ -285,6 +386,7 @@ export async function installLocalServer(engine: LocalEngine, onLine: (line: str
     const system = systemOs();
     const port = LOCAL_ENGINE_PORT[engine];
     try {
+        if (engine === 'sqlserver') return await installSqlServerContainer(onLine);
         if (system === 'macos') {
             const brew = await brewPath();
             if (!brew) return { success: false, error: 'Homebrew is not installed' };
@@ -323,10 +425,51 @@ export async function installLocalServer(engine: LocalEngine, onLine: (line: str
     }
 }
 
+/**
+ * SQL Server in Docker: the image, then the container with a generated sa password (in a file
+ * read by docker, deleted right after), then a login once the server accepts it
+ */
+async function installSqlServerContainer(onLine: (line: string) => void): Promise<{ success: boolean; error?: string }> {
+    const docker = await dockerPath();
+    if (!docker) return { success: false, error: 'Docker is not installed: install it, or run the command shown' };
+    const info = await run(docker, ['info', '--format', '{{.ServerVersion}}'], 20000);
+    if (info.code !== 0) return { success: false, error: 'Docker is installed but not running: start it, then try again' };
+    const port = LOCAL_ENGINE_PORT.sqlserver;
+    if (await sqlServerContainer(docker)) return { success: false, error: `A container named ${SQLSERVER_CONTAINER} already exists: start it, or remove it first` };
+    // A container installed before kept its data (and its sa password) in the volume: the saved one is used again
+    const password = savedAccount('sqlserver', port)?.password || sqlServerPassword(randomBytes(24).toString('hex'));
+    const envDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bbdump-sqlserver-'));
+    const envFile = path.join(envDir, 'env');
+    try {
+        fs.writeFileSync(envFile, sqlServerEnvFile(password), { mode: 0o600 });
+        for (const step of dockerSqlServerSteps(envFile)) {
+            onLine(`docker ${step[0]} ${step[step.length - 1]}`);
+            const result = await runLines(docker, step, onLine, 30 * 60 * 1000);
+            if (result.code !== 0) return { success: false, error: lastLines(result.output, 5) || `docker ${step[0]} failed` };
+        }
+    } finally {
+        fs.rmSync(envDir, { recursive: true, force: true });
+    }
+    if (!(await waitForPort(port, 120))) return { success: false, error: 'Installed, but the server does not answer yet: start it, then check again' };
+    const account = { user: SQLSERVER_ADMIN, password };
+    onLine('Waiting for SQL Server to accept logins');
+    if (!(await waitForSqlServerLogin(port, account, 180))) {
+        return { success: false, error: 'The server runs, but refuses the generated password (a volume kept from an earlier install?): type its sa account' };
+    }
+    saveAccount('sqlserver', port, account);
+    logger.info('Local SQL Server installed (Docker)');
+    return { success: true };
+}
+
 export async function startLocalServer(engine: LocalEngine): Promise<{ success: boolean; error?: string }> {
     const system = systemOs();
     try {
-        if (system === 'macos') {
+        const docker = engine === 'sqlserver' ? await dockerPath() : null;
+        if (engine === 'sqlserver' && await sqlServerContainer(docker)) {
+            const result = await run(docker!, ['start', SQLSERVER_CONTAINER], 60000);
+            if (result.code !== 0) return { success: false, error: /daemon|connect/i.test(result.stderr) ? 'Docker is not running: start it, then try again' : lastLines(result.stderr || result.stdout, 3) };
+        } else if (system === 'macos') {
+            if (engine === 'sqlserver') return { success: false, error: 'No SQL Server container found' };
             const brew = await brewPath();
             if (!brew) return { success: false, error: 'Homebrew is not installed' };
             const result = await runBrew(macosStartStep(engine, brew), () => {});
@@ -347,7 +490,9 @@ export async function startLocalServer(engine: LocalEngine): Promise<{ success: 
             // 1056: already running
             if (result.code !== 0 && result.code !== 1056) return { success: false, error: result.stderr.trim() || `The service did not start (sc: ${result.code})` };
         }
-        if (!(await waitForPort(LOCAL_ENGINE_PORT[engine], 30))) return { success: false, error: 'The server does not answer yet' };
+        if (!(await waitForPort(LOCAL_ENGINE_PORT[engine], engine === 'sqlserver' ? 90 : 30))) return { success: false, error: 'The server does not answer yet' };
+        const saved = engine === 'sqlserver' ? savedAccount(engine, LOCAL_ENGINE_PORT[engine]) : null;
+        if (saved) await waitForSqlServerLogin(LOCAL_ENGINE_PORT[engine], saved, 90);
         return { success: true };
     } catch (error) {
         return { success: false, error: getErrorMessage(error) };
@@ -361,6 +506,14 @@ export async function saveLocalAccount(engine: LocalEngine, port: number, user: 
         if (engine === 'mongodb') {
             const access = await mongoAccess(port, { user, password });
             if (!access.ok) return { success: false, error: 'This account cannot list the databases of the server (wrong password, or not an administrator)' };
+        } else if (engine === 'sqlserver') {
+            const pool = await sqlServerLogin(port, { user, password });
+            try {
+                const { recordset } = await pool.request().query("SELECT HAS_PERMS_BY_NAME(NULL, NULL, 'CREATE ANY DATABASE') AS can");
+                if (!recordset[0]?.can) return { success: false, error: 'This account cannot create databases on the server' };
+            } finally {
+                await pool.close();
+            }
         } else {
             const conn = await mysqlLogin({ port, user, password });
             await conn.end();
@@ -375,7 +528,7 @@ export async function saveLocalAccount(engine: LocalEngine, port: number, user: 
 
 /** Homebrew's MariaDB: a "bbdump" account created through the system user's socket */
 export async function createLocalAccount(engine: LocalEngine, port: number): Promise<{ success: boolean; error?: string }> {
-    if (engine === 'mongodb') return { success: false, error: 'Not needed for MongoDB' };
+    if (engine === 'mongodb' || engine === 'sqlserver') return { success: false, error: `Not needed for ${engine === 'mongodb' ? 'MongoDB' : 'SQL Server'}` };
     try {
         const socketPath = await socketAdmin();
         if (!socketPath) return { success: false, error: 'bbdump cannot reach the server as an administrator: type an account' };
@@ -400,7 +553,7 @@ export async function createLocalAccount(engine: LocalEngine, port: number): Pro
 }
 
 /** Databases of the servers themselves: never created nor dropped by bbdump */
-const SYSTEM_DATABASES = new Set(['mysql', 'sys', 'information_schema', 'performance_schema', 'admin', 'local', 'config']);
+const SYSTEM_DATABASES = new Set(['mysql', 'sys', 'information_schema', 'performance_schema', 'admin', 'local', 'config', 'master', 'model', 'msdb', 'tempdb']);
 
 export function validLocalName(engine: LocalEngine, name: string): boolean {
     if (SYSTEM_DATABASES.has(name.toLowerCase())) return false;
@@ -426,7 +579,7 @@ export async function createLocalEngineDatabase(engine: LocalEngine, name: strin
     if (!account) return { success: false, error: 'bbdump has no account on the local server' };
     const actual = state.answering;
     const config = getConfig();
-    const sameFamily = (e?: string) => (actual === 'mongodb' ? e === 'mongodb' : e === 'mysql' || e === 'mariadb');
+    const sameFamily = (e?: string) => (actual === 'mongodb' || actual === 'sqlserver' ? e === actual : e === 'mysql' || e === 'mariadb');
     if (config.databases.some(d => sameFamily(d.engine) && d.name === name && LOCAL_HOSTS.includes(d.host) && d.port === port)) {
         return { success: false, error: `${name} is already saved in bbdump` };
     }
@@ -440,6 +593,15 @@ export async function createLocalEngineDatabase(engine: LocalEngine, name: strin
                 if (databases.some(d => d.name === name)) return { success: false, error: `A database named ${name} already exists on this server` };
             } finally {
                 await client.close().catch(() => {});
+            }
+        } else if (actual === 'sqlserver') {
+            const pool = await sqlServerLogin(port, account);
+            try {
+                const { recordset } = await pool.request().input('name', name).query('SELECT DB_ID(@name) AS id');
+                if (recordset[0]?.id !== null && recordset[0]?.id !== undefined) return { success: false, error: `A database named ${name} already exists on this server` };
+                await pool.request().batch(`CREATE DATABASE ${quoteIdent(name, 'tsql')}`);
+            } finally {
+                await pool.close();
             }
         } else {
             const conn = await mysqlLogin({ port, user: account.user, password: account.password });
@@ -472,6 +634,8 @@ export async function createLocalEngineDatabase(engine: LocalEngine, name: strin
         retentionCount: Number.isInteger(settings.retentionCount) && settings.retentionCount! > 0 ? settings.retentionCount : undefined,
         isLocalBbdump: true,
         ...(actual === 'mongodb' && account.user ? { mongo: { authSource: 'admin' } } : {}),
+        // The local server's own certificate: TLS without checking it
+        ...(actual === 'sqlserver' ? { sslMode: 'require' } : {}),
     };
     config.databases.push(entry);
     saveConfig(config);
@@ -479,12 +643,12 @@ export async function createLocalEngineDatabase(engine: LocalEngine, name: strin
     return { success: true, id: entry.id };
 }
 
-/** Deleting a database bbdump created on a local MySQL / MariaDB / MongoDB server */
+/** Deleting a database bbdump created on a local MySQL / MariaDB / MongoDB / SQL Server server */
 export async function dropLocalEngineDatabase(id: string): Promise<{ success: boolean; error?: string; gone?: boolean }> {
     const db = getConfig().databases.find(d => d.id === id);
     if (!db || !db.isLocalBbdump) return { success: false, error: 'Not a database bbdump created on this computer' };
     if (!LOCAL_HOSTS.includes(db.host) || db.ssh || db.connectionString) return { success: false, error: 'Not a database of this computer' };
-    const engine = db.engine === 'mongodb' ? 'mongodb' : db.engine === 'mariadb' ? 'mariadb' : 'mysql';
+    const engine = db.engine === 'mongodb' || db.engine === 'sqlserver' ? db.engine : db.engine === 'mariadb' ? 'mariadb' : 'mysql';
     // Never a server's own database, whatever an old or edited entry says
     if (!validLocalName(engine, db.name) || SYSTEM_DATABASES.has(db.name.toLowerCase())) return { success: false, error: `${db.name} is not a database bbdump can delete` };
     try {
@@ -497,6 +661,19 @@ export async function dropLocalEngineDatabase(id: string): Promise<{ success: bo
                 await client.db(db.name).dropDatabase();
             } finally {
                 await client.close().catch(() => {});
+            }
+            return { success: true };
+        }
+        if (db.engine === 'sqlserver') {
+            const pool = await sqlServerLogin(db.port, { user: db.user, password });
+            try {
+                const { recordset } = await pool.request().input('name', db.name).query('SELECT DB_ID(@name) AS id');
+                if (recordset[0]?.id === null || recordset[0]?.id === undefined) return { success: true, gone: true };
+                // Its open connections (the app's pools) are closed first
+                const quoted = quoteIdent(db.name, 'tsql');
+                await pool.request().batch(`ALTER DATABASE ${quoted} SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE ${quoted}`);
+            } finally {
+                await pool.close();
             }
             return { success: true };
         }

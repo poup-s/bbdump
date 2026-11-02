@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * The local server of MySQL, MariaDB or MongoDB, in the "On this computer" mode of the add
+ * The local server of MySQL, MariaDB, MongoDB or SQL Server, in the "On this computer" mode of the add
  * dialogs: what runs on the port, and the one next step (install, start, an account). Ready
  * when bbdump can create a database on it.
  */
@@ -12,7 +12,7 @@ import { manifestFor } from '../../../shared/engines/manifests';
 import FormField from './ui/FormField.vue';
 import { btnPrimary, btnSecondary, inputClass, monoInputClass } from './ui/classes';
 
-type LocalEngine = 'mysql' | 'mariadb' | 'mongodb';
+type LocalEngine = 'mysql' | 'mariadb' | 'mongodb' | 'sqlserver';
 interface LocalServerState {
   engine: LocalEngine; port: number; os: 'macos' | 'linux' | 'windows';
   running: boolean; answering?: LocalEngine; version?: string; installed: boolean;
@@ -31,11 +31,15 @@ const state = ref<LocalServerState | null>(null);
 const checking = ref(false);
 const busy = ref<'install' | 'start' | 'account' | 'create-account' | null>(null);
 const progressLine = ref('');
-const account = ref({ user: props.engine === 'mongodb' ? 'admin' : 'root', password: '' });
+const account = ref({ user: props.engine === 'mongodb' ? 'admin' : props.engine === 'sqlserver' ? 'sa' : 'root', password: '' });
 const accountError = ref('');
 
 const label = (engine?: string) => manifestFor(engine ?? props.engine)?.label ?? engine ?? props.engine;
-const sameFamily = computed(() => !state.value?.answering || (props.engine === 'mongodb') === (state.value.answering === 'mongodb'));
+/** MySQL and MariaDB answer for each other; MongoDB and SQL Server only for themselves */
+const family = (engine: string) => (engine === 'mariadb' ? 'mysql' : engine);
+const sameFamily = computed(() => !state.value?.answering || family(props.engine) === family(state.value.answering));
+/** SQL Server runs in Docker */
+const docker = computed(() => props.engine === 'sqlserver');
 
 const check = async () => {
   checking.value = true;
@@ -158,6 +162,7 @@ const tone = computed(() => {
           <template v-else-if="ready && state?.user">{{ t('localServer.readyAs', { user: state.user }) }}</template>
           <template v-else-if="ready">{{ t('localServer.readyNoLogin') }}</template>
           <template v-else-if="state?.running && state.answering && sameFamily && state.account === 'needed'">{{ t(state.canCreateAccount ? 'localServer.accountCreateHint' : 'localServer.accountHint') }}</template>
+          <template v-else-if="state && !state.running && !state.installed && docker">{{ t(state.canInstall ? 'localServer.dockerInstallHint' : 'localServer.dockerManualHint', { engine: label() }) }}</template>
           <template v-else-if="state && !state.running && !state.installed">{{ t(state.canInstall ? 'localServer.installHint' : 'localServer.manualHint', { engine: label() }) }}</template>
         </p>
       </div>

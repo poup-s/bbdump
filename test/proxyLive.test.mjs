@@ -1,7 +1,8 @@
-// The project proxy against real servers: an app connects with any login (MySQL, MariaDB) or
-// none (MongoDB), the proxy logs in with the saved account and the app works on the target
+// The project proxy against real servers: an app connects with any login (MySQL, MariaDB, SQL Server)
+// or none (MongoDB), the proxy logs in with the saved account and the app works on the target
 // database. Skipped unless BBDUMP_TEST_MYSQL / BBDUMP_TEST_MARIADB (host:port, root password
-// BBDUMP_TEST_MYSQL_PASSWORD) or BBDUMP_TEST_MONGO (host:port, no login needed) are set.
+// BBDUMP_TEST_MYSQL_PASSWORD), BBDUMP_TEST_MONGO (host:port, no login needed) or
+// BBDUMP_TEST_SQLSERVER (host:port, sa password BBDUMP_TEST_SQLSERVER_PASSWORD) are set.
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -207,6 +208,117 @@ describe('MongoDB through the project proxy', { skip: mongoServer ? false : 'BBD
       await assert.rejects(app.connect().then(() => app.db().collection('items').findOne({})), err => /bbdump proxy|Authentication failed|closed/i.test(err.message));
     } finally {
       await app.close().catch(() => {});
+      proxy.stopProxy(project);
+    }
+  });
+});
+
+// SQL Server: BBDUMP_TEST_SQLSERVER (host:port) with the sa password in BBDUMP_TEST_SQLSERVER_PASSWORD
+const sqlServer = process.env.BBDUMP_TEST_SQLSERVER;
+describe('SQL Server through the project proxy', { skip: sqlServer ? false : 'BBDUMP_TEST_SQLSERVER is not set' }, () => {
+  const [host, portText] = (sqlServer ?? '127.0.0.1:1433').split(':');
+  const port = Number(portText);
+  const saPassword = process.env.BBDUMP_TEST_SQLSERVER_PASSWORD ?? '';
+  const name = `bbdump_px_${suffix}`;
+  const login = `bbpx_${process.pid}`;
+  const loginPassword = 'Px-Secret-2026!';
+  let mssql;
+  let admin;
+  before(async () => {
+    mssql = require(path.join(root, 'node_modules/mssql'));
+    admin = await new mssql.ConnectionPool({ server: host, port, user: 'sa', password: saPassword, options: { encrypt: true, trustServerCertificate: true } }).connect();
+    await admin.request().batch(`CREATE DATABASE [${name}]`);
+    await admin.request().batch(`CREATE LOGIN [${login}] WITH PASSWORD = '${loginPassword}', CHECK_POLICY = OFF`);
+    await admin.request().batch(`USE [${name}]; CREATE USER [${login}] FOR LOGIN [${login}]; ALTER ROLE db_owner ADD MEMBER [${login}];
+      CREATE TABLE items (id INT PRIMARY KEY, label NVARCHAR(40)); INSERT INTO items VALUES (1, N'one'), (2, N'deux é')`);
+  });
+  after(async () => {
+    await admin?.request().batch(`ALTER DATABASE [${name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [${name}]`).catch(() => {});
+    await admin?.request().batch(`DROP LOGIN [${login}]`).catch(() => {});
+    await admin?.close();
+  });
+
+  const start = async (saved) => {
+    const target = targets.proxyTargetFor({ id: 'x', engine: 'sqlserver', name, host, port, user: login, password: loginPassword, sslMode: 'require', output: '', cron: '', ...saved });
+    const listen = await freePort();
+    const project = `p_sqlserver_${listen}`;
+    await proxy.startProxy(project, listen, target, name);
+    return { listen, project };
+  };
+  const appPool = (listen, options = {}) => new mssql.ConnectionPool({
+    server: '127.0.0.1', port: listen, user: 'app', password: 'anything', database: 'whatever',
+    options: { encrypt: false, trustServerCertificate: true, ...options }, connectionTimeout: 15000,
+  });
+
+  test('any login reaches the target database as the saved login, over TLS to the server', async () => {
+    const { listen, project } = await start();
+    try {
+      for (let round = 0; round < 2; round++) {
+        const app = await appPool(listen).connect();
+        const { recordset } = await app.request().query(`SELECT DB_NAME() AS db, SUSER_NAME() AS who,
+          (SELECT encrypt_option FROM sys.dm_exec_connections WHERE session_id = @@SPID) AS encrypted, (SELECT COUNT(*) FROM items) AS n`);
+        assert.deepEqual(recordset[0], { db: name, who: login, encrypted: 'TRUE', n: 2 });
+        // Results and statements longer than a packet, parameters, a write
+        const big = await app.request().input('label', mssql.NVarChar, 'deux é').query("SELECT REPLICATE(CAST('x' AS nvarchar(max)), 100000) AS big, (SELECT id FROM items WHERE label = @label) AS id");
+        assert.deepEqual([big.recordset[0].big.length, big.recordset[0].id], [100000, 2]);
+        await app.request().query(`INSERT INTO items VALUES (${10 + round}, N'${'y'.repeat(30)}')`);
+        await app.close();
+      }
+      const { recordset } = await admin.request().query(`SELECT COUNT(*) AS n FROM [${name}].dbo.items`);
+      assert.equal(recordset[0].n, 4);
+    } finally {
+      proxy.stopProxy(project);
+    }
+  });
+
+  test('a database saved without encryption: the login goes in clear when the server allows it', async () => {
+    const { listen, project } = await start({ sslMode: 'disable' });
+    try {
+      const app = await appPool(listen).connect();
+      const { recordset } = await app.request().query('SELECT SUSER_NAME() AS who, (SELECT COUNT(*) FROM items) AS n');
+      assert.deepEqual(recordset[0], { who: login, n: 2 });
+      await app.close();
+    } finally {
+      proxy.stopProxy(project);
+    }
+  });
+
+  test('a wrong saved password: the app gets the server\'s reason', async () => {
+    const { listen, project } = await start({ password: 'wrong' });
+    try {
+      await assert.rejects(appPool(listen).connect(), err => /Login failed/i.test(err.message));
+    } finally {
+      proxy.stopProxy(project);
+    }
+  });
+
+  test('an unreachable server: the app gets the proxy\'s reason', async () => {
+    const closed = await freePort();
+    const target = targets.proxyTargetFor({ id: 'x', engine: 'sqlserver', name, host: '127.0.0.1', port: closed, user: login, password: loginPassword, sslMode: 'require', output: '', cron: '' });
+    const listen = await freePort();
+    await proxy.startProxy(`p_sqlserver_down_${listen}`, listen, target, name);
+    try {
+      await assert.rejects(appPool(listen).connect(), err => /bbdump proxy/i.test(err.message));
+    } finally {
+      proxy.stopProxy(`p_sqlserver_down_${listen}`);
+    }
+  });
+
+  test('an app that insists on encryption is refused (the URL says encrypt=false)', async () => {
+    const { listen, project } = await start();
+    try {
+      await assert.rejects(appPool(listen, { encrypt: true }).connect());
+    } finally {
+      proxy.stopProxy(project);
+    }
+  });
+
+  test('sqlcmd works through it', { skip: hasTool('sqlcmd') ? false : 'no sqlcmd (go-sqlcmd)' }, async () => {
+    const { listen, project } = await start();
+    try {
+      const { stdout } = await run('sqlcmd', ['-S', `127.0.0.1,${listen}`, '-U', 'app', '-P', 'anything', '-N', 'disable', '-h', '-1', '-Q', 'SET NOCOUNT ON; SELECT COUNT(*) FROM items'], { encoding: 'utf8', timeout: 30000 });
+      assert.match(stdout.trim(), /^\d+$/);
+    } finally {
       proxy.stopProxy(project);
     }
   });
