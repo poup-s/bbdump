@@ -22,7 +22,11 @@ type Args<F> = Omit<FirstArg<F>, 'host' | 'port' | 'user' | 'password' | 'databa
  * What a dialog's connection test sends, already resolved by the handler: password decrypted
  * (or typed), SSH tunnel opened when there is one. `mongo` only for MongoDB, `sqlite` for SQLite.
  */
-export type ConnectionTestInput = FirstArg<typeof explorer.testConnection> & { mongo?: MongoSettings; sqlite?: SqliteSettings; duckdb?: SqliteSettings };
+export type ConnectionTestInput = FirstArg<typeof explorer.testConnection> & {
+    mongo?: MongoSettings; sqlite?: SqliteSettings; duckdb?: SqliteSettings;
+    /** Through an SSH tunnel: the name the server's certificate is checked against (SQL Server) */
+    tlsServerName?: string;
+};
 
 export interface ConnectionFacet {
     /** Server version and number of entities (tables, collections) */

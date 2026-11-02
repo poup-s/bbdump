@@ -1,5 +1,5 @@
 /**
- * Changes to MySQL, MariaDB and SQLite tables. Each one waits for the user's approval in bbdump,
+ * Changes to MySQL, MariaDB, SQL Server, SQLite and DuckDB tables. Each one waits for the user's approval in bbdump,
  * and the structured ones (insert, update, delete rows) save an undo point when they can: the
  * rows before and after, by primary key, including the rows a foreign key cascades to, in the
  * same encrypted journal as the other engines. The bbdump app undoes them.
@@ -17,7 +17,7 @@ import { currentClientName } from '../tools/mutations.js';
 import { encodeRow, rowKey } from '../shared/sqlRows.js';
 import { statementCount, statementKind } from '../shared/sqlGuard.js';
 import { activeSql, keepReachable, sqlActive, sqlError, withWrite, type WriteSession } from './client.js';
-import { describeTable, knownTable, qi } from './catalog.js';
+import { describeTable, knownTable, qi, qt } from './catalog.js';
 import { plainValue } from './tools.js';
 
 type Row = Record<string, unknown>;
@@ -78,7 +78,7 @@ async function cascadeRows(session: WriteSession, table: string, rows: Row[], de
     const match = fk.columns.length === 1
       ? { sql: `${qi(fk.columns[0])} IN (${parentValues.map(() => '?').join(', ')})`, values: parentValues.map((v) => v[0]) }
       : { sql: parentValues.map(() => `(${fk.columns.map((c) => `${qi(c)} = ?`).join(' AND ')})`).join(' OR '), values: parentValues.flat() };
-    const children = await session.rows(`SELECT * FROM ${qi(fk.table)} WHERE ${match.sql}`, match.values);
+    const children = await session.rows(`SELECT * FROM ${qt(fk.table)} WHERE ${match.sql}`, match.values);
     if (!children.length) continue;
     const childKey = (await describeTable(fk.table)).primary_key;
     if (!childKey.length) throw new Error(`the table ${fk.table} (reached by ${fk.on_delete}) has no primary key`);
@@ -96,7 +96,7 @@ async function undoTables(session: WriteSession, captured: Array<{ table: string
     let after = entry.after;
     if (!after) {
       const keys = byKeys(entry.primaryKey, entry.rows.map((row) => keyOf(row, entry.primaryKey)));
-      after = await session.rows(`SELECT * FROM ${qi(entry.table)} WHERE ${keys.sql}`, keys.values);
+      after = await session.rows(`SELECT * FROM ${qt(entry.table)} WHERE ${keys.sql}`, keys.values);
     }
     tables.push({ schema, table: entry.table, primaryKey: entry.primaryKey, before: entry.rows.map(encodeRow), after: after.map(encodeRow) });
   }
@@ -156,9 +156,13 @@ async function run(work: () => Promise<ToolResult>): Promise<ToolResult> {
   }
 }
 
+/** The rows read before a change, locked until it ends: FOR UPDATE (MySQL), a table hint (SQL Server) */
+const lockedFrom = (session: WriteSession, table: string) => (session.dialect === 'tsql' ? `${qt(table)} WITH (UPDLOCK, HOLDLOCK)` : qt(table));
+const lockAfter = (session: WriteSession) => (session.dialect === 'mysql' ? ' FOR UPDATE' : '');
+
 /** Rows the WHERE matches now (for the confirmation) */
 async function countMatching(table: string, where: { sql: string; values: unknown[] }): Promise<number> {
-  return withWrite(async (session) => Number((await session.rows(`SELECT COUNT(*) AS n FROM ${qi(table)} WHERE ${where.sql}`, where.values))[0]?.n ?? 0));
+  return withWrite(async (session) => Number((await session.rows(`SELECT COUNT(*) AS n FROM ${qt(table)} WHERE ${where.sql}`, where.values))[0]?.n ?? 0));
 }
 
 const tableParam = z.string().min(1).describe('Table name, as listed by sql_list_tables');
@@ -166,8 +170,8 @@ const whereParam = z.record(z.string(), z.any()).describe('Rows to change: {"col
 
 export function registerSqlWriteTools(server: McpServer) {
   server.registerTool('sql_insert_rows', {
-    title: 'Insert rows (MySQL, MariaDB, SQLite)',
-    description: `MySQL, MariaDB or SQLite: inserts rows ({"column": value} each, at most ${MAX_INSERT}). Columns left out get their default (auto-increment ids too). Confirmed by the user in bbdump; an undo point is saved (the table needs a primary key).`,
+    title: 'Insert rows (MySQL, MariaDB, SQL Server, SQLite, DuckDB)',
+    description: `MySQL, MariaDB, SQL Server, SQLite or DuckDB: inserts rows ({"column": value} each, at most ${MAX_INSERT}). Columns left out get their default (auto-increment ids too). Confirmed by the user in bbdump; an undo point is saved (the table needs a primary key).`,
     inputSchema: { table: tableParam, rows: z.array(z.record(z.string(), z.any())).min(1).max(MAX_INSERT).describe('Rows to insert') },
     annotations: WRITE,
   }, async ({ table, rows }) => run(async () => {
@@ -176,8 +180,8 @@ export function registerSqlWriteTools(server: McpServer) {
     const primaryKey = info.primary_key;
     const columnsOf = (row: Row) => Object.keys(row);
     const statement = (row: Row) => columnsOf(row).length
-      ? `INSERT INTO ${qi(table)} (${columnsOf(row).map(qi).join(', ')}) VALUES (${columnsOf(row).map(() => '?').join(', ')})`
-      : `INSERT INTO ${qi(table)} DEFAULT VALUES`;
+      ? `INSERT INTO ${qt(table)} (${columnsOf(row).map(qi).join(', ')}) VALUES (${columnsOf(row).map(() => '?').join(', ')})`
+      : `INSERT INTO ${qt(table)} DEFAULT VALUES`;
     const preview = rows.slice(0, 3).map((row) => shown(statement(row), Object.values(row))).join(';\n') + (rows.length > 3 ? `;\n… (${rows.length} rows)` : '');
     const reason = primaryKey.length ? undefined : 'the table has no primary key';
     const refused = await confirm('sql_insert_rows', table, preview, `Insert ${rows.length} row(s) into ${table}${undoNote(!reason, reason)}`);
@@ -185,13 +189,19 @@ export function registerSqlWriteTools(server: McpServer) {
     const result = await withWrite(async (session) => {
       const inserted: Row[] = [];
       for (const row of rows) {
-        const sql = session.dialect === 'mysql' && !columnsOf(row).length ? `INSERT INTO ${qi(table)} () VALUES ()` : statement(row);
+        // DuckDB gives the row written back (it has no last id)
+        if (session.dialect === 'duckdb') {
+          const written = await session.rows(`${statement(row)} RETURNING *`, Object.values(row));
+          if (primaryKey.length) inserted.push(...written);
+          continue;
+        }
+        const sql = session.dialect === 'mysql' && !columnsOf(row).length ? `INSERT INTO ${qt(table)} () VALUES ()` : statement(row);
         const { insertId } = await session.run(sql, Object.values(row));
         if (!primaryKey.length) continue;
         // Read back by key: the auto-increment id given, or the key values sent
         const key = primaryKey.length === 1 && row[primaryKey[0]] === undefined ? [insertId] : primaryKey.map((c) => row[c]);
         const match = byKeys(primaryKey, [key]);
-        inserted.push(...await session.rows(`SELECT * FROM ${qi(table)} WHERE ${match.sql}`, match.values));
+        inserted.push(...await session.rows(`SELECT * FROM ${qt(table)} WHERE ${match.sql}`, match.values));
       }
       const tables = primaryKey.length ? [{ schema: activeSql()?.database ?? '', table, primaryKey, before: [], after: inserted.map(encodeRow) }] : null;
       return { inserted, tables };
@@ -204,8 +214,8 @@ export function registerSqlWriteTools(server: McpServer) {
   }));
 
   server.registerTool('sql_update_rows', {
-    title: 'Update rows (MySQL, MariaDB, SQLite)',
-    description: 'MySQL, MariaDB or SQLite: sets columns on the rows matching a where object. Confirmed by the user in bbdump (with the number of rows); the rows are read first and an undo point is saved (the table needs a primary key, and the key itself must not change).',
+    title: 'Update rows (MySQL, MariaDB, SQL Server, SQLite, DuckDB)',
+    description: 'MySQL, MariaDB, SQL Server, SQLite or DuckDB: sets columns on the rows matching a where object. Confirmed by the user in bbdump (with the number of rows); the rows are read first and an undo point is saved (the table needs a primary key, and the key itself must not change).',
     inputSchema: {
       table: tableParam,
       where: whereParam,
@@ -220,7 +230,7 @@ export function registerSqlWriteTools(server: McpServer) {
     const primaryKey = (await describeTable(table)).primary_key;
     const condition = whereOf(where);
     const assignments = Object.keys(set).map((c) => `${qi(c)} = ?`).join(', ');
-    const sql = `UPDATE ${qi(table)} SET ${assignments} WHERE ${condition.sql}`;
+    const sql = `UPDATE ${qt(table)} SET ${assignments} WHERE ${condition.sql}`;
     const count = await countMatching(table, condition);
     if (!count) return jsonResult({ updated: 0, note: 'No row matches: nothing was changed.' });
     const reason = !primaryKey.length ? 'the table has no primary key'
@@ -230,10 +240,9 @@ export function registerSqlWriteTools(server: McpServer) {
     if (refused) return refused;
     const result = await withWrite(async (session) => {
       if (reason) return { affected: (await session.run(sql, [...Object.values(set), ...condition.values])).affected, tables: null };
-      const lock = session.dialect === 'mysql' ? ' FOR UPDATE' : '';
-      const before = await session.rows(`SELECT * FROM ${qi(table)} WHERE ${condition.sql}${lock}`, condition.values);
+      const before = await session.rows(`SELECT * FROM ${lockedFrom(session, table)} WHERE ${condition.sql}${lockAfter(session)}`, condition.values);
       const keys = byKeys(primaryKey, before.map((row) => keyOf(row, primaryKey)));
-      const { affected } = await session.run(`UPDATE ${qi(table)} SET ${assignments} WHERE ${keys.sql}`, [...Object.values(set), ...keys.values]);
+      const { affected } = await session.run(`UPDATE ${qt(table)} SET ${assignments} WHERE ${keys.sql}`, [...Object.values(set), ...keys.values]);
       return { affected, tables: await undoTables(session, [{ table, primaryKey, rows: before }]) };
     });
     return jsonResult({
@@ -243,8 +252,8 @@ export function registerSqlWriteTools(server: McpServer) {
   }));
 
   server.registerTool('sql_delete_rows', {
-    title: 'Delete rows (MySQL, MariaDB, SQLite)',
-    description: 'MySQL, MariaDB or SQLite: deletes the rows matching a where object. Confirmed by the user in bbdump; the rows (and those a foreign key cascades to) are read first and an undo point is saved.',
+    title: 'Delete rows (MySQL, MariaDB, SQL Server, SQLite, DuckDB)',
+    description: 'MySQL, MariaDB, SQL Server, SQLite or DuckDB: deletes the rows matching a where object. Confirmed by the user in bbdump; the rows (and those a foreign key cascades to) are read first and an undo point is saved.',
     inputSchema: { table: tableParam, where: whereParam, all_rows: z.boolean().optional().describe('true to delete every row of the table (an empty where)') },
     annotations: WRITE,
   }, async ({ table, where, all_rows }) => run(async () => {
@@ -252,7 +261,7 @@ export function registerSqlWriteTools(server: McpServer) {
     if (!Object.keys(where).length && !all_rows) return errorResult('An empty where matches every row: pass all_rows: true if that is what the user wants.');
     const primaryKey = (await describeTable(table)).primary_key;
     const condition = whereOf(where);
-    const sql = `DELETE FROM ${qi(table)} WHERE ${condition.sql}`;
+    const sql = `DELETE FROM ${qt(table)} WHERE ${condition.sql}`;
     const count = await countMatching(table, condition);
     if (!count) return jsonResult({ deleted: 0, note: 'No row matches: nothing was deleted.' });
     const reason = !primaryKey.length ? 'the table has no primary key' : count > MAX_UNDO_ROWS ? `more than ${MAX_UNDO_ROWS} rows` : undefined;
@@ -260,8 +269,7 @@ export function registerSqlWriteTools(server: McpServer) {
     if (refused) return refused;
     const result = await withWrite(async (session) => {
       if (reason) return { affected: (await session.run(sql, condition.values)).affected, tables: null, cascaded: 0, reason };
-      const lock = session.dialect === 'mysql' ? ' FOR UPDATE' : '';
-      const before = await session.rows(`SELECT * FROM ${qi(table)} WHERE ${condition.sql}${lock}`, condition.values);
+      const before = await session.rows(`SELECT * FROM ${lockedFrom(session, table)} WHERE ${condition.sql}${lockAfter(session)}`, condition.values);
       let children: Awaited<ReturnType<typeof cascadeRows>> = [];
       let cascadeProblem: string | undefined;
       try {
@@ -270,7 +278,7 @@ export function registerSqlWriteTools(server: McpServer) {
         cascadeProblem = sqlError(err);
       }
       const keys = byKeys(primaryKey, before.map((row) => keyOf(row, primaryKey)));
-      const { affected } = await session.run(`DELETE FROM ${qi(table)} WHERE ${keys.sql}`, keys.values);
+      const { affected } = await session.run(`DELETE FROM ${qt(table)} WHERE ${keys.sql}`, keys.values);
       if (cascadeProblem) return { affected, tables: null, cascaded: 0, reason: cascadeProblem };
       const tables = await undoTables(session, [{ table, primaryKey, rows: before, after: [] }, ...children]);
       return { affected, tables, cascaded: children.reduce((n, c) => n + c.rows.length, 0), reason: undefined };
@@ -283,13 +291,13 @@ export function registerSqlWriteTools(server: McpServer) {
   }));
 
   server.registerTool('sql_execute', {
-    title: 'Run a statement that writes (MySQL, MariaDB, SQLite)',
-    description: 'MySQL, MariaDB or SQLite: runs ONE statement that changes data or structure (INSERT … SELECT, UPDATE with joins, CREATE INDEX, ALTER TABLE…). Confirmed by the user in bbdump. No undo point: prefer sql_insert_rows / sql_update_rows / sql_delete_rows when they fit, and offer create_backup before a risky change.',
+    title: 'Run a statement that writes (MySQL, MariaDB, SQL Server, SQLite, DuckDB)',
+    description: 'MySQL, MariaDB, SQL Server, SQLite or DuckDB: runs ONE statement that changes data or structure (INSERT … SELECT, UPDATE with joins, CREATE INDEX, ALTER TABLE…). Confirmed by the user in bbdump. No undo point: prefer sql_insert_rows / sql_update_rows / sql_delete_rows when they fit, and offer create_backup before a risky change.',
     inputSchema: { sql: z.string().min(1).describe('One statement'), params: z.array(z.any()).optional().describe('Values for the ? placeholders, in order') },
     annotations: WRITE,
   }, async ({ sql, params }) => run(async () => {
     const db = sqlActive('mcp.write');
-    const dialect = db.engine === 'sqlite' ? 'sqlite' : 'mysql';
+    const dialect = db.engine === 'sqlite' || db.engine === 'duckdb' ? db.engine : db.engine === 'sqlserver' ? 'tsql' : 'mysql';
     if (statementCount(sql, dialect) !== 1) return errorResult('Run exactly one statement at a time.');
     const kind = statementKind(sql, dialect);
     const text = shown(sql, params ?? []);

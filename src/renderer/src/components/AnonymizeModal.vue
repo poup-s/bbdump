@@ -61,7 +61,7 @@ const split = (k: string) => ownerOf.value.get(k) ?? { table: tableOf(k), column
 
 onMounted(async () => {
   try {
-    const result = await ipcRenderer.invoke('duplicate-anonymize-plan', props.sourceId);
+    const result = await ipcRenderer.invoke('duplicate-anonymize-plan', props.sourceId, isAi ? 'ai' : 'duplicate');
     if (!result?.success) throw new Error(result?.error || 'Unknown error');
     tables.value = result.plan.tables;
     const saved = isAi ? await ipcRenderer.invoke('ai-masking-get', props.sourceId) : null;

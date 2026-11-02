@@ -11,7 +11,7 @@ import { useFeatures } from '../composables/useFeatures';
 import { ipcRenderer } from '../electron';
 import { getErrorMessage } from '../utils';
 import { engineOf } from '../../../shared/engines/features';
-import { filePathOf, isMysqlFamily, manifestFor } from '../../../shared/engines/manifests';
+import { FILE_ENGINES, filePathOf, isMysqlFamily, manifestFor } from '../../../shared/engines/manifests';
 import AppModal from './ui/AppModal.vue';
 import { btnGhost, btnPrimary, selectClass } from './ui/classes';
 
@@ -51,7 +51,7 @@ const sources = computed(() => store.databases.filter(d => d.id !== target.value
 /** "host · PG 16" for PostgreSQL; the engine (and the file name for SQLite) for the others, which report no version */
 const serverLine = (side: { id: string; host: string; version: number }) => {
   const db = store.databases.find(d => d.id === side.id);
-  if (!side.version) return engineOf(db) === 'sqlite' ? (db?.sqlite?.path ?? '').split(/[\\/]/).pop() || 'SQLite' : `${side.host} · ${manifestFor(engineOf(db))?.label ?? ''}`;
+  if (!side.version) return FILE_ENGINES.includes(engineOf(db)) ? (filePathOf(db) ?? '').split(/[\\/]/).pop() || (manifestFor(engineOf(db))?.label ?? '') : `${side.host} · ${manifestFor(engineOf(db))?.label ?? ''}`;
   return `${side.host} · PG ${Math.floor(side.version / 10000)}`;
 };
 /** The update stopped at the backup: nothing else ran */
@@ -63,6 +63,8 @@ const st = (key: string, params?: Record<string, unknown>) => t(engineOf(target.
 const keepLocalKey = computed(() => {
   const engine = engineOf(target.value);
   if (engine === 'mongodb') return 'sync.keepLocalMongo';
+  if (engine === 'sqlserver') return 'sync.keepLocalSqlServer';
+  if (engine === 'duckdb') return 'sync.keepLocalDuckdb';
   return engine === 'sqlite' ? 'sync.keepLocalSqlite' : isMysqlFamily(engine) ? 'sync.keepLocalMysql' : 'sync.keepLocal';
 });
 const sourceId = ref('');

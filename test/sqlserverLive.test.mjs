@@ -2,7 +2,8 @@
 // BBDUMP_TEST_SQLSERVER_PASSWORD; skipped otherwise): the explorer, read-only queries, the
 // dashboards' examples, bbdump's own backup restored twice and into a new database (types,
 // identities, sequences, computed columns, views, functions, procedures, triggers), a restore
-// that fails leaving nothing changed, and the MCP server's reading tools.
+// that fails leaving nothing changed, copies (exact and anonymized) and "Update from…", and the
+// MCP server's tools (reads, changes in a transaction) with the app's undo.
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -124,7 +125,7 @@ describe('SQL Server for real', { skip: server ? false : 'BBDUMP_TEST_SQLSERVER 
 
   after(async () => {
     await require(path.join(root, 'dist/main/engines/sqlserver.js')).closeSqlServerPools();
-    for (const db of [name, `${name}_copy`, `${name}_new`, `${name}_broken`]) {
+    for (const db of [name, `${name}_copy`, `${name}_new`, `${name}_broken`, `${name}_dup`, `${name}_anon`]) {
       await admin([`IF DB_ID(N'${db}') IS NOT NULL BEGIN ALTER DATABASE [${db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [${db}]; END`]).catch(() => {});
     }
     process.chdir(root);
@@ -297,7 +298,7 @@ describe('SQL Server for real', { skip: server ? false : 'BBDUMP_TEST_SQLSERVER 
   });
 
   const mcpBuilt = fs.existsSync(path.join(root, 'mcp-postgres', 'build', 'sql', 'client.js'));
-  test('MCP server: tables, keys, read-only queries; changes refused', { skip: mcpBuilt ? false : 'mcp-postgres is not built (npm run build:mcp)' }, async () => {
+  test('MCP server: tables, keys, read-only queries; changes in a transaction, undone by the app', { skip: mcpBuilt ? false : 'mcp-postgres is not built (npm run build:mcp)' }, async () => {
     const saved = process.env.BBDUMP_CONFIG_PATH;
     process.env.BBDUMP_CONFIG_PATH = path.join(tmp, 'config.json');
     const mcp = (file) => import(pathToFileURL(path.join(root, 'mcp-postgres', 'build', file)).href);
@@ -316,13 +317,125 @@ describe('SQL Server for real', { skip: server ? false : 'BBDUMP_TEST_SQLSERVER 
       const read = await client.readQuery('SELECT TOP (2) id, name FROM customers WHERE city = ? ORDER BY id', ['Paris'], { maxRows: 10 });
       assert.deepEqual(read.rows.map(r => r.name), ['Alice', 'a.b% (odd)']);
       await assert.rejects(client.readQuery('SELECT 1 AS x DELETE FROM orders'), /allowed/);
-      assert.throws(() => client.sqlActive('mcp.write'), /read-only/);
       assert.ok((await client.explainSqlServer('SELECT * FROM orders WHERE id = 1')).rows.length > 0);
+
+      // Changes: one transaction, ? as @pN, the identity given read back; a failure leaves nothing
+      const { encodeRow } = require(path.join(root, 'dist/shared/engines/sqlRows.js'));
+      const before = (await client.readQuery('SELECT * FROM users WHERE id = 2')).rows;
+      const done = await client.withWrite(async (session) => {
+        const inserted = await session.run('INSERT INTO sales.audit (what) VALUES (?)', ['by the AI']);
+        const updated = await session.run('UPDATE users SET name = ? WHERE id = ?', ['Changed', 1]);
+        const removed = await session.run('DELETE FROM users WHERE id = ?', [2]);
+        return { inserted, updated, removed };
+      });
+      assert.ok(Number(done.inserted.insertId) > 1, String(done.inserted.insertId));
+      assert.deepEqual([done.updated.affected, done.removed.affected], [1, 1]);
+      await assert.rejects(client.withWrite(async (session) => {
+        await session.run('UPDATE users SET name = ? WHERE id = ?', ['Never', 1]);
+        throw new Error('stop');
+      }), /stop/);
+      assert.equal((await client.readQuery('SELECT name FROM users WHERE id = 1')).rows[0].name, 'Changed');
+      assert.equal(catalog.qt('sales.audit'), '[sales].[audit]');
+
+      // The app undoes it: the deleted row back with its id and its date, the changed one as it was
+      const undo = require(path.join(root, 'dist/main/sqlUndo.js'));
+      const nowRows = (await client.readQuery('SELECT * FROM users WHERE id = 1')).rows;
+      const tables = [
+        { schema: name, table: 'users', primaryKey: ['id'], before: [...before, { ...nowRows[0], name: 'Alice Martin' }].map(encodeRow), after: nowRows.map(encodeRow) },
+      ];
+      const preview = await undo.previewSqlUndo('sqlserver', ids.source, tables);
+      assert.deepEqual(preview.conflicts, []);
+      assert.deepEqual([preview.tables[0].toRestore, preview.tables[0].toRevert], [1, 1]);
+      const undone = await undo.undoSqlChange('sqlserver', ids.source, tables);
+      assert.deepEqual(undone.restored, { [`${name}.users`]: { deleted: 0, restored: 1, reverted: 1 } });
+      const back = (await client.readQuery('SELECT * FROM users ORDER BY id')).rows;
+      assert.deepEqual(back.map(r => r.name), ['Alice Martin', 'Bruno Petit']);
+      assert.equal(encodeRow(back[1]), encodeRow(before[0]));
+      // Undone twice: the rows are no longer as the change left them
+      const conflicts = await undo.previewSqlUndo('sqlserver', ids.source, tables);
+      assert.ok(conflicts.conflicts.length > 0);
     } finally {
       // An open pool keeps the process alive
       await client.clearSql();
       if (saved === undefined) delete process.env.BBDUMP_CONFIG_PATH;
       else process.env.BBDUMP_CONFIG_PATH = saved;
     }
+  });
+
+  test('copy (exact, then anonymized), then update the copy from its source', async () => {
+    const actions = require(path.join(root, 'dist/main/sync/sqlCopyActions.js'));
+    const sync = require(path.join(root, 'dist/main/sync/syncEngine.js'));
+    const query = await registry.facetForDb(ids.source, 'explorer.query', 'query');
+    const rows = async (id, sql) => (await (await registry.facetForDb(id, 'explorer.query', 'query')).run(id, { sql })).rows;
+    const n = async (id, table) => Number((await rows(id, `SELECT COUNT(*) AS n FROM ${table}`))[0].n);
+
+    const steps = [];
+    const plain = await actions.duplicateSqlDatabase({ sourceId: ids.source, name: `${name}_dup` }, (step) => steps.push(step));
+    assert.equal(plain.success, true, plain.error);
+    assert.equal(steps.at(-1), 'complete');
+    assert.deepEqual([await n(plain.id, 'customers'), await n(plain.id, 'orders'), await n(plain.id, 'users'), await n(plain.id, 'sales.kinds')], [3, 12, 2, 3]);
+    const saved = cfg.getConfig().databases.find(d => d.id === plain.id);
+    assert.deepEqual([saved.syncSourceId, saved.enabled, saved.engine, saved.name, saved.connectionString], [ids.source, false, 'sqlserver', `${name}_dup`, undefined]);
+    // Every value, the modules and the identities as in the source
+    assert.deepEqual((await rows(plain.id, KINDS)), (await query.run(ids.source, { sql: KINDS })).rows);
+    assert.equal(await n(plain.id, 'sales.paid_orders'), 8);
+    assert.equal((await rows(plain.id, 'SELECT sales.double_it(21) AS v'))[0].v, 42);
+    // The same name again: refused, nothing saved
+    const again = await actions.duplicateSqlDatabase({ sourceId: ids.source, name: `${name}_dup` }, () => {});
+    assert.equal(again.success, false);
+    assert.match(again.error, /already exists/);
+    assert.equal(cfg.getConfig().databases.filter(d => d.syncSourceId === ids.source).length, 1);
+
+    // Anonymized: the real emails never reach the copy; keys and links stay; users left empty
+    const anon = await actions.duplicateSqlDatabase({
+      sourceId: ids.source, name: `${name}_anon`,
+      anonymize: { columns: [{ table: 'dbo.customers', column: 'email', kind: 'email' }, { table: 'sales.kinds', column: 'amount', kind: 'noise' }], emptyTables: ['dbo.users'] },
+    }, () => {});
+    assert.equal(anon.success, true, anon.error);
+    const emails = (await rows(anon.id, 'SELECT email FROM customers ORDER BY id')).map(r => r.email);
+    assert.equal(emails.length, 3);
+    assert.ok(emails.every(m => /@example\.com$/.test(m) && !SHOP.customers.some(c => c[2] === m)), emails.join(', '));
+    assert.equal(new Set(emails).size, 3, 'a unique column keeps distinct fakes');
+    assert.equal(await n(anon.id, 'users'), 0);
+    assert.equal(Number((await rows(anon.id, 'SELECT COUNT(*) AS n FROM orders o JOIN customers c ON c.id = o.customer_id'))[0].n), 12);
+    const amount = Number((await rows(anon.id, 'SELECT amount FROM sales.kinds WHERE amount IS NOT NULL'))[0].amount);
+    assert.ok(amount !== 12345678901234.5678 && Math.abs(amount / 12345678901234.5678 - 1) <= 0.1, String(amount));
+
+    // The source moves on: a new table, a new column, an index, new rows; one row lost in the copy
+    await admin([
+      'CREATE TABLE tags (id INT PRIMARY KEY, label NVARCHAR(40))',
+      "INSERT INTO tags (id, label) VALUES (1, N'vip'), (2, N'new')",
+      "ALTER TABLE customers ADD note NVARCHAR(80) NOT NULL CONSTRAINT customers_note DEFAULT N'none'",
+      'CREATE INDEX idx_orders_status ON orders (status)',
+      `SET IDENTITY_INSERT orders ON; INSERT INTO orders (id, customer_id, user_id, total, status, created_at) VALUES (13, 1, 1, 99, N'paid', '${utc(now)}'), (14, 2, 2, 5, N'paid', '${utc(now)}'); SET IDENTITY_INSERT orders OFF;`,
+    ], name);
+    await (await registry.facetForDb(plain.id, 'explorer.query', 'query')).runMutation(plain.id, { sql: 'DELETE FROM orders WHERE id = 5' });
+    // Only a copy on this computer, in the same project, is updated
+    await assert.rejects(sync.analyzeSync(plain.id, ids.source), /same project/);
+    const config = cfg.getConfig();
+    config.projects = [{ id: 'p-sqlserver', name: 'Shop', color: 'blue', databaseIds: [ids.source, plain.id] }];
+    cfg.saveConfig(config);
+
+    const analysis = await sync.analyzeSync(plain.id, ids.source);
+    assert.deepEqual(analysis.schema.filter(c => c.defaultSelected).map(c => c.id).sort(), ['column:dbo.customers.note', 'index:dbo.orders.idx_orders_status', 'table:dbo.tags']);
+    const orders = analysis.tables.find(t => t.key === 'dbo.orders');
+    assert.deepEqual([orders.missing, orders.missingExact, orders.defaultSelected], [3, true, true]);
+    assert.equal(analysis.tables.find(t => t.key === 'dbo.customers').reason, 'up_to_date');
+    assert.ok(analysis.anonymize.some(c => c.table === 'dbo.customers' && c.column === 'email'));
+    const result = await sync.applySync(plain.id, ids.source, {
+      changes: analysis.schema.filter(c => c.defaultSelected).map(c => c.id),
+      tables: analysis.tables.filter(t => t.defaultSelected).map(t => ({ key: t.key })),
+      anonymize: [],
+      backup: false,
+    }, () => {});
+    assert.equal(result.success, true, result.error);
+    assert.deepEqual(result.schema, { applied: 3, failed: [] });
+    assert.deepEqual([await n(plain.id, 'orders'), await n(plain.id, 'tags')], [14, 2]);
+    // The rows keep their ids; the identity goes on after them
+    assert.deepEqual((await rows(plain.id, 'SELECT id FROM orders WHERE id >= 13 ORDER BY id')).map(r => r.id), [13, 14]);
+    assert.equal((await rows(plain.id, 'SELECT note FROM customers WHERE id = 1'))[0].note, 'none');
+    const after = await sync.analyzeSync(plain.id, ids.source);
+    assert.deepEqual(after.schema.filter(c => c.defaultSelected), []);
+    assert.ok(after.tables.every(t => t.reason === 'up_to_date'), JSON.stringify(after.tables));
   });
 });

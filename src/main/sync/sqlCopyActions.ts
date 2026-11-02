@@ -19,6 +19,9 @@ import { openSqliteFile } from '../engines/sqlite';
 import { logger } from '../logger';
 import { getErrorMessage } from '../utils';
 import { buildAnonymizePlan, emptiedTables, resolveAnonymization, type AnonymizeChoices } from './anonymizedCopy';
+import { columnLength, distinctFakes } from './dataSync';
+import { fakeValue } from './fakeValues';
+import { closeSqlServerPools, copySqlServerDatabase, withSavedSqlServer, type SqlServerRowsRule } from '../engines/sqlserver';
 import type { AnonymizeKind } from './dataSync';
 import {
   analyzeSqlSync, applySqlSync, copyAll, inSnapshot, mysqlSide, pgShape, readSqlCatalog, sqliteSide, withCopySession,
@@ -26,7 +29,7 @@ import {
 } from './sqlCopy';
 import type { SyncAnalysis, SyncChoices, SyncProgress, SyncResult } from './syncEngine';
 
-const SQL_ENGINES = ['mysql', 'mariadb', 'sqlite'];
+const SQL_ENGINES = ['mysql', 'mariadb', 'sqlite', 'sqlserver', 'duckdb'];
 export const isSqlCopyEngine = (db: Pick<DatabaseConfig, 'engine'> | undefined) => SQL_ENGINES.includes(engineOf(db));
 /** MySQL and MariaDB copy into each other; SQLite only into SQLite */
 const family = (db: Pick<DatabaseConfig, 'engine'>) => (isMysqlFamily(engineOf(db)) ? 'mysql' : engineOf(db));
@@ -65,15 +68,17 @@ function urlFor(connectionString: string | undefined, name: string): string | un
 }
 
 /** The copy saved as a new database: the connection of `template` (password still encrypted), another database or file */
-function saveCopy(template: DatabaseConfig, source: DatabaseConfig, name: string, file?: string): DatabaseConfig {
+export function saveCopy(template: DatabaseConfig, source: DatabaseConfig, name: string, file?: string): DatabaseConfig {
   const config = getConfig();
   const copy: DatabaseConfig = {
     ...template,
     id: randomUUID(),
     name,
     displayName: name,
-    connectionString: urlFor(template.connectionString, name),
-    sqlite: file ? { path: file } : template.sqlite,
+    // SQL Server databases are saved field by field: a connection string would name the source
+    connectionString: engineOf(template) === 'sqlserver' ? undefined : urlFor(template.connectionString, name),
+    sqlite: file && engineOf(template) === 'sqlite' ? { path: file } : template.sqlite,
+    duckdb: file && engineOf(template) === 'duckdb' ? { path: file } : template.duckdb,
     enabled: false,
     lastBackup: undefined,
     status: undefined,
@@ -95,13 +100,18 @@ export interface SqlDuplicateParams {
   anonymize?: AnonymizeChoices;
 }
 
-type Progress = (step: string, message: string, progress: number) => void;
+export type Progress = (step: string, message: string, progress: number) => void;
 
 export async function duplicateSqlDatabase(params: SqlDuplicateParams, progress: Progress): Promise<{ success: boolean; id?: string; name?: string; warnings?: string[]; error?: string }> {
   let undo: (() => Promise<void>) | null = null;
   try {
     const source = saved(params.sourceId);
-    if (!isSqlCopyEngine(source)) throw new Error('Not a MySQL, MariaDB or SQLite database');
+    if (!isSqlCopyEngine(source)) throw new Error('Not a MySQL, MariaDB, SQLite, SQL Server or DuckDB database');
+    if (engineOf(source) === 'sqlserver') return await duplicateSqlServer(source, params, progress);
+    if (engineOf(source) === 'duckdb') {
+      const { duplicateDuckdb } = await import('./duckdbCopy');
+      return await duplicateDuckdb(source, params, progress);
+    }
 
     const copyInto = (src: SqlSide, tgt: SqlSide): Promise<CopyResult> => withCopySession(src, { foreignKeys: true }, () => inSnapshot(src, async () => {
       const catalog = await readSqlCatalog(src);
@@ -201,6 +211,79 @@ export async function duplicateSqlDatabase(params: SqlDuplicateParams, progress:
   }
 }
 
+// --- SQL Server ------------------------------------------------------------------------------------
+
+/**
+ * What an anonymized SQL Server copy does to the rows of each table: the chosen columns (and
+ * those tied to them by foreign keys) replaced by fakes, the chosen tables (and those whose keys
+ * point to them) left empty. Checked against the source's own plan.
+ */
+async function sqlServerRowsRule(sourceId: string, choices: AnonymizeChoices): Promise<SqlServerRowsRule> {
+  const { sqlShapedCatalog } = await import('../sqlMasking');
+  const { catalog, counts } = await sqlShapedCatalog(sourceId, 'sync.anonymize');
+  const plan = buildAnonymizePlan(catalog, counts);
+  const kinds = resolveAnonymization(plan, choices.columns);
+  const empty = emptiedTables(plan, choices.emptyTables);
+  const byTable = new Map<string, Array<{ column: string; kind: AnonymizeKind; options: { wide: boolean; maxLength?: number; type: string } }>>();
+  for (const table of catalog.tables.values()) {
+    const rules = table.columns
+      .filter(c => kinds.has(`${table.key}.${c.name}`))
+      .map(c => ({ column: c.name, kind: kinds.get(`${table.key}.${c.name}`)!, options: { wide: distinctFakes(table, c.name), maxLength: columnLength(c.type), type: c.type } }));
+    if (rules.length) byTable.set(table.key, rules);
+  }
+  return (schema, table, columns, rows) => {
+    const key = `${schema}.${table}`;
+    if (empty.has(key)) return null;
+    const rules = (byTable.get(key) ?? []).map(r => ({ ...r, index: columns.indexOf(r.column) })).filter(r => r.index >= 0);
+    if (!rules.length) return rows;
+    return rows.map(row => {
+      const out = [...row];
+      for (const r of rules) out[r.index] = fakeValue(row[r.index], r.kind, r.options);
+      return out;
+    });
+  };
+}
+
+/** A new database on the source's server (or on the server of another saved SQL Server database), copied by bbdump */
+async function duplicateSqlServer(source: DatabaseConfig, params: SqlDuplicateParams, progress: Progress): Promise<{ success: boolean; id?: string; name?: string; warnings?: string[]; error?: string }> {
+  let undo: (() => Promise<void>) | null = null;
+  try {
+    const server = saved(params.serverOf || source.id);
+    if (engineOf(server) !== 'sqlserver') throw new Error('The copy goes to a server of the same engine');
+    const name = String(params.name ?? '').trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_$]{0,63}$/.test(name)) throw new Error('A database name of letters, digits and _ is needed');
+    // The plan first: a wrong choice stops the copy before anything is created
+    const rule = params.anonymize ? await sqlServerRowsRule(source.id, params.anonymize) : null;
+    progress('creating', `Creating ${name}…`, 10);
+    await withSavedSqlServer(server.id, async query => {
+      if ((await query('SELECT DB_ID(@p1) AS id', [name]))[0]?.id !== null) throw new Error(`A database named ${name} already exists on this server`);
+      try {
+        await query(`CREATE DATABASE ${quoteIdent(name, 'tsql')}`);
+      } catch (error) {
+        throw new Error(`The database could not be created on this server (the account needs the CREATE DATABASE permission): ${getErrorMessage(error)}`);
+      }
+    });
+    undo = async () => {
+      // Its connections (the copy's) closed first: a database in use cannot be dropped
+      await closeSqlServerPools();
+      await withSavedSqlServer(server.id, async query => {
+        await query(`IF DB_ID(@p1) IS NOT NULL BEGIN ALTER DATABASE ${quoteIdent(name, 'tsql')} SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE ${quoteIdent(name, 'tsql')}; END`, [name]);
+      });
+    };
+    const result = await copySqlServerDatabase(source.id, server.id, name, rule, (table, count) => progress('copying', table, Math.min(90, 20 + count * 4)));
+    const copy = saveCopy(server, source, name);
+    undo = null;
+    progress('complete', 'Copy saved', 100);
+    logger.info(`SQL Server copy of ${source.name} → ${name} on ${server.host}:${server.port}${params.anonymize ? ' (anonymized)' : ''}: ${result.tables} table(s), ${result.rows} row(s)`);
+    return { success: true, id: copy.id, name, warnings: result.skipped.length ? [`Not copied: ${result.skipped.join(', ')}`] : undefined };
+  } catch (error) {
+    logger.error(`Copy failed: ${getErrorMessage(error)}`);
+    const pending = undo as (() => Promise<void>) | null;
+    if (pending) await pending().catch(e => logger.warn(`The unfinished copy could not be removed: ${getErrorMessage(e)}`));
+    return { success: false, error: getErrorMessage(error) };
+  }
+}
+
 // --- Update from… ------------------------------------------------------------------------------
 
 /** Only a database of this computer is written, from a database of its family and project */
@@ -213,7 +296,7 @@ export function sqlPair(targetId: string, sourceId: string, writable: boolean): 
     const host = (target.host || '').toLowerCase();
     // On this computer (no tunnel, no URL to elsewhere), and made by bbdump: on its local server or as a copy.
     // A port forward to another server also listens on 127.0.0.1: never written
-    const local = engineOf(target) === 'sqlite'
+    const local = engineOf(target) === 'sqlite' || engineOf(target) === 'duckdb'
       || (['localhost', '127.0.0.1', '::1'].includes(host) && !target.ssh && !target.connectionString && (!!target.isLocalBbdump || !!target.syncSourceId));
     if (!local) throw new Error('Only a database of this computer that bbdump made (on its local server, or a copy) can be updated from another one');
     const project = (getConfig().projects ?? []).find(p => p.databaseIds?.includes(target.id));
@@ -224,15 +307,20 @@ export function sqlPair(targetId: string, sourceId: string, writable: boolean): 
 
 export async function analyzeSqlPair(targetId: string, sourceId: string, writable: boolean): Promise<SyncAnalysis> {
   const { target, source } = sqlPair(targetId, sourceId, writable);
+  const sides = {
+    source: { id: source.id, name: source.displayName || source.name, host: source.host, version: 0 },
+    target: { id: target.id, name: target.displayName || target.name, host: target.host, version: 0 },
+  };
+  if (engineOf(source) === 'sqlserver') {
+    const { analyzeSqlServerSync } = await import('./sqlserverSync');
+    return { ...sides, ...(await analyzeSqlServerSync(source.id, target.id)) };
+  }
+  if (engineOf(source) === 'duckdb') {
+    const { analyzeDuckdbSync } = await import('./duckdbCopy');
+    return { ...sides, ...(await analyzeDuckdbSync(source, target)) };
+  }
   return withSide(source, 'read', src => withCopySession(src, { foreignKeys: true }, () => inSnapshot(src, () =>
-    withSide(target, 'read', async tgt => {
-      const analysis = await analyzeSqlSync(src, tgt);
-      return {
-        source: { id: source.id, name: source.displayName || source.name, host: source.host, version: 0 },
-        target: { id: target.id, name: target.displayName || target.name, host: target.host, version: 0 },
-        ...analysis,
-      };
-    }))));
+    withSide(target, 'read', async tgt => ({ ...sides, ...(await analyzeSqlSync(src, tgt)) })))));
 }
 
 export async function applySqlPair(
@@ -242,6 +330,14 @@ export async function applySqlPair(
   onProgress: (p: SyncProgress) => void,
 ): Promise<Pick<SyncResult, 'schema' | 'tables'>> {
   const { target, source } = sqlPair(targetId, sourceId, true);
+  if (engineOf(source) === 'sqlserver') {
+    const { applySqlServerSync } = await import('./sqlserverSync');
+    return applySqlServerSync(source.id, target.id, choices, onProgress);
+  }
+  if (engineOf(source) === 'duckdb') {
+    const { applyDuckdbSync } = await import('./duckdbCopy');
+    return applyDuckdbSync(source, target, choices, onProgress);
+  }
   return withSide(source, 'read', src => withCopySession(src, { foreignKeys: true }, () => inSnapshot(src, () =>
     // MySQL checks keys (INSERT IGNORE skips orphans); SQLite keeps its default (off)
     withSide(target, 'write', tgt => withCopySession(tgt, { foreignKeys: tgt.dialect === 'mysql' }, () => applySqlSync(src, tgt, choices, onProgress))))));

@@ -232,6 +232,7 @@ async function mssqlPool(target: SqlServerTarget): Promise<{ pool: ConnectionPoo
     options: {
       encrypt: conn.encrypt, trustServerCertificate: conn.trustServerCertificate, instanceName: conn.instanceName,
       enableArithAbort: true, useUTC: false, appName: 'bbdump MCP',
+      ...(conn.serverName ? { serverName: conn.serverName } : {}),
       ...(conn.caFile ? { cryptoCredentialsDetails: { ca: fs.readFileSync(conn.caFile) } } : {}),
     },
   });
@@ -358,11 +359,15 @@ export async function useSql(saved: SqlSaved) {
     return { database: 'main', file: saved.file, ...info };
   }
   if (saved.engine === 'sqlserver') {
-    const opened = await mssqlPool(saved.target as SqlServerTarget);
+    const reached = await reach(saved.target!, saved.sshDatabaseId);
+    const opened = await mssqlPool(reached as SqlServerTarget);
     try {
       const info = await describeSqlServer(opened.pool);
       await clearSql();
-      active = { id: saved.id, label: saved.label, engine: 'sqlserver', database: opened.database, where: opened.label, user: opened.user, port: opened.port, mssql: opened.pool };
+      active = {
+        id: saved.id, label: saved.label, engine: 'sqlserver', database: opened.database, where: opened.label, user: opened.user, port: opened.port, mssql: opened.pool,
+        ...(saved.sshDatabaseId ? { ssh: { target: saved.target!, databaseId: saved.sshDatabaseId, port: reached.port } } : {}),
+      };
       return { database: opened.database, hosts: opened.label, ...info };
     } catch (err) {
       await opened.pool.close().catch(() => {});
@@ -391,7 +396,7 @@ export async function testSql(saved: SqlSaved) {
   if (saved.engine === 'sqlite') return { file: saved.file, ...describeSqlite(saved.file!) };
   if (saved.engine === 'duckdb') return { file: saved.file, ...(await describeDuckdb(saved.file!)) };
   if (saved.engine === 'sqlserver') {
-    const opened = await mssqlPool(saved.target as SqlServerTarget);
+    const opened = await mssqlPool(await reach(saved.target!, saved.sshDatabaseId) as SqlServerTarget);
     try {
       return { database: opened.database, hosts: opened.label, ...(await describeSqlServer(opened.pool)) };
     } finally {
@@ -427,9 +432,6 @@ export function sqlActive(feature: MongoFeature = 'mcp.read'): ActiveSql {
     throw new Error(feature === 'mcp.write' && mongoToolsEnabled() ? 'Changing these databases is turned off in bbdump.' : 'Reading these databases is turned off in bbdump.');
   }
   if (!active) throw new Error('No MySQL, MariaDB, SQL Server, SQLite or DuckDB database is active: call list_connections, then use_connection on one.');
-  if (feature === 'mcp.write' && (active.engine === 'duckdb' || active.engine === 'sqlserver')) {
-    throw new Error(`${active.engine === 'duckdb' ? 'DuckDB' : 'SQL Server'} databases are read-only here: changes are made in bbdump (explorer, SQL editor).`);
-  }
   return active;
 }
 
@@ -505,7 +507,7 @@ export function mysqlValue(value: unknown): unknown {
 
 /** What a change runs its statements with, inside one transaction */
 export interface WriteSession {
-  dialect: 'mysql' | 'sqlite';
+  dialect: 'mysql' | 'sqlite' | 'tsql' | 'duckdb';
   rows(sql: string, values?: unknown[]): Promise<Row[]>;
   run(sql: string, values?: unknown[]): Promise<{ affected: number; insertId?: number | bigint }>;
 }
@@ -513,6 +515,60 @@ export interface WriteSession {
 /** Runs `fn` in one transaction (committed when it returns, rolled back when it throws) */
 export async function withWrite<T>(fn: (session: WriteSession) => Promise<T>): Promise<T> {
   const db = sqlActive('mcp.write');
+  if (db.engine === 'sqlserver') {
+    const types = await mssql();
+    const tx = new types.Transaction(db.mssql!);
+    await tx.begin();
+    const request = (sql: string, values: unknown[]) => {
+      const r = new types.Request(tx);
+      values.forEach((value, i) => bindMssql(r, `p${i + 1}`, value, types));
+      return r.query(replacePlaceholders(sql, 'tsql', (i) => `@p${i + 1}`));
+    };
+    const session: WriteSession = {
+      dialect: 'tsql',
+      rows: async (sql, values = []) => ((await request(sql, values)).recordset ?? []) as Row[],
+      run: async (sql, values = []) => {
+        // The identity given, read in the same request (SCOPE_IDENTITY only sees its own scope)
+        const insert = statementKind(sql, 'tsql') === 'INSERT';
+        const result = await request(insert ? `${sql.trim().replace(/;+$/, '')}; SELECT CAST(SCOPE_IDENTITY() AS bigint) AS bbdump_id` : sql, values);
+        const id = insert ? (result.recordset?.[0] as Row | undefined)?.bbdump_id : undefined;
+        const insertId = id === null || id === undefined ? undefined : Number.isSafeInteger(Number(id)) ? Number(id) : BigInt(String(id));
+        return { affected: result.rowsAffected?.[0] ?? 0, insertId };
+      },
+    };
+    try {
+      const out = await fn(session);
+      await tx.commit();
+      return out;
+    } catch (err) {
+      await tx.rollback().catch(() => {});
+      throw err;
+    }
+  }
+  if (db.engine === 'duckdb') {
+    // Each statement is one run of the duckdb tool, which commits it: the tools read the rows
+    // first, then change only those (by key), and read them back
+    const file = db.file!;
+    const script = async (text: string) => {
+      if (!fs.existsSync(file)) throw new Error(`The DuckDB file was not found: ${file}`);
+      return runDuckdbTool(requireDuckdbTool(), file, text, { timeoutMs: QUERY_TIMEOUT_MS });
+    };
+    const session: WriteSession = {
+      dialect: 'duckdb',
+      rows: async (sql, values = []) => {
+        const results = await script(`${bindDuckdb(sql, values).trim().replace(/;+$/, '')};`);
+        return results[results.length - 1] ?? [];
+      },
+      run: async (sql, values = []) => {
+        const bound = bindDuckdb(sql, values).trim().replace(/;+$/, '');
+        // DuckDB does not say how many rows a statement changed: RETURNING does
+        const counted = ['INSERT', 'UPDATE', 'DELETE'].includes(statementKind(bound, 'duckdb')) && !/\bRETURNING\b/i.test(bound);
+        const results = await script(`${bound}${counted ? ' RETURNING 1' : ''};`);
+        return { affected: counted ? (results[results.length - 1]?.length ?? 0) : 0 };
+      },
+    };
+    return fn(session);
+  }
   if (db.engine === 'sqlite') {
     const sqlite = openSqlite(db.file!, false);
     sqlite.exec('BEGIN IMMEDIATE');

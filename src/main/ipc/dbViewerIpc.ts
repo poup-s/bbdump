@@ -10,6 +10,7 @@ import * as postgresConfig from '../postgresConfig';
 import { facetFor, facetForDb } from '../engines/registry';
 import { requireFeature } from '../featureFlags';
 import { engineOf } from '../../shared/engines/features';
+import { tlsNameBehindSsh } from '../../shared/engines/sqlserverUri';
 import type { AggregateQuery, DocumentEdit, DocumentQuery } from '../../shared/engines/documents';
 
 export async function closeAllPools() {
@@ -60,6 +61,7 @@ export function registerDbViewerHandlers() {
                 sslMode,
                 sslRootCert: sslMode === 'disable' ? undefined : params.sslRootCert,
                 viaTunnel: reached.viaTunnel,
+                tlsServerName: reached.viaTunnel ? tlsNameBehindSsh(params.ssh) : undefined,
             });
         } catch (error) {
             logger.warn(`Connection test failed for ${params.database}@${params.host}: ${getErrorMessage(error)}`);

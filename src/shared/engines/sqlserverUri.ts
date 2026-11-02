@@ -21,6 +21,8 @@ export interface SqlServerTarget {
     sslRootCert?: string;
     /** host/port are a local SSH tunnel */
     viaTunnel?: boolean;
+    /** Through a tunnel: the name the server's certificate is checked against (not 127.0.0.1) */
+    tlsServerName?: string;
 }
 
 /** What tedious needs (mssql's config), and a label for messages (never the password) */
@@ -35,6 +37,8 @@ export interface SqlServerConnection {
     encrypt: boolean;
     trustServerCertificate: boolean;
     caFile?: string;
+    /** The name the certificate is checked against, when it is not `server` (through a tunnel) */
+    serverName?: string;
     label: string;
 }
 
@@ -144,7 +148,23 @@ export function parseSqlServerUri(text: string): ParsedSqlServerUri | null {
 
 /** A saved database (its fields, or its connection string) as driver options */
 export function sqlserverConnection(target: SqlServerTarget): SqlServerConnection {
-    const parsed = target.connectionString && !target.viaTunnel ? parseSqlServerUri(target.connectionString) : null;
+    if (target.viaTunnel) {
+        // The tunnel's local end, forwarded to one port: no named instance to look up
+        const mode = target.sslMode ?? 'verify-full';
+        return {
+            server: target.host,
+            port: target.port,
+            user: target.user,
+            password: target.password || '',
+            database: target.database,
+            encrypt: mode !== 'disable',
+            trustServerCertificate: mode === 'require' || mode === 'prefer',
+            caFile: mode === 'verify-ca' || mode === 'verify-full' ? target.sslRootCert : undefined,
+            serverName: target.tlsServerName || undefined,
+            label: `${target.host}:${target.port}`,
+        };
+    }
+    const parsed = target.connectionString ? parseSqlServerUri(target.connectionString) : null;
     const host = parsed?.host ?? target.host;
     const [server, instanceName] = host.split('\\');
     const mode = target.sslMode ?? parsed?.sslMode ?? 'verify-full';
@@ -163,6 +183,16 @@ export function sqlserverConnection(target: SqlServerTarget): SqlServerConnectio
         caFile: mode === 'verify-ca' || mode === 'verify-full' ? target.sslRootCert : undefined,
         label: instanceName && !explicitPort ? host : `${host}:${port || SQLSERVER_DEFAULT_PORT}`,
     };
+}
+
+/**
+ * Through SSH the driver reaches 127.0.0.1: the certificate is checked against the database's
+ * host on the server, or the SSH server itself when that host is local to it
+ */
+export function tlsNameBehindSsh(ssh: { host?: string; remoteHost?: string } | null | undefined): string | undefined {
+    if (!ssh) return undefined;
+    const remote = String(ssh.remoteHost ?? '').trim();
+    return remote && !['localhost', '127.0.0.1', '::1'].includes(remote.toLowerCase()) ? remote : ssh.host || undefined;
 }
 
 /** [name], a ] doubled */

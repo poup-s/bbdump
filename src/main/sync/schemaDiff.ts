@@ -10,7 +10,9 @@ import type { Catalog, CatalogColumn, CatalogTable } from './catalog';
 export type ChangeKind =
   | 'extension' | 'schema' | 'enum' | 'enum_value' | 'table' | 'column' | 'column_default'
   | 'column_nullable' | 'column_type' | 'drop_column' | 'constraint' | 'foreign_key'
-  | 'index' | 'function' | 'view' | 'trigger' | 'local_only_table';
+  | 'index' | 'function' | 'view' | 'trigger' | 'local_only_table'
+  // SQL Server
+  | 'sequence' | 'procedure';
 
 export interface SchemaChange {
   id: string;

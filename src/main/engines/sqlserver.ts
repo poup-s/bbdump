@@ -10,18 +10,22 @@
  * keys, then views, functions, procedures and triggers. A restore replays it in ONE
  * transaction (SQL Server's DDL is transactional): all of it, or nothing.
  */
+import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import * as zlib from 'zlib';
 import * as readline from 'readline';
 import type { ConnectionPool, Request, Transaction, IColumnMetadata, config as MssqlConfig } from 'mssql';
 import { connectionParamsFor } from '../savedConnection';
+import { getConfig } from '../ipc/configIpc';
 import { backupManager } from '../backup';
 import { logger } from '../logger';
 import { getErrorMessage } from '../utils';
 import { SQLSERVER_BACKUP_HEADER } from '../backupFormat';
 import { SQLSERVER } from '../../shared/engines/manifests';
 import { readOnlyProblem, replacePlaceholders, statementKind } from '../../shared/engines/sqlGuard';
-import { sqlserverConnection, sqlserverIdent as q, type SqlServerConnection, type SqlServerTarget } from '../../shared/engines/sqlserverUri';
+import { parseSqlServerUri, sqlserverConnection, sqlserverIdent as q, tlsNameBehindSsh, type SqlServerConnection, type SqlServerTarget } from '../../shared/engines/sqlserverUri';
 import type { BackupResult } from '../../types/config';
 import type { EngineDriver } from './driver';
 
@@ -80,6 +84,7 @@ export function mssqlConfig(conn: SqlServerConnection, poolMax = 5): MssqlConfig
             enableArithAbort: true,
             useUTC: false,
             appName: 'bbdump',
+            ...(conn.serverName ? { serverName: conn.serverName } : {}),
             ...(conn.caFile ? { cryptoCredentialsDetails: { ca: fs.readFileSync(conn.caFile) } } : {}),
         },
     } as MssqlConfig;
@@ -119,11 +124,16 @@ export function friendly(error: unknown): string {
 /** A saved database, reached (password decrypted, SSH tunnel open) */
 async function saved(dbId: string): Promise<SqlServerTarget> {
     const params = await connectionParamsFor(dbId);
-    return { ...params, sslMode: params.sslMode as SqlServerTarget['sslMode'] };
+    return { ...params, sslMode: params.sslMode as SqlServerTarget['sslMode'], tlsServerName: params.viaTunnel ? tlsNameThroughTunnel(dbId) : undefined };
 }
 
-function targetOf(db: { name: string; host: string; port: number; user: string; password?: string; connectionString?: string; sslMode?: string; sslRootCert?: string; viaTunnel?: boolean }): SqlServerTarget {
+function tlsNameThroughTunnel(dbId: string): string | undefined {
+    return tlsNameBehindSsh(getConfig()?.databases?.find(d => d.id === dbId)?.ssh);
+}
+
+function targetOf(db: { name: string; host: string; port: number; user: string; password?: string; connectionString?: string; sslMode?: string; sslRootCert?: string; viaTunnel?: boolean; tlsServerName?: string }): SqlServerTarget {
     return {
+        tlsServerName: db.tlsServerName,
         connectionString: db.connectionString,
         host: db.host,
         port: db.port,
@@ -403,9 +413,10 @@ export function orderModules<T extends { id: number; trigger: boolean }>(modules
 }
 
 /** Streams the rows of one table into `rows` lines (the reading pauses while a line is written) */
-async function dumpRows(reader: ConnectionPool | Transaction, schema: string, name: string, written: DumpColumn[], out: (line: Line) => Promise<void>): Promise<number> {
+async function dumpRows(reader: ConnectionPool | Transaction, schema: string, name: string, written: DumpColumn[], out: (line: Line) => Promise<void>, filter?: { sql: string; values: unknown[] }): Promise<number> {
     const types = await mssql();
     const request = new types.Request(reader as ConnectionPool);
+    filter?.values.forEach((value, i) => bind(request, `p${i + 1}`, value, types));
     request.stream = true;
     const names = written.map(c => c.name);
     let batch: unknown[][] = [];
@@ -429,13 +440,13 @@ async function dumpRows(reader: ConnectionPool | Transaction, schema: string, na
                 resolve();
             }, reject);
         });
-        request.query(`SELECT ${written.map(c => `${dumpExpression(c)} AS ${q(c.name)}`).join(', ')} FROM ${qualified(schema, name)}`);
+        request.query(`SELECT ${written.map(c => `${dumpExpression(c)} AS ${q(c.name)}`).join(', ')} FROM ${qualified(schema, name)}${filter ? ` WHERE ${filter.sql}` : ''}`);
     });
     return count;
 }
 
 /** Reads the catalog and the rows of the database into the backup's lines, in replay order */
-async function writeBackup(pool: ConnectionPool, out: (line: Line) => Promise<void>, database: string): Promise<{ tables: number; rows: number; skipped: string[]; snapshot: boolean }> {
+async function writeBackup(pool: ConnectionPool, out: (line: Line) => Promise<void>, database: string, options: { rows?: boolean } = {}): Promise<{ tables: number; rows: number; skipped: string[]; snapshot: boolean }> {
     const types = await mssql();
     const tx = new types.Transaction(pool);
     let snapshot = true;
@@ -549,7 +560,7 @@ async function writeBackup(pool: ConnectionPool, out: (line: Line) => Promise<vo
             for (const index of indexes.filter(i => i.constraint !== 'primary')) laterIndexes.push({ schema, table: name, index });
             // The rows: written columns only (not computed, not rowversion)
             const written = columns.filter(c => !c.computed && !c.rowversion);
-            if (written.length) totalRows += await dumpRows(reader, schema, name, written, out);
+            if (written.length && options.rows !== false) totalRows += await dumpRows(reader, schema, name, written, out);
         }
 
         for (const entry of laterIndexes) await out({ t: 'index', ...entry });
@@ -1276,3 +1287,92 @@ export async function withSavedSqlServer<T>(dbId: string, fn: (query: (sql: stri
     const pool = await poolFor(await saved(dbId));
     return fn(async (sql, values = []) => (await run(pool, sql, values)).recordset);
 }
+
+// --- Copies (sync/sqlCopyActions.ts) ---------------------------------------------------------------
+
+/** What a copy does to the rows of a table as they pass: changed (anonymized), or none kept (null) */
+export type SqlServerRowsRule = (schema: string, table: string, columns: string[], rows: unknown[][]) => unknown[][] | null;
+
+/**
+ * Copies the saved database `sourceId` into the empty database `database` of the server of
+ * `serverId`: its catalog and rows, read in one snapshot when the database allows it, go to a
+ * temporary file once `rule` changed them (an anonymized value never reaches the disk), then
+ * are replayed there in one transaction. The file is removed in every case.
+ */
+export async function copySqlServerDatabase(
+    sourceId: string,
+    serverId: string,
+    database: string,
+    rule: SqlServerRowsRule | null,
+    onProgress: (message: string, share: number) => void,
+): Promise<{ tables: number; rows: number; skipped: string[] }> {
+    const source = await saved(sourceId);
+    const file = path.join(os.tmpdir(), `bbdump-copy-${crypto.randomUUID()}.jsonl.gz`);
+    try {
+        const sourcePool = await poolFor(source);
+        const gzip = zlib.createGzip({ level: 1 });
+        const out = fs.createWriteStream(file, { mode: 0o600 });
+        const finished = new Promise<void>((resolve, reject) => {
+            out.on('finish', () => resolve());
+            out.on('error', reject);
+            gzip.on('error', reject);
+        });
+        gzip.pipe(out);
+        let tables = 0;
+        let rows = 0;
+        const write = (line: Line) => new Promise<void>((resolve, reject) => {
+            let kept: Line | null = line;
+            if (line.t === 'table') {
+                tables++;
+                onProgress(`${line.schema}.${line.name}`, tables);
+            } else if (line.t === 'rows') {
+                const changed = rule ? rule(line.schema, line.name, line.columns, line.rows) : line.rows;
+                kept = changed && changed.length ? { ...line, rows: changed } : null;
+                rows += changed?.length ?? 0;
+            } else if (line.t === 'end') {
+                kept = { ...line, rows };
+            }
+            if (!kept) return resolve();
+            if (gzip.write(`${JSON.stringify(kept)}\n`, error => { if (error) reject(error); })) resolve();
+            else gzip.once('drain', () => resolve());
+        });
+        try {
+            await writeBackup(sourcePool, write, source.database);
+            gzip.end();
+            await finished;
+        } catch (error) {
+            gzip.destroy();
+            out.destroy();
+            throw error;
+        }
+
+        // The server's account, on the new database (saved field by field: no string naming another one)
+        const server = await saved(serverId);
+        const parsed = server.connectionString && !server.viaTunnel ? parseSqlServerUri(server.connectionString) : null;
+        const target: SqlServerTarget = parsed
+            ? { ...server, connectionString: undefined, host: parsed.host, port: parsed.port, user: parsed.user || server.user, password: parsed.password ?? server.password, sslMode: server.sslMode ?? parsed.sslMode, database }
+            : { ...server, database };
+        const types = await mssql();
+        const tx = new types.Transaction(await poolFor(target));
+        await tx.begin();
+        try {
+            const done = await replayBackup(tx, file);
+            await tx.commit();
+            return { tables: done.tables, rows: done.rows, skipped: done.skipped };
+        } catch (error) {
+            await tx.rollback().catch(() => {});
+            throw new Error(friendly(error));
+        }
+    } finally {
+        fs.rmSync(file, { force: true });
+    }
+}
+
+/** The pieces "Update from…" (sync/sqlserverSync.ts) builds on: the backup's catalog and row formats */
+export type SqlServerLine = Line;
+export type SqlServerColumn = DumpColumn;
+export type SqlServerIndex = DumpIndex;
+export const sqlserverInternals = {
+    mssql, poolFor, saved, run, runBatch, transactionState, friendly, qualified,
+    writeBackup, dumpRows, insertRows, createTableSql, createIndexSql, dumpExpression, decodeValue,
+};

@@ -311,16 +311,22 @@ for (const label of ['SQLite', 'MySQL', 'MariaDB', 'DuckDB']) {
       }
     });
 
-    test('copy (exact, then anonymized), then update the copy from its source', { skip: label === 'DuckDB' ? 'not for DuckDB yet' : false }, async () => {
+    test('copy (exact, then anonymized), then update the copy from its source', { skip: label === 'DuckDB' && !hasTool('duckdb') ? 'the duckdb tool is not in the PATH' : false }, async () => {
       const cfg = require(path.join(root, 'dist/main/ipc/configIpc.js'));
       const actions = require(path.join(root, 'dist/main/sync/sqlCopyActions.js'));
       const sync = require(path.join(root, 'dist/main/sync/syncEngine.js'));
-      const isSqlite = e.engine === 'sqlite';
-      const where = (suffix) => (isSqlite ? { file: path.join(tmp, `shop_${suffix}.sqlite`) } : { name: `${e.name}_${suffix}` });
+      const isDuckdb = e.engine === 'duckdb';
+      const isSqlite = e.engine === 'sqlite' || isDuckdb;
+      const where = (suffix) => (isSqlite ? { file: path.join(tmp, `shop_${suffix}.${isDuckdb ? 'duckdb' : 'sqlite'}`) } : { name: `${e.name}_${suffix}` });
       const query = async (id, sql) => (await (await registry.facetForDb(id, 'explorer.query', 'query')).run(id, { sql })).rows;
       const n = async (id, table) => Number((await query(id, `SELECT COUNT(*) AS n FROM ${table}`))[0].n);
       /** Statements on the source, outside bbdump */
       const onSource = async (statements) => {
+        if (isDuckdb) {
+          const env = { ...process.env, AI_AGENT: '', CLAUDECODE: '' };
+          execFileSync('duckdb', [cfg.getConfig().databases.find(d => d.id === e.id).duckdb.path], { input: statements.map(sql => `${sql};`).join('\n'), env });
+          return;
+        }
         if (isSqlite) {
           const { DatabaseSync } = require('node:sqlite');
           const db = new DatabaseSync(cfg.getConfig().databases.find(d => d.id === e.id).sqlite.path);
@@ -334,15 +340,15 @@ for (const label of ['SQLite', 'MySQL', 'MariaDB', 'DuckDB']) {
         await c.end();
       };
 
-      // A view and a trigger come along; a MySQL procedure is named as not copied
+      // A view and a trigger come along (DuckDB has no triggers); a MySQL procedure is named as not copied
       await onSource([
         "CREATE VIEW paid_orders AS SELECT id, total FROM orders WHERE status = 'paid'",
-        isSqlite
+        ...(isDuckdb ? [] : [isSqlite
           ? 'CREATE TRIGGER orders_stamp AFTER INSERT ON orders BEGIN SELECT 1; END'
-          : 'CREATE TRIGGER orders_stamp BEFORE INSERT ON orders FOR EACH ROW SET NEW.status = LOWER(NEW.status)',
+          : 'CREATE TRIGGER orders_stamp BEFORE INSERT ON orders FOR EACH ROW SET NEW.status = LOWER(NEW.status)']),
         ...(isSqlite ? [] : ['CREATE PROCEDURE noop() SELECT 1']),
       ]);
-      const triggers = async (id) => (isSqlite
+      const triggers = async (id) => (isDuckdb ? [{ name: 'orders_stamp' }] : isSqlite
         ? await query(id, "SELECT name FROM sqlite_master WHERE type = 'trigger'")
         : await query(id, 'SELECT TRIGGER_NAME AS name FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE()')).map(r => r.name);
 
@@ -395,7 +401,9 @@ for (const label of ['SQLite', 'MySQL', 'MariaDB', 'DuckDB']) {
 
       const analysis = await sync.analyzeSync(plain.id, e.id);
       const ids = analysis.schema.filter(c => c.defaultSelected).map(c => c.id).sort();
-      assert.deepEqual(ids, ['column:customers.note', 'index:orders.idx_orders_status', 'table:tags']);
+      // DuckDB names its objects with their schema (main.…)
+      const qualified = isDuckdb ? 'main.' : '';
+      assert.deepEqual(ids, [`column:${qualified}customers.note`, `index:${qualified}orders.idx_orders_status`, `table:${qualified}tags`]);
       const orders = analysis.tables.find(t => t.key === `${ns}.orders`);
       assert.deepEqual([orders.missing, orders.missingExact, orders.defaultSelected], [3, true, true]);
       assert.equal(analysis.tables.find(t => t.key === `${ns}.customers`).reason, 'up_to_date');

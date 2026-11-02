@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { mongoToolsEnabled } from './mongo/features.js';
 import { MONGO_DEFAULT_PORT, isMongoUri, mongoOption, parseMongoUri, type MongoTarget } from './shared/mongoUri.js';
 import { MYSQL_DEFAULT_PORT, parseMysqlUri, type MysqlTarget } from './shared/mysqlUri.js';
+import { tlsNameBehindSsh } from './shared/sqlserverUri.js';
 
 const ALGORITHM = 'aes-256-gcm';
 
@@ -291,7 +292,9 @@ export function getSqlTarget(identifier: string): { id: string; label: string; e
       database: db.name,
       sslMode: db.sslMode || (db.ssl ? 'require' : undefined),
       sslRootCert: db.sslRootCert,
-    },
+      // SQL Server through SSH: its certificate is checked against the server's name, not 127.0.0.1
+      ...(db.engine === 'sqlserver' && db.ssh ? { tlsServerName: tlsNameBehindSsh(db.ssh) } : {}),
+    } as MysqlTarget,
   };
 }
 

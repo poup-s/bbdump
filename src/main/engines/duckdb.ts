@@ -166,7 +166,7 @@ export function referencedFirst<T extends Row>(tables: T[], keys: Row[]): T[] {
  * (referenced ones first, their rows in that order), indexes, views and macros. DuckDB's own
  * COPY FROM DATABASE fills tables in any order before 2.0, which foreign keys refuse.
  */
-async function copyStatements(sourceFile: string, from: string): Promise<string[]> {
+export async function copyStatements(sourceFile: string, from: string, rowsOf?: (schema: string, table: string) => string | null | undefined): Promise<string[]> {
     const [schemas = [], types = [], sequences = [], tables = [], keys = [], indexes = [], views = [], macros = []] = await runDuckdb(sourceFile, [
         "SELECT schema_name AS s FROM duckdb_schemas() WHERE database_name = current_database() AND NOT internal AND schema_name <> 'main'",
         "SELECT schema_name AS s, type_name AS n, labels FROM duckdb_types() WHERE database_name = current_database() AND NOT internal AND logical_type = 'ENUM' AND labels IS NOT NULL",
@@ -192,7 +192,12 @@ async function copyStatements(sourceFile: string, from: string): Promise<string[
             return `CREATE SEQUENCE ${name(row)} INCREMENT BY ${row.increment_by} MINVALUE ${row.min_value} MAXVALUE ${row.max_value} START ${next} ${row.cycle ? 'CYCLE' : 'NO CYCLE'};`;
         }),
         ...ordered.map(row => `${String(row.sql).replace(/;\s*$/, '')};`),
-        ...ordered.map(row => `INSERT INTO ${name(row)} SELECT * FROM ${q(from)}.${name(row)};`),
+        // `rowsOf`: another statement filling a table (an anonymized copy), or none (left empty)
+        ...ordered.map(row => {
+            const own = rowsOf?.(String(row.s), String(row.n));
+            if (own === null) return '';
+            return own ?? `INSERT INTO ${name(row)} SELECT * FROM ${q(from)}.${name(row)};`;
+        }).filter(Boolean),
         ...indexes.map(row => `${String(row.sql).replace(/;\s*$/, '')};`),
         ...views.map(row => `${String(row.sql).replace(/;\s*$/, '')};`),
         ...macros.map(row => `CREATE MACRO ${name(row)}(${(row.parameters as unknown[]).map(p => q(String(p))).join(', ')}) AS ${row.kind === 'table_macro' ? 'TABLE ' : ''}${row.body};`),

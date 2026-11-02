@@ -14,6 +14,7 @@ import { ipcRenderer, isWindows } from '../electron';
 import { parsePgUrl } from '../pgUrl';
 import { mongoOption, parseMongoUri } from '../../../shared/engines/mongoUri';
 import { MYSQL_DEFAULT_PORT, parseMysqlUri } from '../../../shared/engines/mysqlUri';
+import { SQLSERVER_DEFAULT_PORT, parseSqlServerUri } from '../../../shared/engines/sqlserverUri';
 import { manifestFor } from '../../../shared/engines/manifests';
 import type { Database } from '../types';
 import FormField from './ui/FormField.vue';
@@ -22,7 +23,7 @@ import { btnSecondary, inputClass, monoInputClass, panelClass } from './ui/class
 type Ssh = NonNullable<Database['ssh']>;
 type SshFailure = { success: false; code: string; error: string; fingerprints?: string[] };
 
-const props = withDefaults(defineProps<{ editing: boolean; databaseId?: string; attempted: boolean; engine?: 'postgresql' | 'mongodb' | 'mysql' | 'mariadb' }>(), { engine: 'postgresql' });
+const props = withDefaults(defineProps<{ editing: boolean; databaseId?: string; attempted: boolean; engine?: 'postgresql' | 'mongodb' | 'mysql' | 'mariadb' | 'sqlserver' }>(), { engine: 'postgresql' });
 const form = defineModel<Database>('form', { required: true });
 const ssh = defineModel<Ssh>('ssh', { required: true });
 const { t } = useI18n();
@@ -30,15 +31,17 @@ const { t } = useI18n();
 const authSource = defineModel<string>('authSource', { default: 'admin' });
 const isMongo = props.engine === 'mongodb';
 const isMysql = props.engine === 'mysql' || props.engine === 'mariadb';
+const isSqlServer = props.engine === 'sqlserver';
 const engineLabel = manifestFor(props.engine)?.label ?? props.engine;
-const defaultPort = isMongo ? 27017 : isMysql ? MYSQL_DEFAULT_PORT : 5432;
+const defaultPort = isMongo ? 27017 : isMysql ? MYSQL_DEFAULT_PORT : isSqlServer ? SQLSERVER_DEFAULT_PORT : 5432;
 const defaultVar = isMongo ? 'MONGODB_URI' : 'DATABASE_URL';
-/** A text, its MongoDB or MySQL wording when there is one ({engine}: MySQL or MariaDB) */
+/** A text, its MongoDB, MySQL or SQL Server wording when there is one ({engine}: MySQL or MariaDB) */
 const tx = (key: string, params?: Record<string, unknown>) =>
-  t(isMongo ? `ssh.mongo.${key}` : isMysql ? `ssh.mysql.${key}` : `ssh.${key}`, { engine: engineLabel, ...params });
+  t(isMongo ? `ssh.mongo.${key}` : isMysql ? `ssh.mysql.${key}` : isSqlServer ? `ssh.sqlserver.${key}` : `ssh.${key}`, { engine: engineLabel, ...params });
 const urlPlaceholder = isMongo
   ? 'mongodb://user:password@localhost:27017/app'
-  : isMysql ? `${props.engine}://user:password@localhost:3306/app` : 'postgresql://user:password@localhost:5432/app';
+  : isMysql ? `${props.engine}://user:password@localhost:3306/app`
+  : isSqlServer ? 'Server=localhost,1433;Database=app;User Id=sa;Password=…' : 'postgresql://user:password@localhost:5432/app';
 
 const hosts = ref<string[]>([]);
 onMounted(async () => {
@@ -126,9 +129,27 @@ const applyMysqlUrl = (url: string) => {
   return true;
 };
 
+/** A SQL Server URL or ADO.NET string naming its database (a named instance has no fixed port: one is needed) */
+const applySqlServerUrl = (url: string) => {
+  const parsed = parseSqlServerUri(url);
+  if (!parsed?.database) return false;
+  const [host] = parsed.host.split('\\');
+  form.value.name = parsed.database;
+  form.value.user = parsed.user;
+  if (parsed.password) form.value.password = parsed.password;
+  form.value.sslMode = parsed.sslMode === 'verify-full' ? 'verify-ca' : parsed.sslMode;
+  const remote = remoteHostFor(host);
+  ssh.value.remoteHost = remote.host;
+  ssh.value.remotePort = parsed.port || defaultPort;
+  containerName.value = remote.container ?? '';
+  if (!form.value.displayName?.trim()) form.value.displayName = parsed.database;
+  return true;
+};
+
 const applyUrl = (url: string) => {
   if (isMongo) return applyMongoUrl(url);
   if (isMysql) return applyMysqlUrl(url);
+  if (isSqlServer) return applySqlServerUrl(url);
   const parsed = parsePgUrl(url);
   if (!parsed?.database) return false;
   form.value.name = parsed.database;
@@ -201,7 +222,7 @@ watch(pastedUrl, (url) => { if (url.trim()) applyUrl(url.trim()); });
 const pastedInvalid = computed(() => {
   const url = pastedUrl.value.trim();
   if (!url) return false;
-  return !(isMongo ? mongoUrl(url) : isMysql ? mysqlUrl(url) : parsePgUrl(url)?.database);
+  return !(isMongo ? mongoUrl(url) : isMysql ? mysqlUrl(url) : isSqlServer ? parseSqlServerUri(url)?.database : parsePgUrl(url)?.database);
 });
 
 // --- Test -----------------------------------------------------------------------
@@ -254,11 +275,12 @@ const runTest = async () => {
       sslMode: form.value.sslMode,
       ssh: sshPayload(),
       ...(isMongo ? { engine: 'mongodb', mongo: form.value.user ? { authSource: authSource.value || 'admin' } : undefined } : {}),
-      ...(isMysql ? { engine: props.engine } : {}),
+      ...(isMysql || isSqlServer ? { engine: props.engine } : {}),
     }) as { version: string; tables: number };
     const detail = isMongo
       ? t('mongoModal.testOk', { version: result.version, collections: result.tables })
       : isMysql ? t('sqlModal.testOk', { version: `${engineLabel} ${result.version}`, tables: result.tables })
+      : isSqlServer ? t('sqlModal.testOk', { version: result.version, tables: result.tables })
       : t('dbModal.testOk', { version: result.version, tables: result.tables });
     pgStep.value = { state: 'ok', detail };
   } catch (error) {
@@ -406,7 +428,7 @@ const stepMark = (state: Step['state']) => (state === 'ok' ? '✓' : state === '
           <span v-if="readError.error && !['not-url', 'unknown-host'].includes(readError.code)" class="block mt-0.5 font-mono text-[11px] text-gray-500 dark:text-zinc-400 break-words">{{ readError.error }}</span>
         </p>
       </template>
-      <FormField v-else :label="t('database.connectionUrlLabel')" for="ssh-url" :error="pastedInvalid ? (isMongo || isMysql ? tx('urlInvalid') : t('dbModal.urlInvalid')) : undefined" :hint="tx('urlHint')">
+      <FormField v-else :label="t('database.connectionUrlLabel')" for="ssh-url" :error="pastedInvalid ? (isMongo || isMysql || isSqlServer ? tx('urlInvalid') : t('dbModal.urlInvalid')) : undefined" :hint="tx('urlHint')">
         <input id="ssh-url" v-model="pastedUrl" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" :placeholder="urlPlaceholder" />
       </FormField>
 
@@ -460,7 +482,7 @@ const stepMark = (state: Step['state']) => (state === 'ok' ? '✓' : state === '
         <div v-if="pgStep.state !== 'idle'" class="flex items-start gap-2">
           <span class="mt-0.5 font-mono text-[11px] w-4" :class="stepClass(pgStep.state)">{{ stepMark(pgStep.state) }}</span>
           <div class="min-w-0 flex-1">
-            <div class="text-gray-800 dark:text-zinc-100">{{ tx(isMongo || isMysql ? 'test' : 'test.postgres', { target: `${ssh.remoteHost}:${ssh.remotePort}` }) }}</div>
+            <div class="text-gray-800 dark:text-zinc-100">{{ tx(isMongo || isMysql || isSqlServer ? 'test' : 'test.postgres', { target: `${ssh.remoteHost}:${ssh.remotePort}` }) }}</div>
             <div v-if="pgStep.detail" class="text-[11.5px] break-words" :class="pgStep.state === 'error' ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-zinc-400'">{{ pgStep.detail }}</div>
           </div>
         </div>

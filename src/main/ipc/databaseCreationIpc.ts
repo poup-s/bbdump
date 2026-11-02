@@ -149,7 +149,7 @@ export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWin
     });
 
     // Tables and columns of a database, with what can be anonymized: for the duplicate dialog
-    ipcMain.handle('duplicate-anonymize-plan', async (_, sourceId: string) => {
+    ipcMain.handle('duplicate-anonymize-plan', async (_, sourceId: string, purpose?: unknown) => {
         try {
             // MongoDB: fields of sampled documents, for the anonymization for AI
             const saved = getConfig().databases.find(d => d.id === sourceId);
@@ -158,10 +158,10 @@ export function registerDatabaseCreationHandlers(getMainWindow: () => BrowserWin
                 const { buildMongoMaskingPlan } = await import('../mongoMasking');
                 return { success: true, plan: await buildMongoMaskingPlan(sourceId) };
             }
-            // MySQL, MariaDB, SQLite: tables and columns from the driver's catalog
-            if (['mysql', 'mariadb', 'sqlite'].includes(engineOf(saved))) {
+            // MySQL, MariaDB, SQLite, SQL Server, DuckDB: tables and columns from the driver's catalog
+            if (['mysql', 'mariadb', 'sqlite', 'sqlserver', 'duckdb'].includes(engineOf(saved))) {
                 const { buildSqlMaskingPlan } = await import('../sqlMasking');
-                return { success: true, plan: await buildSqlMaskingPlan(sourceId) };
+                return { success: true, plan: await buildSqlMaskingPlan(sourceId, purpose === 'duplicate' ? 'sync.anonymize' : 'mask.fields') };
             }
             const plan = await onSource(sourceId, async src => {
                 const catalog = await readCatalog(src);

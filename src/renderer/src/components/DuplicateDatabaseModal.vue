@@ -13,7 +13,7 @@ import { ipcRenderer } from '../electron';
 import { Database } from '../types';
 import { store } from '../store';
 import { engineOf } from '../../../shared/engines/features';
-import { isMysqlFamily } from '../../../shared/engines/manifests';
+import { FILE_ENGINES, FILE_EXTENSION, filePathOf, isMysqlFamily } from '../../../shared/engines/manifests';
 import AppModal from './ui/AppModal.vue';
 import ModalHeading from './ui/ModalHeading.vue';
 import FormField from './ui/FormField.vue';
@@ -50,9 +50,11 @@ const anonymizeOn = ref(false);
 const anonymizeChoices = ref<AnonymizeChoices | null>(null);
 const showAnonymize = ref(false);
 /** MySQL, MariaDB, SQLite, MongoDB: copied by bbdump itself (no local PostgreSQL server needed) */
-const sqlEngine = computed(() => ['mysql', 'mariadb', 'sqlite', 'mongodb'].includes(engineOf(props.sourceDb)));
+const sqlEngine = computed(() => ['mysql', 'mariadb', 'sqlite', 'mongodb', 'sqlserver', 'duckdb'].includes(engineOf(props.sourceDb)));
 const isMongo = computed(() => engineOf(props.sourceDb) === 'mongodb');
-const isSqlite = computed(() => engineOf(props.sourceDb) === 'sqlite');
+/** SQLite, DuckDB: the copy is a new file */
+const isSqlite = computed(() => FILE_ENGINES.includes(engineOf(props.sourceDb)));
+const isDuckdb = computed(() => engineOf(props.sourceDb) === 'duckdb');
 const familyOf = (db: Database) => (isMysqlFamily(engineOf(db)) ? 'mysql' : engineOf(db));
 const sqlForm = ref({ serverOf: '', file: '' });
 /** Servers a MySQL / MariaDB copy can go to: the source's, then those of other saved databases of its engine */
@@ -74,7 +76,7 @@ const chosenServer = computed(() => store.databases.find(d => d.id === (sqlForm.
 const fileName = (file: string) => file.split(/[\\/]/).pop() || file;
 
 const chooseFile = async () => {
-  const file = await ipcRenderer.invoke('select-sqlite-copy-path', sqlForm.value.file || undefined) as string | null;
+  const file = await ipcRenderer.invoke('select-sqlite-copy-path', sqlForm.value.file || undefined, engineOf(props.sourceDb)) as string | null;
   if (file) sqlForm.value.file = file;
 };
 
@@ -99,7 +101,7 @@ const sourceLabel = computed(() => (props.sourceDb ? (props.sourceDb.masked ? 'â
 const sourceWhere = computed(() => {
   const db = props.sourceDb;
   if (!db) return '';
-  if (engineOf(db) === 'sqlite') return fileName(db.sqlite?.path ?? db.name);
+  if (isSqlite.value) return fileName(filePathOf(db) ?? db.name);
   return `${db.ssh ? `${db.ssh.host} (SSH)` : `${db.host}:${db.port}`} Â· ${db.name}`;
 });
 /** Where the copy goes, under its name */
@@ -172,8 +174,8 @@ onMounted(async () => {
     const source = props.sourceDb;
     if (isSqlite.value) {
       // "<file>-copy.sqlite" next to the source
-      const file = source.sqlite?.path ?? '';
-      const ext = /\.[^.\\/]+$/.exec(file)?.[0] ?? '.sqlite';
+      const file = filePathOf(source) ?? '';
+      const ext = /\.[^.\\/]+$/.exec(file)?.[0] ?? (isDuckdb.value ? '.duckdb' : '.sqlite');
       sqlForm.value.file = file ? `${file.slice(0, file.length - ext.length)}-copy${ext}` : '';
     } else {
       sqlForm.value.serverOf = source.id;
@@ -222,8 +224,8 @@ const fileError = computed(() => {
   if (!isSqlite.value) return undefined;
   const file = sqlForm.value.file.trim();
   if (!file) return attempted.value ? t('databases.duplicateFileRequired') : undefined;
-  if (!/\.(sqlite3?|db3?|s3db|sl3)$/i.test(file)) return t('databases.duplicateFileExtension');
-  if (file === props.sourceDb?.sqlite?.path) return t('databases.duplicateFileSame');
+  if (!FILE_EXTENSION[engineOf(props.sourceDb)].test(file)) return t(isDuckdb.value ? 'databases.duplicateFileExtensionDuckdb' : 'databases.duplicateFileExtension');
+  if (file === filePathOf(props.sourceDb)) return t('databases.duplicateFileSame');
   return undefined;
 });
 const portError = computed(() => {
@@ -359,7 +361,7 @@ const duplicateToLocal = async () => {
         :eyebrow="t(sqlEngine ? 'databases.duplicateSqlEyebrow' : 'databases.duplicateEyebrow')"
         :title="t('databases.duplicateTitle', { name: sourceLabel })"
         :subtitle="t(sqlEngine
-          ? (isMongo ? (anonymizeOn ? 'databases.duplicateMongoInfoAnonymized' : 'databases.duplicateMongoInfo') : anonymizeOn ? 'databases.duplicateSqlInfoAnonymized' : isSqlite ? 'databases.duplicateSqliteInfo' : 'databases.duplicateSqlInfo')
+          ? (isMongo ? (anonymizeOn ? 'databases.duplicateMongoInfoAnonymized' : 'databases.duplicateMongoInfo') : anonymizeOn ? 'databases.duplicateSqlInfoAnonymized' : isDuckdb ? 'databases.duplicateDuckdbInfo' : isSqlite ? 'databases.duplicateSqliteInfo' : 'databases.duplicateSqlInfo')
           : (anonymizeOn ? 'databases.duplicateInfoAnonymized' : 'databases.duplicateInfo'))"
       />
       <div class="space-y-4">
@@ -381,9 +383,9 @@ const duplicateToLocal = async () => {
         </div>
 
         <!-- SQLite: the new file -->
-        <FormField v-if="isSqlite" :label="t('databases.duplicateFile')" for="dup-file" required :error="fileError" :hint="t('databases.duplicateFileHint')">
+        <FormField v-if="isSqlite" :label="t('databases.duplicateFile')" for="dup-file" required :error="fileError" :hint="t(isDuckdb ? 'databases.duplicateFileHintDuckdb' : 'databases.duplicateFileHint')">
           <div class="flex gap-2">
-            <input id="dup-file" v-model="sqlForm.file" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" placeholder="/path/to/copy.sqlite" />
+            <input id="dup-file" v-model="sqlForm.file" type="text" spellcheck="false" autocomplete="off" :class="monoInputClass" :placeholder="isDuckdb ? '/path/to/copy.duckdb' : '/path/to/copy.sqlite'" />
             <button type="button" :class="btnSecondary" class="shrink-0" @click="chooseFile">{{ t('sqlModal.fileChoose') }}</button>
           </div>
         </FormField>

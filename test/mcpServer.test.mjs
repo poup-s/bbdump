@@ -226,7 +226,19 @@ describe('MCP server', { skip: built ? false : 'mcp-postgres is not built (npm r
       assert.deepEqual((await client.readQuery('SELECT * FROM customers WHERE id < 0')).fields, ['id', 'name']);
       await assert.rejects(client.readQuery('DELETE FROM orders'), /read/i);
       await assert.rejects(client.readQuery(`SELECT * FROM read_text(${JSON.stringify(path.join(dir, 'secret.txt')).replace(/"/g, "'")})`), /disabled|external|not allowed|Permission/i);
-      assert.throws(() => client.sqlActive('mcp.write'), /read-only/);
+      // Changes: one run of the tool each; the row written comes back, the counts are DuckDB's own
+      const written = await client.withWrite(async (session) => ({
+        rows: await session.rows('INSERT INTO customers (id, name) VALUES (?, ?) RETURNING *', [3, "O'Neil"]),
+        updated: await session.run('UPDATE orders SET total = ? WHERE id IN (?, ?)', [5, 10, 11]),
+        removed: await session.run('DELETE FROM customers WHERE id = ?', [3]),
+      }));
+      assert.equal(written.rows[0].name, "O'Neil");
+      assert.equal(written.updated.affected, 2);
+      assert.equal(written.removed.affected, 1);
+      assert.deepEqual((await client.readQuery('SELECT count(*) AS n FROM orders WHERE total = 5')).rows[0].n, 2);
+      // A table of another schema is written schema.table
+      assert.equal(catalog.qt('sales.targets'), '"sales"."targets"');
+      assert.equal(catalog.qt('orders'), '"orders"');
       await client.clearSql();
     } finally {
       if (saved === undefined) delete process.env.BBDUMP_CONFIG_PATH;

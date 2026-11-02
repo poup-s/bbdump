@@ -215,8 +215,15 @@ const DUCKDB_FEATURES = {
     'explorer.edit': 'yes',
     'explorer.query': 'yes',
     'explorer.diagram': 'yes',
-    // The AI reads (chat, dashboards, MCP); changes are made in bbdump
+    // A copy is a new file, filled by DuckDB with both files attached; "Update from…" writes
+    // into a file (always on this computer). New in this version: in beta
+    'database.duplicate': 'beta',
+    'sync.fromSource': 'beta',
+    'sync.anonymize': 'beta',
     'mcp.read': 'yes',
+    // Each change of the AI is one run of the duckdb tool (it commits it), with its undo point
+    'mcp.write': 'beta',
+    'mcp.undo': 'beta',
     'chat': 'yes',
     'dashboards': 'yes',
 } as const satisfies Partial<Record<FeatureKey, Support>>;
@@ -232,6 +239,7 @@ export const DUCKDB: EngineManifest = {
 /** SQL Server and Azure SQL: in beta (new in this version) */
 const SQLSERVER_FEATURES = {
     'connection.test': 'beta',
+    'connection.ssh': 'beta',
     'connection.tls': 'beta',
     'stats.size': 'beta',
     'backup.run': 'beta',
@@ -244,8 +252,14 @@ const SQLSERVER_FEATURES = {
     'explorer.edit': 'beta',
     'explorer.query': 'beta',
     'explorer.diagram': 'beta',
-    // The AI reads (chat, dashboards, MCP); changes are made in bbdump
+    // A copy is a new database on a SQL Server bbdump reaches; "Update from…" writes only into a
+    // copy on this computer (localhost, no SSH)
+    'database.duplicate': 'beta',
+    'sync.fromSource': 'beta',
+    'sync.anonymize': 'beta',
     'mcp.read': 'beta',
+    'mcp.write': 'beta',
+    'mcp.undo': 'beta',
     'chat': 'beta',
     'dashboards': 'beta',
 } as const satisfies Partial<Record<FeatureKey, Support>>;

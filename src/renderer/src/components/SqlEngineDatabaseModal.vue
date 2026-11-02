@@ -65,9 +65,9 @@ const mode = ref<'url' | 'manual' | 'ssh' | 'local'>('url');
 const localPort = ref(MYSQL_DEFAULT_PORT);
 const localReady = ref<'mysql' | 'mariadb' | 'mongodb' | null>(null);
 /** Server via SSH: the tunnel's settings, and the database as the shared SSH fields edit it */
-const emptySsh = (): NonNullable<Database['ssh']> => ({ host: '', remoteHost: 'localhost', remotePort: MYSQL_DEFAULT_PORT, envFile: '', envVar: 'DATABASE_URL' });
+const emptySsh = (): NonNullable<Database['ssh']> => ({ host: '', remoteHost: 'localhost', remotePort: defaultPort.value, envFile: '', envVar: 'DATABASE_URL' });
 const sshDraft = ref<NonNullable<Database['ssh']>>(emptySsh());
-const sshForm = ref({ name: '', user: '', password: '', displayName: '', host: '', port: MYSQL_DEFAULT_PORT, sslMode: 'disable' as SslMode } as unknown as Database);
+const sshForm = ref({ name: '', user: '', password: '', displayName: '', host: '', port: defaultPort.value, sslMode: 'disable' as SslMode } as unknown as Database);
 const url = ref('');
 const passwordVisible = ref(false);
 const form = ref({
@@ -168,7 +168,7 @@ const errors = computed(() => {
     if (!sshDraft.value.host?.trim()) found.sshHost = t('dbModal.required');
     if (!sshForm.value.name?.trim()) found.name = t('dbModal.required');
     if (!sshForm.value.user?.trim()) found.user = t('dbModal.required');
-    const remotePort = Number(sshDraft.value.remotePort) || MYSQL_DEFAULT_PORT;
+    const remotePort = Number(sshDraft.value.remotePort) || defaultPort.value;
     if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) found.remotePort = t('dbModal.portInvalid');
   } else {
     if (!form.value.name.trim()) found.name = t('dbModal.required');
@@ -194,7 +194,7 @@ const cleanSsh = (): NonNullable<Database['ssh']> => {
     user: typeof d.user === 'string' && d.user.trim() ? d.user.trim() : undefined,
     port: typeof d.port === 'number' && d.port > 0 ? d.port : undefined,
     remoteHost: d.remoteHost?.trim() || 'localhost',
-    remotePort: Number(d.remotePort) || MYSQL_DEFAULT_PORT,
+    remotePort: Number(d.remotePort) || defaultPort.value,
     envFile: d.envFile?.trim() || undefined,
     envVar: d.envVar?.trim() || undefined,
   };
@@ -208,7 +208,7 @@ const connectionFields = () => {
     return {
       connectionString: undefined,
       host: sshForm.value.host || sshDraft.value.host.trim(),
-      port: Number(sshDraft.value.remotePort) || MYSQL_DEFAULT_PORT,
+      port: Number(sshDraft.value.remotePort) || defaultPort.value,
       user: (sshForm.value.user || '').trim(),
       password: sshForm.value.password || '',
       name: (sshForm.value.name || '').trim(),
@@ -446,8 +446,8 @@ const close = () => {
 const modeOptions = computed(() => [
   { value: 'url' as const, label: t('database.modeUrl'), icon: ICONS.link },
   { value: 'manual' as const, label: t('database.modeManual'), icon: ICONS.edit },
-  // SQL Server: no SSH or local server yet
-  ...(isSqlServer.value ? [] : [{ value: 'ssh' as const, label: t('ssh.modeShort'), icon: ICONS.terminal }]),
+  { value: 'ssh' as const, label: t('ssh.modeShort'), icon: ICONS.terminal },
+  // SQL Server: no local server yet
   // A new database on this computer's server (adding only)
   ...(isEditing.value || isSqlServer.value ? [] : [{ value: 'local' as const, label: t('localServer.mode'), icon: ICONS.computer }]),
 ]);
@@ -556,7 +556,7 @@ const verifyHint = computed(() => {
             v-else-if="mode === 'ssh'"
             v-model:form="sshForm"
             v-model:ssh="sshDraft"
-            :engine="engine === 'mariadb' ? 'mariadb' : 'mysql'"
+            :engine="engine === 'mariadb' ? 'mariadb' : engine === 'sqlserver' ? 'sqlserver' : 'mysql'"
             :editing="isEditing"
             :database-id="store.editingDatabase?.id"
             :attempted="attempted"

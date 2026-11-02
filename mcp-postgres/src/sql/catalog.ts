@@ -20,6 +20,14 @@ export const qi = (name: string) => {
   return quoteIdent(name, engine === 'sqlite' || engine === 'duckdb' ? engine : engine === 'sqlserver' ? 'tsql' : 'mysql');
 };
 
+/** Quotes a table as sql_list_tables names it: SQL Server and DuckDB tables of another schema are schema.table */
+export const qt = (table: string) => {
+  const engine = sqlActive().engine;
+  const dot = table.indexOf('.');
+  if ((engine === 'sqlserver' || engine === 'duckdb') && dot > 0) return `${qi(table.slice(0, dot))}.${qi(table.slice(dot + 1))}`;
+  return qi(table);
+};
+
 // --- SQL Server (a table of another schema than dbo is named schema.table) -----------------------
 
 const msName = (row: Row) => (row.s === 'dbo' ? String(row.n) : `${row.s}.${row.n}`);

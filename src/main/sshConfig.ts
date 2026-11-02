@@ -144,7 +144,11 @@ export function readEnvCommand(file: string, name: string): string {
  */
 export function envSearchScript(engine: EnvSearchEngine = 'postgresql'): string {
   // A fixed pattern per engine: nothing typed by the user
-  const scheme = engine === 'mongodb' ? 'mongodb(\\+srv)?://' : engine === 'mysql' ? '(mysql|mariadb)://' : 'postgres(ql)?://';
+  const scheme = engine === 'mongodb' ? 'mongodb(\\+srv)?://'
+    : engine === 'mysql' ? '(mysql|mariadb)://'
+    // SQL Server: a URL, or an ADO.NET string (Server=… / Data Source=…)
+    : engine === 'sqlserver' ? '((sqlserver|mssql|jdbc:sqlserver)://|[Ss][Ee][Rr][Vv][Ee][Rr][[:space:]]*=|[Dd][Aa][Tt][Aa] [Ss][Oo][Uu][Rr][Cc][Ee][[:space:]]*=)'
+    : 'postgres(ql)?://';
   return `for d in "$HOME" /srv /var/www /opt /home; do
   [ -d "$d" ] || continue
   find "$d" -maxdepth 6 \\( -name node_modules -o -name .git -o -name vendor -o -name .cache -o -name .npm -o -name .nvm -o -name .local -o -name snap \\) -prune \\
@@ -159,7 +163,7 @@ exit 0
 }
 
 /** The URL kinds the server search looks for (MariaDB shares MySQL's) */
-export type EnvSearchEngine = 'postgresql' | 'mongodb' | 'mysql';
+export type EnvSearchEngine = 'postgresql' | 'mongodb' | 'mysql' | 'sqlserver';
 
 export const ENV_SEARCH_SCRIPT = envSearchScript('postgresql');
 
@@ -191,6 +195,8 @@ export function parseEnvSearch(stdout: string, engine: EnvSearchEngine = 'postgr
     ? (v: string) => (/^MONGO(DB)?_(URI|URL)$/.test(v) ? 0 : /MONGO|DATABASE/.test(v) ? 1 : 2)
     : engine === 'mysql'
     ? (v: string) => (v === 'DATABASE_URL' ? 0 : /DATABASE|MYSQL|MARIADB|DB/.test(v) ? 1 : 2)
+    : engine === 'sqlserver'
+    ? (v: string) => (v === 'DATABASE_URL' ? 0 : /DATABASE|CONNECTION|MSSQL|SQL|DB/i.test(v) ? 1 : 2)
     : (v: string) => (v === 'DATABASE_URL' ? 0 : /DATABASE|POSTGRES|PG/.test(v) ? 1 : 2);
   return [...byFile.entries()]
     .map(([file, variables]) => ({ file, variables: variables.sort((a, b) => order(a) - order(b) || a.localeCompare(b)), example: isExample(file), copy: isCopy(file) }))

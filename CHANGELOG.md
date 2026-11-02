@@ -123,14 +123,24 @@
   a schedule, with retention, encryption and a check that opens the copy), restore into the same
   file, another one or a new file, the table explorer (schemas, keys, the diagram, editing rows,
   the SQL editor, `DESCRIBE` and `SUMMARIZE` included), the **database chat**, **dashboards** and
-  AI assistants (MCP), which read DuckDB databases but do not change them. Queries written in
-  bbdump or by the AI cannot read other files of this computer (`read_csv`, `read_parquet`,
-  `ATTACH`, `COPY`, extensions are refused). A query that runs too long is stopped.
+  AI assistants (MCP). Queries written in bbdump or by the AI cannot read other files of this
+  computer (`read_csv`, `read_parquet`, `ATTACH`, `COPY`, extensions are refused). A query that
+  runs too long is stopped. In beta:
+  - **Duplicate** into a new `.duckdb` file: tables, rows, sequences, indexes, views and macros,
+    with the personal data you choose anonymized as the rows pass (the real values never reach the
+    copy) and the tables you choose left empty.
+  - **Update from…** another DuckDB file of the same project: the missing schemas, sequences,
+    tables, columns, indexes and views, then the missing rows found by primary key (anonymized if
+    you ask, or only those of the last days).
+  - AI assistants (MCP) can insert, update and delete rows: each change waits for your approval in
+    bbdump and keeps an undo point, undone by the assistant or from the AI journal.
 - **SQL Server and Azure SQL databases (beta).** **Add an external connection** offers SQL Server:
   a connection string (`sqlserver://…`, a JDBC URL, or `Server=…;Initial Catalog=…` as Azure shows
   it) or the address field by field, a named instance (`host\SQLEXPRESS`) included, with TLS
   (encrypted and verified by default, or encrypted without checking the certificate, or not
-  encrypted). Nothing to install. They get:
+  encrypted), or a server reached **through SSH** (bbdump opens the tunnel; the connection string
+  can be found in the server's `.env` files, and the certificate is checked against the server's
+  name). Nothing to install. They get:
   - **Backups** now or on a schedule, with retention, encryption and verification. SQL Server's own
     `BACKUP` writes on the server's disk, out of reach for a remote server: bbdump makes its own,
     compressed, in one snapshot when the database allows it (snapshot isolation): the schemas,
@@ -145,8 +155,16 @@
     editor (`TOP (n)` in the query builder). Queries run in a transaction that is always rolled back,
     and words that change data are refused even without `;` between statements; a query past its
     time is stopped.
-  - The **database chat**, **dashboards** and AI assistants (MCP) read SQL Server databases (in
-    T-SQL), without changing them.
+  - **Duplicate** into a new database on the same server or on the server of another saved SQL
+    Server database: everything a backup holds, in one transaction, with the personal data you
+    choose anonymized as the rows pass and the tables you choose left empty; a copy that fails is
+    removed.
+  - **Update from…**, for a copy on this computer: the missing schemas, sequences, tables, columns,
+    indexes, constraints, foreign keys, views, functions, procedures and triggers, then the missing
+    rows found by primary key (their ids kept), anonymized if you ask.
+  - The **database chat**, **dashboards** and AI assistants (MCP) work in T-SQL. Assistants can also
+    insert, update and delete rows, each change in one transaction, approved by you in bbdump, with
+    an undo point (rows given back with their ids and dates).
 
 ### Changed
 

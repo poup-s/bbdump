@@ -191,8 +191,8 @@ async function undoSql(engine: string, databaseId: string, tables: UndoTable[]) 
   return { conflicts: result.conflicts, restored: result.restored };
 }
 
-/** MySQL, MariaDB and SQLite: tables in their own dialect, undone by sqlUndo.ts */
-const isSqlEngine = (engine: string) => engine === 'mysql' || engine === 'mariadb' || engine === 'sqlite';
+/** MySQL, MariaDB, SQLite, SQL Server and DuckDB: tables in their own dialect, undone by sqlUndo.ts */
+const isSqlEngine = (engine: string) => ['mysql', 'mariadb', 'sqlite', 'sqlserver', 'duckdb'].includes(engine);
 
 /**
  * Undoes a change in one transaction: rows it inserted are deleted, rows it deleted come
