@@ -18,6 +18,9 @@ export type AnonymizeKind =
   | 'partial' | 'email' | 'phone' | 'name' | 'first_name' | 'last_name' | 'address' | 'city' | 'ip' | 'secret'
   | 'noise' | 'month' | 'year' | 'null';
 
+/** Every kind, for checking what the renderer sends */
+export const ANONYMIZE_KINDS: readonly AnonymizeKind[] = ['partial', 'email', 'phone', 'name', 'first_name', 'last_name', 'address', 'city', 'ip', 'secret', 'noise', 'month', 'year', 'null'];
+
 export interface AnonymizeCandidate { table: string; column: string; kind: AnonymizeKind }
 
 const PERSON_TABLE = /user|customer|client|member|person|people|contact|account|employee|patient|subscriber|profile|author/i;

@@ -217,19 +217,12 @@ async function keySet(reader: ConnectionPool | Transaction, t: MsTable, pk: stri
 
 /** A consistent read of the source for the whole of `fn` (snapshot isolation, when the database allows it) */
 async function inSnapshot<T>(pool: ConnectionPool, fn: (reader: ConnectionPool | Transaction) => Promise<T>): Promise<T> {
-  const types = await ms.mssql();
-  const tx = new types.Transaction(pool);
-  try {
-    await tx.begin(types.ISOLATION_LEVEL.SNAPSHOT);
-    await ms.run(tx, 'SELECT COUNT(*) AS n FROM sys.objects WHERE 1 = 0');
-  } catch {
-    await tx.rollback().catch(() => {});
-    return fn(pool);
-  }
+  const tx = await ms.snapshotTransaction(pool);
+  if (!tx) return fn(pool);
   try {
     return await fn(tx);
   } finally {
-    await tx.rollback().catch(() => {});
+    await ms.endSnapshot(tx);
   }
 }
 

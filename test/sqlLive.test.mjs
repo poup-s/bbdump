@@ -421,6 +421,40 @@ for (const label of ['SQLite', 'MySQL', 'MariaDB', 'DuckDB']) {
       const after = await sync.analyzeSync(plain.id, e.id);
       assert.deepEqual(after.schema.filter(c => c.defaultSelected), []);
       assert.ok(after.tables.every(t => t.reason === 'up_to_date'), JSON.stringify(after.tables));
+
+      // Through the window's own channel: every kind of replacement reaches the update (a city
+      // was once dropped there and copied as it was); an unknown kind stops it
+      const { handlers } = require('./electronStub.cjs');
+      if (!handlers.has('sync-apply')) require(path.join(root, 'dist/main/ipc/dbViewerIpc.js')).registerDbViewerHandlers();
+      await onSource(["INSERT INTO customers (id, name, email, city) VALUES (9, 'Zed', 'zed@shop.test', 'Lille')"]);
+      const event = { sender: { isDestroyed: () => false, send() {} } };
+      const only = (kind) => ({ changes: [], tables: [{ key: `${ns}.customers` }], anonymize: [{ table: `${ns}.customers`, column: 'city', kind }], backup: false });
+      const refused = await handlers.get('sync-apply')(event, plain.id, e.id, only('bogus'));
+      assert.equal(refused.success, false);
+      assert.equal(await n(plain.id, 'customers'), 3);
+      const applied = await handlers.get('sync-apply')(event, plain.id, e.id, only('city'));
+      assert.equal(applied.success, true, applied.error);
+      const city = (await query(plain.id, 'SELECT city FROM customers WHERE id = 9'))[0].city;
+      assert.ok(city && city !== 'Lille', String(city));
+
+      // The AI journal's undo on this engine: a deleted row back, a changed one as it was
+      const { encodeRow } = require(path.join(root, 'dist/shared/engines/sqlRows.js'));
+      const undo = require(path.join(root, 'dist/main/sqlUndo.js'));
+      const mutate = async (sql) => (await registry.facetForDb(plain.id, 'explorer.query', 'query')).runMutation(plain.id, { sql });
+      // Rows no order points to (DuckDB cannot update a row a foreign key references)
+      await mutate("INSERT INTO customers (id, name, email, city) VALUES (10, 'Ten', 'ten@shop.test', 'Metz')");
+      const kept = (await query(plain.id, 'SELECT * FROM customers WHERE id IN (9, 10) ORDER BY id'));
+      await mutate('DELETE FROM customers WHERE id = 10');
+      await mutate("UPDATE customers SET name = 'Changed' WHERE id = 9");
+      const changed = (await query(plain.id, 'SELECT * FROM customers WHERE id = 9'));
+      const tables = [{ schema: ns, table: 'customers', primaryKey: ['id'], before: kept.map(encodeRow), after: changed.map(encodeRow) }];
+      const preview = await undo.previewSqlUndo(e.engine, plain.id, tables);
+      assert.deepEqual(preview.conflicts, []);
+      const undone = await undo.undoSqlChange(e.engine, plain.id, tables);
+      assert.equal(undone.conflicts, undefined);
+      assert.deepEqual((await query(plain.id, 'SELECT * FROM customers WHERE id IN (9, 10) ORDER BY id')).map(encodeRow), kept.map(encodeRow));
+      // Undone once: the rows are no longer as the change left them
+      assert.ok((await undo.previewSqlUndo(e.engine, plain.id, tables)).conflicts.length > 0);
     });
   });
 }

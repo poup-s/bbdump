@@ -447,18 +447,9 @@ async function dumpRows(reader: ConnectionPool | Transaction, schema: string, na
 
 /** Reads the catalog and the rows of the database into the backup's lines, in replay order */
 async function writeBackup(pool: ConnectionPool, out: (line: Line) => Promise<void>, database: string, options: { rows?: boolean } = {}): Promise<{ tables: number; rows: number; skipped: string[]; snapshot: boolean }> {
-    const types = await mssql();
-    const tx = new types.Transaction(pool);
-    let snapshot = true;
-    try {
-        await tx.begin(types.ISOLATION_LEVEL.SNAPSHOT);
-        // The first read starts the snapshot (and fails when the database does not allow it)
-        await run(tx, 'SELECT COUNT(*) AS n FROM sys.objects WHERE 1 = 0');
-    } catch {
-        await tx.rollback().catch(() => {});
-        snapshot = false;
-    }
-    const reader: ConnectionPool | Transaction = snapshot ? tx : pool;
+    const tx = await snapshotTransaction(pool);
+    const snapshot = !!tx;
+    const reader: ConnectionPool | Transaction = tx ?? pool;
     const skipped: string[] = [];
     let totalRows = 0;
     try {
@@ -622,8 +613,37 @@ async function writeBackup(pool: ConnectionPool, out: (line: Line) => Promise<vo
         await out({ t: 'end', tables: tables.length, rows: totalRows, skipped });
         return { tables: tables.length, rows: totalRows, skipped, snapshot };
     } finally {
-        if (snapshot) await tx.rollback().catch(() => {});
+        if (tx) await endSnapshot(tx);
     }
+}
+
+/**
+ * A read transaction in snapshot isolation (one consistent state), when the database allows it;
+ * null otherwise (a new database does not, unless told to). Ended by endSnapshot.
+ */
+async function snapshotTransaction(pool: ConnectionPool): Promise<Transaction | null> {
+    const allowed = (await run(pool, 'SELECT snapshot_isolation_state AS s FROM sys.databases WHERE database_id = DB_ID()')).recordset[0]?.s;
+    if (Number(allowed) !== 1) return null;
+    const types = await mssql();
+    const tx = new types.Transaction(pool);
+    await tx.begin(types.ISOLATION_LEVEL.SNAPSHOT);
+    try {
+        // The first read starts the snapshot
+        await run(tx, 'SELECT COUNT(*) AS n FROM sys.objects WHERE 1 = 0');
+        return tx;
+    } catch {
+        await endSnapshot(tx);
+        return null;
+    }
+}
+
+/**
+ * Rolls back a snapshot read. Its connection goes back to the pool: the isolation level is put
+ * back first, or the next query there would run in snapshot isolation too.
+ */
+async function endSnapshot(tx: Transaction): Promise<void> {
+    await run(tx, 'SET TRANSACTION ISOLATION LEVEL READ COMMITTED').catch(() => {});
+    await tx.rollback().catch(() => {});
 }
 
 /** Each line of a backup, in order (a damaged file fails on its line) */
@@ -1373,6 +1393,6 @@ export type SqlServerLine = Line;
 export type SqlServerColumn = DumpColumn;
 export type SqlServerIndex = DumpIndex;
 export const sqlserverInternals = {
-    mssql, poolFor, saved, run, runBatch, transactionState, friendly, qualified,
+    mssql, poolFor, saved, run, runBatch, transactionState, friendly, qualified, snapshotTransaction, endSnapshot,
     writeBackup, dumpRows, insertRows, createTableSql, createIndexSql, dumpExpression, decodeValue,
 };

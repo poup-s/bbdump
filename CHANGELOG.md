@@ -171,6 +171,13 @@
 - **Dashboards**: the AI no longer puts values of different units on one chart (revenue in € and a
   number of orders), where the smaller one was flat; it makes two charts side by side.
 
+### Fixed
+
+- **Update from…** with anonymization: columns chosen to become a city, a first or last name,
+  starred text, noisy numbers, rounded dates or nothing were copied with their real values; only
+  emails, phones, full names, addresses, IPs and secrets were replaced. Every choice is now
+  applied, and an unknown one stops the update.
+
 ### Security
 
 - Dependencies updated for published vulnerabilities: zod 4 (validation of the AI's tool calls and of

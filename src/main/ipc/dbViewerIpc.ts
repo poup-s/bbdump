@@ -451,7 +451,11 @@ export function registerDbViewerHandlers() {
 
     ipcMain.handle('sync-apply', async (event, targetId: string, sourceId: string, choices: unknown) => {
         const { applySync } = await import('../sync/syncEngine');
+        const { ANONYMIZE_KINDS } = await import('../sync/dataSync');
         const c = (choices ?? {}) as Record<string, unknown>;
+        // A column chosen for anonymizing is never copied as it is: an unknown kind stops the update
+        const unknown = Array.isArray(c.anonymize) ? (c.anonymize as Array<{ kind: unknown }>).find(a => !ANONYMIZE_KINDS.includes(String(a?.kind) as never)) : undefined;
+        if (unknown) return { success: false, error: `Unknown anonymization: ${String(unknown.kind)}`, schema: { applied: 0, failed: [] }, tables: [] };
         const safeChoices = {
             changes: Array.isArray(c.changes) ? c.changes.map(String) : [],
             tables: Array.isArray(c.tables) ? (c.tables as Array<{ key: unknown; recentDays?: unknown }>).map(t => ({
@@ -459,8 +463,7 @@ export function registerDbViewerHandlers() {
                 recentDays: typeof t.recentDays === 'number' && t.recentDays > 0 ? t.recentDays : undefined,
             })) : [],
             anonymize: Array.isArray(c.anonymize) ? (c.anonymize as Array<{ table: unknown; column: unknown; kind: unknown }>)
-                .filter(a => ['email', 'phone', 'name', 'address', 'ip', 'secret'].includes(String(a.kind)))
-                .map(a => ({ table: String(a.table), column: String(a.column), kind: String(a.kind) as 'email' })) : [],
+                .map(a => ({ table: String(a.table), column: String(a.column), kind: String(a.kind) as (typeof ANONYMIZE_KINDS)[number] })) : [],
             backup: c.backup !== false,
         };
         return applySync(String(targetId), String(sourceId), safeChoices, (progress) => {

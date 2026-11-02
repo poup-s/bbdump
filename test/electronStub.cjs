@@ -3,9 +3,11 @@
 // temporary directory before requiring anything that logs.
 const Module = require('module');
 
+// IPC handlers registered by the modules, kept by name: a test can call one as the window would
+const handlers = new Map();
 const fakeElectron = {
   app: { isPackaged: false, getPath: () => process.cwd(), getVersion: () => '0.0.0-test' },
-  ipcMain: { handle() {}, on() {} },
+  ipcMain: { handle(name, fn) { handlers.set(name, fn); }, on() {} },
 };
 
 const originalLoad = Module._load;
@@ -13,3 +15,5 @@ Module._load = function (request, parent, isMain) {
   if (request === 'electron') return fakeElectron;
   return originalLoad.call(this, request, parent, isMain);
 };
+
+module.exports = { handlers };
