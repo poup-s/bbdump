@@ -257,7 +257,8 @@ describe('SQL Server through the project proxy', { skip: sqlServer ? false : 'BB
         const app = await appPool(listen).connect();
         const { recordset } = await app.request().query('SELECT DB_NAME() AS db, SUSER_NAME() AS who, @@SPID AS spid, (SELECT COUNT(*) FROM items) AS n');
         const { spid, ...seen } = recordset[0];
-        assert.deepEqual(seen, { db: name, who: login, n: 2 });
+        // Each round adds a row
+        assert.deepEqual(seen, { db: name, who: login, n: 2 + round });
         // The server sees the proxy's connection encrypted (asked as sa: the login cannot view server state)
         const encrypted = await admin.request().input('spid', mssql.Int, spid).query('SELECT encrypt_option FROM sys.dm_exec_connections WHERE session_id = @spid');
         assert.equal(encrypted.recordset[0]?.encrypt_option, 'TRUE');
@@ -278,8 +279,8 @@ describe('SQL Server through the project proxy', { skip: sqlServer ? false : 'BB
     const { listen, project } = await start({ sslMode: 'disable' });
     try {
       const app = await appPool(listen).connect();
-      const { recordset } = await app.request().query('SELECT SUSER_NAME() AS who, (SELECT COUNT(*) FROM items) AS n');
-      assert.deepEqual(recordset[0], { who: login, n: 2 });
+      const { recordset } = await app.request().query("SELECT SUSER_NAME() AS who, (SELECT COUNT(*) FROM items WHERE id = 1) AS n");
+      assert.deepEqual(recordset[0], { who: login, n: 1 });
       await app.close();
     } finally {
       proxy.stopProxy(project);
