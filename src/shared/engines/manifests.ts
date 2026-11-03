@@ -303,3 +303,21 @@ export const isMysqlFamily = (engine: string | undefined) => engine === 'mysql' 
 export function manifestFor(engine: string): EngineManifest | undefined {
     return MANIFESTS.find(manifest => manifest.id === engine);
 }
+
+/**
+ * The engine a pasted connection text is for: a URL by its scheme (postgresql://, mysql://,
+ * mongodb+srv://, sqlserver://, jdbc:sqlserver://…), an ADO.NET string (Server=…;Database=…)
+ * for SQL Server, or a file path by its extension. Null when it says nothing.
+ */
+export function engineFromConnectionText(text: string): string | null {
+    const value = text.trim();
+    if (!value) return null;
+    const scheme = /^(?:jdbc:)?([a-z][a-z0-9+.-]*):\/\//i.exec(value)?.[1]?.toLowerCase();
+    if (scheme) return MANIFESTS.find(manifest => manifest.uriSchemes.includes(scheme))?.id ?? null;
+    if (/^(?:server|data source|address|addr|network address)\s*=/i.test(value) && value.includes(';')) return 'sqlserver';
+    if (/^(?:~|\/|[a-z]:[\\/]|\\\\)/i.test(value)) {
+        if (/\.(duckdb|ddb)$/i.test(value)) return 'duckdb';
+        if (FILE_EXTENSION.sqlite.test(value)) return 'sqlite';
+    }
+    return null;
+}

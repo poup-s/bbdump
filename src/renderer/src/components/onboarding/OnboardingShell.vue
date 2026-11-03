@@ -41,7 +41,7 @@ const sectionState = (index: number) => {
 
 const continueLabel = computed(() => {
   if (step.value.id === 'welcome') return t('onboarding.welcome.start');
-  if (step.value.id === 'databases' && !onboarding.remoteParsed.value && !state.selectedLocal.length) return t('onboarding.skip');
+  if (step.value.id === 'databases' && !onboarding.remoteParsed.value && !onboarding.remoteEngine.value && !state.selectedLocal.length) return t('onboarding.skip');
   if (step.value.id === 'ai' && !state.aiConnected.length) return t('onboarding.skip');
   if (isLast.value) return t('onboarding.getStarted');
   return t('onboarding.continue');

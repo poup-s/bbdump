@@ -3,9 +3,10 @@ import { watch } from 'vue';
 import { useI18n } from '../../composables/useI18n';
 import { useOnboarding } from './useOnboarding';
 import SslOptions from '../SslOptions.vue';
+import { manifestFor } from '../../../../shared/engines/manifests';
 
 const { t } = useI18n();
-const { state, remoteParsed, remoteInvalid, testRemote } = useOnboarding();
+const { state, remoteParsed, remoteEngine, remoteInvalid, testRemote } = useOnboarding();
 
 // The URL's own ?sslmode= wins; any change invalidates the previous test
 watch(remoteParsed, parsed => {
@@ -41,6 +42,7 @@ watch(
       />
       <p id="onboarding-remote-url-hint" class="mt-1.5 text-xs" :class="remoteInvalid ? 'text-red-300/90' : 'text-zinc-500'">
         <template v-if="remoteInvalid">{{ t('onboarding.databases.urlInvalid') }}</template>
+        <template v-else-if="remoteEngine">{{ t('onboarding.databases.otherEngine', { engine: manifestFor(remoteEngine)?.label ?? remoteEngine }) }}</template>
         <template v-else-if="remoteParsed">
           <span class="font-mono text-zinc-400">{{ remoteParsed.host }}:{{ remoteParsed.port }}/{{ remoteParsed.database }}</span>
           · {{ remoteParsed.user }}

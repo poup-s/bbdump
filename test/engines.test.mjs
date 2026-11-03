@@ -566,3 +566,30 @@ describe('MongoDB fields offered for anonymization', () => {
   });
 });
 
+
+describe('engine of a pasted connection text', () => {
+  const { engineFromConnectionText } = require(path.join(cwd, 'dist/shared/engines/manifests.js'));
+  test('URLs by their scheme, SQL Server strings, files by their extension', () => {
+    const cases = {
+      'postgresql://u:p@db.neon.tech/app?sslmode=require': 'postgresql',
+      'postgres://u@localhost/app': 'postgresql',
+      '  mysql://app:secret@db.example.com:3306/shop ': 'mysql',
+      'mariadb://u@host/blog': 'mariadb',
+      'mongodb+srv://u:p@cluster0.mongodb.net/catalog': 'mongodb',
+      'mongodb://localhost:27017/catalog': 'mongodb',
+      'sqlserver://sa@host:1433;database=crm': 'sqlserver',
+      'jdbc:sqlserver://host:1433;databaseName=crm': 'sqlserver',
+      'Server=tcp:x.database.windows.net,1433;Initial Catalog=crm;User ID=u;': 'sqlserver',
+      'Data Source=host;Database=crm;': 'sqlserver',
+      '/Users/me/notes.sqlite': 'sqlite',
+      '~/data/app.db': 'sqlite',
+      'C:\\data\\events.duckdb': 'duckdb',
+    };
+    for (const [text, engine] of Object.entries(cases)) assert.equal(engineFromConnectionText(text), engine, text);
+  });
+  test('nothing recognisable: null', () => {
+    for (const text of ['', '   ', 'redis://localhost:6379', 'db.example.com', 'notes.sqlite', 'Server=host']) {
+      assert.equal(engineFromConnectionText(text), null, text);
+    }
+  });
+});

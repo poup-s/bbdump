@@ -2,6 +2,7 @@
 import { filePathOf } from '../../../../shared/engines/manifests';
 import { ref, computed, nextTick, onMounted, watch } from 'vue';
 import { getErrorMessage } from '../../utils';
+import { readableConnectionError } from '../../connectionError';
 import { store } from '../../store';
 import { useI18n } from '../../composables/useI18n';
 import { useConfirm } from '../../composables/useConfirm';
@@ -418,7 +419,8 @@ watch(() => store.viewerDb, (newDb, oldDb) => {
                   </svg>
                 </div>
                 <h3 class="text-lg font-bold text-red-700 dark:text-red-500 mb-2">{{ t('viewer.connectionFailed') }}</h3>
-                <p class="text-sm text-red-600 dark:text-red-400 mb-4">{{ error }}</p>
+                <p class="text-sm text-red-700 dark:text-red-300">{{ t(`connectionErrors.${readableConnectionError(error).kind}`) }}</p>
+                <p class="mt-2 mb-4 font-mono text-[11px] leading-relaxed text-red-600/80 dark:text-red-300/70 break-words">{{ readableConnectionError(error).detail }}</p>
                 <button
                   @click="loadAll"
                   class="px-4 py-2 bg-red-600 dark:bg-red-500 hover:bg-red-700 dark:hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors shadow-lg shadow-red-500/20"

@@ -9,6 +9,8 @@ import { ipcRenderer } from '../electron';
 import AppModal from './ui/AppModal.vue';
 import ModalHeading from './ui/ModalHeading.vue';
 import FormField from './ui/FormField.vue';
+import EngineMark from './ui/EngineMark.vue';
+import { databaseLocation } from '../databaseLocation';
 import { btnGhost, btnPrimary, inputClass } from './ui/classes';
 
 const ICON_FOLDER = 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z';
@@ -169,11 +171,12 @@ const save = async () => {
               :checked="form.databaseIds.includes(db.id)"
               @change="toggleDatabase(db.id)"
             />
+            <EngineMark :engine="db.engine || 'postgresql'" size="sm" />
             <span class="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[13px] text-gray-800 dark:text-zinc-200">{{ dbLabel(db) }}</span>
             <span
               class="shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium"
-              :class="db.isLocalBbdump ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400' : 'bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400'"
-            >{{ db.isLocalBbdump ? 'local' : 'external' }}</span>
+              :class="databaseLocation(db) === 'remote' || databaseLocation(db) === 'ssh' ? 'bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-zinc-400' : 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400'"
+            >{{ databaseLocation(db) === 'ssh' ? 'ssh' : t(`databases.location.${databaseLocation(db)}`) }}</span>
             <span
               v-if="otherProjectOf(db.id)"
               class="shrink-0 text-[10px] text-gray-400 dark:text-zinc-500 max-w-[8rem] overflow-hidden text-ellipsis whitespace-nowrap"

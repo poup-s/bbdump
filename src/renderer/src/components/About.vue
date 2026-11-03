@@ -25,6 +25,7 @@ interface AboutInfo {
   arch: string;
   osVersion: string;
   pgDump: { version?: string; path?: string } | null;
+  engineTools?: { name: string; engine: string; version?: string; path?: string }[];
   dataPath: string;
   logsPath: string;
   configPath: string;
@@ -141,6 +142,7 @@ const diagnostics = computed(() => {
     `bbdump ${i.version}${i.packaged ? '' : ' (dev)'}`,
     `${osName.value}`,
     `pg_dump ${i.pgDump?.version ?? (i.pgDump ? '?' : t('about.notFound'))}`,
+    ...(i.engineTools ?? []).map(tool => `${tool.name} ${tool.path ? tool.version ?? '?' : t('about.notFound')}`),
     `Electron ${i.electron} · Chromium ${i.chrome} · Node ${i.node}`,
     `${t('about.language')}: ${currentLanguage.value}`,
   ].join('\n');
@@ -279,7 +281,13 @@ const tourDate = (date?: string) => (date ? new Date(`${date}T12:00:00`).toLocal
               <dt :class="rowLabel">pg_dump</dt>
               <dd v-if="!info" :class="rowValue">…</dd>
               <dd v-else-if="info.pgDump" :class="rowValue" :title="info.pgDump.path">{{ info.pgDump.version ?? '?' }}<span v-if="info.pgDump.path" class="text-gray-400 dark:text-zinc-500"> · {{ info.pgDump.path }}</span></dd>
-              <dd v-else class="text-[12.5px] text-amber-700 dark:text-amber-400">{{ t('about.notFound') }}</dd>
+              <dd v-else class="text-[12.5px] text-gray-500 dark:text-zinc-400">{{ t('about.notFoundFor', { engine: 'PostgreSQL' }) }}</dd>
+            </div>
+            <!-- The other engines' backup tools: optional, each for its engine -->
+            <div v-for="tool in info?.engineTools ?? []" :key="tool.name" class="flex items-center justify-between gap-4">
+              <dt :class="rowLabel">{{ tool.name }}</dt>
+              <dd v-if="tool.path" :class="rowValue" :title="tool.path">{{ tool.version ?? '?' }}<span class="text-gray-400 dark:text-zinc-500"> · {{ tool.path }}</span></dd>
+              <dd v-else class="text-[12.5px] text-gray-500 dark:text-zinc-400">{{ t('about.notFoundFor', { engine: tool.engine }) }}</dd>
             </div>
             <div class="flex items-center justify-between gap-4">
               <dt :class="rowLabel">Electron</dt>

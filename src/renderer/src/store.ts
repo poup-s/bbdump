@@ -31,8 +31,12 @@ export const store = reactive({
     restoreBackupFile: null as string | null,
     restoreTargetDb: null as RestoreTarget | null,
     editingDatabase: null as Database | null,
-    /** Engine of the database being added, when it is not PostgreSQL (its own dialog) */
+    /** Engine of the database being added (its own dialog); null: the engine is chosen first */
     databaseModalEngine: null as string | null,
+    /** Adding: 'local' when the user asked for a database on this computer (the dialog opens on it) */
+    databaseModalIntent: 'connect' as 'connect' | 'local',
+    /** Adding: a connection URL pasted in the engine choice, for the engine's dialog to start from */
+    databaseModalPrefill: null as string | null,
     modalTargetSection: null as 'schedule' | null,
     showBackupModal: false,
     showExtensionsModal: false,

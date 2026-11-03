@@ -242,6 +242,17 @@ export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null
      * Tasks and Backups pages: per database, its schedule (next run, missed run, paused),
      * its last runs (successes and failures), its retention and its backup files.
      */
+    /** Database list: the result of each database's last backup run, when there is one */
+    ipcMain.handle('last-backup-results', async () => {
+        const history = backupManager.backupHistory();
+        const results: Record<string, { success: boolean; at: string; error?: string }> = {};
+        for (const db of getConfig().databases) {
+            const [last] = history.runs(db.id);
+            if (last) results[db.id] = { success: last.success, at: last.at, ...(last.error ? { error: last.error } : {}) };
+        }
+        return results;
+    });
+
     ipcMain.handle('schedule-overview', async () => {
         const config = getConfig();
         const now = new Date();
@@ -300,7 +311,29 @@ export function registerSystemHandlers(getMainWindow: () => BrowserWindow | null
         } catch (error) {
             logger.warn(`Info page: pg_dump detection failed: ${getErrorMessage(error)}`);
         }
+        // The other engines' backup tools: each one only matters for its engine
+        const engineTools: { name: string; engine: string; version?: string; path?: string }[] = [];
+        try {
+            const { findMysqlTool, mysqlToolInfo } = await import('../tools/mysqlTools');
+            const { findMongoTool, mongoToolVersion } = await import('../tools/mongoTools');
+            const { findDuckdbTool } = await import('../../shared/engines/duckdbCli');
+            const { run } = await import('../platform/probe');
+            const mysqldump = await findMysqlTool('dump', 'mysql');
+            const mariadbDump = await findMysqlTool('dump', 'mariadb');
+            const mongodump = await findMongoTool('mongodump');
+            const duckdb = findDuckdbTool();
+            engineTools.push(
+                { name: 'mysqldump', engine: 'MySQL', ...(mysqldump ? { path: mysqldump, version: (await mysqlToolInfo(mysqldump)).version } : {}) },
+                // mariadb-dump only when it is another file than mysqldump
+                ...(mariadbDump && mariadbDump !== mysqldump ? [{ name: 'mariadb-dump', engine: 'MariaDB', path: mariadbDump, version: (await mysqlToolInfo(mariadbDump)).version }] : []),
+                { name: 'mongodump', engine: 'MongoDB', ...(mongodump ? { path: mongodump, version: await mongoToolVersion(mongodump) } : {}) },
+                { name: 'duckdb', engine: 'DuckDB', ...(duckdb ? { path: duckdb, version: /v?\d+\.\d+(\.\d+)?/.exec((await run(duckdb, ['--version'])).stdout)?.[0] } : {}) },
+            );
+        } catch (error) {
+            logger.warn(`Info page: engine tools detection failed: ${getErrorMessage(error)}`);
+        }
         return {
+            engineTools,
             version: app.getVersion(),
             packaged: app.isPackaged,
             electron: process.versions.electron,

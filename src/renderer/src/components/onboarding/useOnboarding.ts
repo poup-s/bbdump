@@ -19,6 +19,7 @@ import { store } from '../../store';
 import { getErrorMessage } from '../../utils';
 import { parsePgUrl } from '../../pgUrl';
 import { useI18n } from '../../composables/useI18n';
+import { engineFromConnectionText } from '../../../../shared/engines/manifests';
 
 export type StepId = 'welcome' | 'mode' | 'machine' | 'databases' | 'folder' | 'ai' | 'ready';
 /** The four sections of the stack the progress indicator follows. */
@@ -198,7 +199,12 @@ function createOnboarding() {
   const clientToolsReady = computed(() => state.envSkipped || !!state.env?.clientTools.ready);
 
   const remoteParsed = computed(() => (state.remote.url.trim() ? parseConnectionUrl(state.remote.url) : null));
-  const remoteInvalid = computed(() => !!state.remote.url.trim() && !remoteParsed.value);
+  /** A URL for another engine (mysql://, mongodb+srv://…): its own window opens once the onboarding is done */
+  const remoteEngine = computed(() => {
+    const engine = engineFromConnectionText(state.remote.url);
+    return engine && engine !== 'postgresql' ? engine : null;
+  });
+  const remoteInvalid = computed(() => !!state.remote.url.trim() && !remoteParsed.value && !remoteEngine.value);
   /** Remote form in use: remote mode, or opened from local mode */
   const remoteActive = computed(() => state.mode === 'remote' || state.remoteOpen);
 
@@ -207,7 +213,8 @@ function createOnboarding() {
       case 'mode':
         return !!state.mode;
       case 'machine':
-        return clientToolsReady.value && !state.installing;
+        // Existing databases only: nothing to install first (the PostgreSQL tools only back up PostgreSQL)
+        return (state.mode === 'remote' || clientToolsReady.value) && !state.installing;
       case 'databases':
         return !(remoteActive.value && remoteInvalid.value) && state.remote.test !== 'testing';
       case 'folder':
@@ -371,6 +378,15 @@ function createOnboarding() {
     store.language = state.language;
     store.onboardingEntry = null;
     store.onboardingCompleted = true;
+    // A pasted URL for another engine: its window, filled from it, to finish adding it
+    const url = state.remote.url.trim();
+    if (remoteActive.value && remoteEngine.value && url) {
+      store.editingDatabase = null;
+      store.databaseModalIntent = 'connect';
+      store.databaseModalEngine = remoteEngine.value;
+      store.databaseModalPrefill = url;
+      store.showDatabaseModal = true;
+    }
   };
 
   /** Opened from the app (replay, add a local server): leave without saving anything. */
@@ -485,6 +501,7 @@ function createOnboarding() {
     recommendedMode,
     clientToolsReady,
     remoteParsed,
+    remoteEngine,
     remoteInvalid,
     remoteActive,
     canContinue,

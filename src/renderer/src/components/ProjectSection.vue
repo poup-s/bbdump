@@ -37,6 +37,15 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const { addToast } = useToast();
+
+/** A new database on this computer, in this project: its kind first */
+const openLocal = () => {
+  store.editingDatabase = null;
+  store.createDatabaseForProjectId = props.project.id;
+  store.databaseModalEngine = null;
+  store.databaseModalIntent = 'local';
+  store.showDatabaseModal = true;
+};
 const collapsed = ref(props.project.collapsed || false);
 const isDragOver = ref(false);
 const proxyPanelOpen = ref(false);
@@ -260,7 +269,7 @@ const onDrop = (event: DragEvent) => {
         <!-- Create DB in this project (needs a local server) -->
         <button
           v-if="!isRemoteOnly()"
-          @click.stop="store.createDatabaseForProjectId = project.id; store.showCreateDatabaseModal = true"
+          @click.stop="openLocal"
           class="px-2 py-1 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-gray-400 hover:text-blue-500 transition-colors flex items-center gap-1"
           :title="t('modal.createDatabase')"
         >

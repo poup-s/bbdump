@@ -183,6 +183,25 @@
 
 ### Changed
 
+- **Adding a database starts with its kind.** **Add a database** first asks which engine it is: a
+  card for PostgreSQL, MySQL, MariaDB, SQL Server, MongoDB, SQLite and DuckDB, each with its own
+  mark, or a pasted connection URL (`postgresql://`, `mysql://`, `mongodb+srv://`, `sqlserver://`,
+  `Server=…;`, a `.sqlite` or `.duckdb` path) that picks the engine by itself and fills its window.
+  A MySQL URL no longer ends on "not a PostgreSQL URL". **Create on this computer** works the same
+  way for every engine that can live here; nothing is installed before you ask, on the engine's
+  own screen. **Other kind** goes back to the choice.
+- **bbdump is no longer PostgreSQL first.** The first launch offers "Databases that already exist"
+  (nothing to install) or a PostgreSQL server here too; the PostgreSQL client tools no longer
+  block it when you only use existing databases, and a URL of another engine is recognised there
+  too (its window opens at the end). The list shows every database's engine mark and where it
+  lives: SQLite and DuckDB files count as local (they were "external", in English in French), and
+  the home page counts them so. Settings get an **Other local servers** section (MySQL / MariaDB,
+  MongoDB, SQL Server: what is installed and running, nothing installed from there), the Info page
+  lists each engine's backup tool and says which engine it is for, and the general texts no
+  longer name PostgreSQL alone. The explorer says in a sentence why a database cannot be opened
+  (server not answering, unknown address, refused login…), with the driver's message below. A
+  database's dot in the list turns red when its last backup failed, with the reason on hover
+  (it stayed green, as backups were scheduled).
 - **Dashboards**: the AI no longer puts values of different units on one chart (revenue in € and a
   number of orders), where the smaller one was flat; it makes two charts side by side.
 

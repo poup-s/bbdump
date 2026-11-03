@@ -18,6 +18,7 @@ import ConfirmModal from './components/ConfirmModal.vue';
 import DatabaseModal from './components/DatabaseModal.vue';
 import MongoDatabaseModal from './components/MongoDatabaseModal.vue';
 import SqlEngineDatabaseModal from './components/SqlEngineDatabaseModal.vue';
+import EnginePickerModal from './components/EnginePickerModal.vue';
 import { engineOf } from '../../shared/engines/features';
 import CreateDatabaseModal from './components/CreateDatabaseModal.vue';
 import RestoreBackupModal from './components/RestoreBackupModal.vue';
@@ -43,8 +44,8 @@ import AiChatPanel from './components/chat/AiChatPanel.vue';
 import DashboardsPage from './components/dashboards/DashboardsPage.vue';
 
 const { t } = useI18n();
-/** A database is added or edited in its engine's dialog */
-const databaseModalEngine = computed(() => (store.editingDatabase ? engineOf(store.editingDatabase) : store.databaseModalEngine ?? 'postgresql'));
+/** A database is added or edited in its engine's dialog; adding starts with the engine choice (null) */
+const databaseModalEngine = computed(() => (store.editingDatabase ? engineOf(store.editingDatabase) : store.databaseModalEngine));
 const isDark = useDark();
 const toggleDark = useToggle(isDark);
 useAppEvents();
@@ -183,8 +184,9 @@ const handleLoaderComplete = () => {
     
     <!-- Modals — mounted on demand via v-if for memory efficiency -->
     <Transition enter-active-class="transition duration-300 ease-out" enter-from-class="opacity-0" enter-to-class="opacity-100" leave-active-class="transition duration-200 ease-in" leave-from-class="opacity-100" leave-to-class="opacity-0">
-      <MongoDatabaseModal v-if="store.showDatabaseModal && databaseModalEngine === 'mongodb'" />
-      <SqlEngineDatabaseModal v-else-if="store.showDatabaseModal && ['mysql', 'mariadb', 'sqlserver', 'sqlite', 'duckdb'].includes(databaseModalEngine)" />
+      <EnginePickerModal v-if="store.showDatabaseModal && !databaseModalEngine" />
+      <MongoDatabaseModal v-else-if="store.showDatabaseModal && databaseModalEngine === 'mongodb'" />
+      <SqlEngineDatabaseModal v-else-if="store.showDatabaseModal && ['mysql', 'mariadb', 'sqlserver', 'sqlite', 'duckdb'].includes(databaseModalEngine!)" :key="databaseModalEngine!" />
       <DatabaseModal v-else-if="store.showDatabaseModal" />
     </Transition>
     <Transition enter-active-class="transition duration-300 ease-out" enter-from-class="opacity-0" enter-to-class="opacity-100" leave-active-class="transition duration-200 ease-in" leave-from-class="opacity-100" leave-to-class="opacity-0">

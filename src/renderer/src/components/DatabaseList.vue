@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { useLastBackups } from '../composables/useLastBackups';
 import { getErrorMessage } from '../utils';
 import { store, isRemoteOnly } from '../store';
 import { useI18n } from '../composables/useI18n';
@@ -30,6 +31,17 @@ const duplicateSourceProjectId = ref<string | null>(null);
 
 const openAddModal = () => {
   store.editingDatabase = null;
+  store.databaseModalEngine = null;
+  store.databaseModalIntent = 'connect';
+  store.showDatabaseModal = true;
+};
+
+/** A new database on this computer: its kind first (nothing is installed before the user asks) */
+const openLocalModal = (projectId: string | null) => {
+  store.editingDatabase = null;
+  store.createDatabaseForProjectId = projectId;
+  store.databaseModalEngine = null;
+  store.databaseModalIntent = 'local';
   store.showDatabaseModal = true;
 };
 
@@ -283,8 +295,17 @@ const dragOverProjectId = ref<string | null>(null);
 const dragOverPosition = ref<'above' | 'below' | null>(null);
 const ungroupedDragOver = ref(false);
 
+// The cards' dots: red when the last backup failed (refreshed after each backup)
+const { refresh: refreshLastBackups } = useLastBackups();
+const lastBackupUnsubscribers: (() => void)[] = [];
+
 onMounted(() => {
   fetchDatabaseSizes();
+  refreshLastBackups();
+  for (const channel of ['backup-complete', 'scheduled-backup-completed']) {
+    const off = ipcRenderer.on(channel, () => { refreshLastBackups(); }) as unknown;
+    if (typeof off === 'function') lastBackupUnsubscribers.push(off as () => void);
+  }
   // Badges of the databases masked for AI clients
   ipcRenderer.invoke('ai-masking-list').then((ids: string[]) => { store.aiMaskedIds = Array.isArray(ids) ? ids : []; }).catch(() => {});
 
@@ -676,6 +697,7 @@ refreshProxyStatuses();
 proxyStatusInterval = setInterval(refreshProxyStatuses, 5000);
 
 onUnmounted(() => {
+  lastBackupUnsubscribers.forEach(off => off());
   if (proxyStatusInterval) {
     clearInterval(proxyStatusInterval);
     proxyStatusInterval = null;
@@ -699,7 +721,7 @@ onUnmounted(() => {
         <!-- Create database button (needs a local server) -->
         <button
           v-if="!isRemoteOnly()"
-          @click="store.createDatabaseForProjectId = null; store.showCreateDatabaseModal = true"
+          @click="openLocalModal(null)"
           class="group relative overflow-hidden bg-gradient-to-br from-blue-600 via-blue-500 to-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-medium shadow-lg shadow-blue-500/30 hover:shadow-xl hover:shadow-blue-500/40 transition-all duration-300 flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
         >
           <div class="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700"></div>

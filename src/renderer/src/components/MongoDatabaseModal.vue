@@ -113,6 +113,12 @@ onMounted(async () => {
       section.value = 'schedule';
       store.modalTargetSection = null;
     }
+  } else {
+    // From the engine choice: the pasted URL, or "on this computer" when asked for
+    const prefill = store.databaseModalPrefill;
+    store.databaseModalPrefill = null;
+    if (prefill) { mode.value = 'url'; url.value = prefill; }
+    else if (store.databaseModalIntent === 'local' && modeOptions.value.some(option => option.value === 'local')) mode.value = 'local';
   }
   if (!backup.value.output) {
     try { backup.value.output = await ipcRenderer.invoke('get-default-path'); } catch { /* chosen below */ }
@@ -331,6 +337,7 @@ const save = async () => {
       const added = store.databases.find(d => d.engine === 'mongodb' && d.name === dbData.name && d.host === dbData.host && d.port === dbData.port);
       if (added) {
         store.newlyAddedDbId = added.id;
+        await joinProject(added.id);
         setTimeout(() => { store.newlyAddedDbId = null; }, 2000);
       }
     }
@@ -370,6 +377,7 @@ const createLocal = async () => {
     store.databases = config.databases;
     if (result.id) {
       store.newlyAddedDbId = result.id;
+      await joinProject(result.id);
       setTimeout(() => { store.newlyAddedDbId = null; }, 2000);
     }
     isLoading.value = false;
@@ -381,12 +389,31 @@ const createLocal = async () => {
   }
 };
 
+/** Added from a project's "+": the new database goes into that project */
+const joinProject = async (id: string) => {
+  const projectId = store.createDatabaseForProjectId;
+  store.createDatabaseForProjectId = null;
+  if (!projectId) return;
+  try {
+    const config = await ipcRenderer.invoke('move-database-to-project', id, projectId);
+    store.projects = config.projects;
+  } catch { /* the database stays ungrouped */ }
+};
+
 const close = () => {
   if (isLoading.value) return;
   store.showDatabaseModal = false;
   store.editingDatabase = null;
   store.databaseModalEngine = null;
+  store.databaseModalIntent = 'connect';
+  store.databaseModalPrefill = null;
+  store.createDatabaseForProjectId = null;
   store.modalTargetSection = null;
+};
+
+/** Adding: back to the choice of the kind of database */
+const otherKind = () => {
+  if (!isLoading.value) store.databaseModalEngine = null;
 };
 
 const modeOptions = computed(() => [
@@ -594,6 +621,12 @@ const meta = computed(() => (isEditing.value ? 'MongoDB' : `MongoDB · ${step.va
           <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
         </svg>
         {{ t('database.wizard.previous') }}
+      </button>
+      <button v-else-if="!isEditing" type="button" :class="btnGhost" :disabled="isLoading" @click="otherKind">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+        </svg>
+        {{ t('enginePicker.otherKind') }}
       </button>
       <button v-else type="button" :class="btnGhost" :disabled="isLoading" @click="close">{{ t('common.cancel') }}</button>
       <span class="flex-1" />

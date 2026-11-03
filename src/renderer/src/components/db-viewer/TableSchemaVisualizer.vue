@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, markRaw, nextTick, watch } from 'vue';
 import { getErrorMessage } from '../../utils';
+import { readableConnectionError } from '../../connectionError';
 import { VueFlow, useVueFlow, type Node, type Edge, type NodeMouseEvent } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
@@ -174,7 +175,8 @@ watch(() => props.schema, () => {
     <div v-if="error" class="absolute inset-0 z-10 flex flex-col items-center justify-center p-8 text-center">
       <div class="p-6 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl max-w-md">
         <h3 class="text-lg font-bold text-red-700 dark:text-red-400 mb-2">{{ t('viewer.loadError') }}</h3>
-        <p class="text-sm text-red-600 dark:text-red-300 mb-4">{{ error }}</p>
+        <p class="text-sm text-red-700 dark:text-red-300">{{ t(`connectionErrors.${readableConnectionError(error).kind}`) }}</p>
+        <p class="mt-2 mb-4 font-mono text-[11px] leading-relaxed text-red-600/80 dark:text-red-300/70 break-words">{{ readableConnectionError(error).detail }}</p>
         <button @click="loadFullSchema" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors">
           {{ t('viewer.retry') }}
         </button>

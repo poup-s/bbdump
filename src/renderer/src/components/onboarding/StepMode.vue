@@ -19,16 +19,16 @@ const cards = computed<ModeCard[]>(() => {
   const badge = (id: SelectableMode) => (ready && recommendedMode.value === id ? [t('onboarding.mode.recommended')] : []);
   return [
     {
-      id: 'local',
-      icon: 'M4 5h16v10H4zM8 19h8M12 15v4',
-      disabled: false,
-      badges: badge('local'),
-    },
-    {
       id: 'remote',
       icon: 'M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18M12 3a9 9 0 110 18 9 9 0 010-18z',
       disabled: false,
       badges: badge('remote'),
+    },
+    {
+      id: 'local',
+      icon: 'M4 5h16v10H4zM8 19h8M12 15v4',
+      disabled: false,
+      badges: badge('local'),
     },
     // No Docker card: see docs/ROADMAP.md (not promised until decided)
   ];

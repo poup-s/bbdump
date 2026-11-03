@@ -13,6 +13,7 @@ import { useConfirm } from '../composables/useConfirm';
 import { ipcRenderer } from '../electron';
 import { store, isRemoteOnly } from '../store';
 import PostgresConfig from './PostgresConfig.vue';
+import LocalServersOverview from './LocalServersOverview.vue';
 import McpClientList from './McpClientList.vue';
 import ToggleSwitch from './ui/ToggleSwitch.vue';
 import { btnSecondary } from './ui/classes';
@@ -247,7 +248,10 @@ const sections = computed(() => [
   { id: 'backups', label: t('settingsPage.sections.backups') },
   { id: 'security', label: t('settingsPage.sections.security') },
   { id: 'ai', label: t('settingsPage.sections.ai') },
-  ...(isRemoteOnly() ? [] : [{ id: 'postgres', label: t('settingsPage.sections.postgres') }]),
+  ...(isRemoteOnly() ? [] : [
+    { id: 'postgres', label: t('settingsPage.sections.postgres') },
+    { id: 'localServers', label: t('settingsPage.sections.localServers') },
+  ]),
 ]);
 const active = ref('general');
 const root = ref<HTMLElement | null>(null);
@@ -500,6 +504,12 @@ const THEMES = ['light', 'dark', 'auto'] as const;
         <section v-if="!isRemoteOnly()" data-section="postgres">
           <h3 :class="sectionHeading">{{ t('settingsPage.sections.postgres') }}</h3>
           <PostgresConfig />
+        </section>
+
+        <!-- The other engines' local servers: what is here, nothing installed from it -->
+        <section v-if="!isRemoteOnly()" data-section="localServers">
+          <h3 :class="sectionHeading">{{ t('settingsPage.sections.localServers') }}</h3>
+          <LocalServersOverview />
         </section>
       </div>
     </div>

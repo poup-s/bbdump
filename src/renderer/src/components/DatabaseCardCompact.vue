@@ -9,6 +9,9 @@ import FeatureGate from './ui/FeatureGate.vue';
 import { useFeatures } from '../composables/useFeatures';
 import { engineOf, type FeatureKey } from '../../../shared/engines/features';
 import { isFileEngine, isMysqlFamily, manifestFor } from '../../../shared/engines/manifests';
+import { databaseLocation } from '../databaseLocation';
+import { useLastBackups } from '../composables/useLastBackups';
+import EngineMark from './ui/EngineMark.vue';
 
 const props = defineProps<{
   db: Database;
@@ -90,6 +93,11 @@ const projectSiblings = computed(() => {
 const { isEnabled, feature } = useFeatures();
 const engine = computed(() => engineOf(props.db));
 const engineLabel = computed(() => manifestFor(engine.value)?.label ?? engine.value);
+const location = computed(() => databaseLocation(props.db));
+/** The last backup run failed (backup history): a red dot, the reason on hover */
+const { lastBackupOf } = useLastBackups();
+const lastBackup = computed(() => lastBackupOf(props.db.id));
+const lastFailed = computed(() => lastBackup.value?.success === false);
 const engineBeta = computed(() => feature(props.db, 'connection.test').beta);
 const canExplore = computed(() => isEnabled(props.db, 'explorer.browse') || isEnabled(props.db, 'explorer.documents'));
 
@@ -173,31 +181,29 @@ const onDragStart = (event: DragEvent) => {
     <!-- Backup status dot -->
     <div
       class="w-2 h-2 rounded-full shrink-0"
-      :class="db.enabled ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'"
-      :title="db.enabled ? t('databases.backupUp') : t('databases.backupDown')"
+      :class="lastFailed ? 'bg-red-500' : db.enabled ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600'"
+      :title="lastFailed ? t('databases.lastBackupFailed', { error: lastBackup?.error || '' }) : db.enabled ? t('databases.backupUp') : t('databases.backupDown')"
     />
 
-    <!-- Name -->
+    <!-- Name, after its engine's mark -->
     <div class="flex items-center gap-1.5 min-w-0 flex-1">
+      <span class="shrink-0 inline-flex" :title="engineLabel">
+        <EngineMark :engine="engine" size="sm" />
+        <span class="sr-only">{{ engineLabel }}</span>
+      </span>
       <span class="text-sm font-semibold truncate">
         {{ db.masked ? '••••••••' : (db.displayName || db.name) }}
       </span>
-      <span v-if="db.isLocalBbdump" class="text-[9px] px-1 py-0.5 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded font-medium shrink-0">
-        local
-      </span>
       <span
-        v-else-if="db.ssh"
+        v-if="location === 'ssh' && db.ssh"
         class="text-[9px] px-1 py-0.5 bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300 rounded font-medium shrink-0 font-mono"
         :title="t('ssh.badgeTitle', { host: db.ssh.host })"
       >ssh · {{ db.masked ? '••••' : db.ssh.host }}</span>
-      <span v-else class="text-[9px] px-1 py-0.5 bg-gray-100 dark:bg-zinc-700 text-gray-500 dark:text-gray-400 rounded font-medium shrink-0">
-        external
-      </span>
-      <!-- Another engine than PostgreSQL: named, with its beta badge -->
       <span
-        v-if="engine !== 'postgresql'"
-        class="text-[9px] px-1 py-0.5 rounded font-medium shrink-0 bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400"
-      >{{ engineLabel }}</span>
+        v-else
+        class="text-[9px] px-1 py-0.5 rounded font-medium shrink-0"
+        :class="location === 'remote' ? 'bg-gray-100 dark:bg-zinc-700 text-gray-500 dark:text-gray-400' : 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400'"
+      >{{ t(`databases.location.${location}`) }}</span>
       <span
         v-if="engineBeta"
         class="text-[9px] px-1 py-0.5 rounded font-medium shrink-0 bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400"

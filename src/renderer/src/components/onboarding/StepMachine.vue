@@ -178,7 +178,7 @@ const skipCheck = () => {
           :status="state.installing === 'client-tools' ? 'busy' : env.clientTools.ready ? 'ok' : 'missing'"
         >
           <template #aside>
-            <span class="text-[11px] text-zinc-600">{{ t('onboarding.machine.required') }}</span>
+            <span class="text-[11px] text-zinc-600">{{ local ? t('onboarding.machine.required') : t('onboarding.machine.forPostgres') }}</span>
           </template>
           <!-- Local mode with no server yet: the server packages bring the client tools
                (one install, one password prompt on Linux) -->
@@ -246,7 +246,7 @@ const skipCheck = () => {
         <button type="button" class="btn-secondary shrink-0" @click="switchToRemote">{{ t('onboarding.machine.switchToRemote') }}</button>
       </div>
 
-      <p v-if="!env.clientTools.ready && !state.installing && !toolsComeWithServer" class="text-xs text-zinc-500">{{ t('onboarding.machine.toolsRequired') }}</p>
+      <p v-if="!env.clientTools.ready && !state.installing && !toolsComeWithServer" class="text-xs text-zinc-500">{{ local ? t('onboarding.machine.toolsRequired') : t('onboarding.machine.toolsOptional') }}</p>
     </div>
   </div>
 </template>

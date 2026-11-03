@@ -4,6 +4,7 @@
  * next backup, storage), above the 3D scene. The header (52 px) and the card row (114 px)
  * keep fixed heights so the scene stays exactly where it was.
  */
+import { isOnThisComputer } from '../databaseLocation';
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
@@ -98,7 +99,7 @@ const toneClasses: Record<Tone, { card: string; dot: string; title: string }> = 
 
 // --- Databases ----------------------------------------------------------------------
 
-const localCount = computed(() => store.databases.filter(db => db.isLocalBbdump).length);
+const localCount = computed(() => store.databases.filter(db => isOnThisComputer(db)).length);
 const remoteCount = computed(() => store.databases.length - localCount.value);
 
 // --- Last and next backup ------------------------------------------------------------

@@ -8,7 +8,6 @@ import { getErrorMessage } from '../utils';
 import { store } from '../store';
 import { useI18n } from '../composables/useI18n';
 import { useToast } from '../composables/useToast';
-import { useFeatures } from '../composables/useFeatures';
 import { ipcRenderer } from '../electron';
 import { Database } from '../types';
 import { parsePgUrl } from '../pgUrl';
@@ -42,16 +41,6 @@ const ICONS = {
 };
 
 const { t } = useI18n();
-const { engineLevel } = useFeatures();
-/** Engines other than PostgreSQL, when turned on: a card each */
-const otherEngines = computed(() => [
-  { id: 'mongodb', label: 'MongoDB', description: t('mongoModal.methodDesc'), icon: ICONS.leaf },
-  { id: 'mysql', label: 'MySQL', description: t('sqlModal.mysqlMethodDesc'), icon: ICONS.database },
-  { id: 'mariadb', label: 'MariaDB', description: t('sqlModal.mariadbMethodDesc'), icon: ICONS.database },
-  { id: 'sqlserver', label: 'SQL Server', description: t('sqlModal.sqlserverMethodDesc'), icon: ICONS.database },
-  { id: 'sqlite', label: 'SQLite', description: t('sqlModal.sqliteMethodDesc'), icon: ICONS.file },
-  { id: 'duckdb', label: 'DuckDB', description: t('sqlModal.duckdbMethodDesc'), icon: ICONS.file },
-].filter(engine => engineLevel(engine.id) !== 'off'));
 const { addToast } = useToast();
 
 const isEditing = computed(() => !!store.editingDatabase);
@@ -133,6 +122,13 @@ onMounted(async () => {
       console.error('Failed to get default path', e);
     }
     form.value = emptyForm(defaultPath);
+    // A URL pasted in the engine choice: straight to the connection, filled from it
+    if (store.databaseModalPrefill) {
+      connectionMode.value = 'url';
+      connectionUrl.value = store.databaseModalPrefill;
+      store.databaseModalPrefill = null;
+      currentStep.value = 1;
+    }
   }
 });
 
@@ -433,8 +429,17 @@ const close = () => {
   store.showDatabaseModal = false;
   store.editingDatabase = null;
   store.modalTargetSection = null;
+  store.databaseModalEngine = null;
+  store.databaseModalIntent = 'connect';
+  store.databaseModalPrefill = null;
+  store.createDatabaseForProjectId = null;
   currentStep.value = 0;
   connectionMode.value = null;
+};
+
+/** Adding: back to the choice of the kind of database */
+const otherKind = () => {
+  if (!isLoading.value) store.databaseModalEngine = null;
 };
 
 // What is shown
@@ -495,21 +500,6 @@ const parsedPreview = computed(() => connectionMode.value === 'url' && connectio
           :selected="connectionMode === 'ssh'"
           @select="selectMode('ssh')"
         />
-      </div>
-      <!-- Other engines (when on): each in its own dialog -->
-      <div class="mt-5">
-        <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-gray-400 dark:text-zinc-500 mb-2">{{ t('dbModal.method.otherEngines') }}</div>
-        <div role="radiogroup" class="space-y-2">
-          <ChoiceCard
-            v-for="other in otherEngines"
-            :key="other.id"
-            :title="other.label"
-            :description="other.description"
-            :icon="other.icon"
-            :selected="false"
-            @select="store.databaseModalEngine = other.id"
-          />
-        </div>
       </div>
       <div class="mt-5">
         <div class="font-mono text-[10px] uppercase tracking-[0.16em] text-gray-400 dark:text-zinc-500 mb-2">{{ t('dbModal.method.guides') }}</div>
@@ -742,6 +732,12 @@ const parsedPreview = computed(() => connectionMode.value === 'url' && connectio
           <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
         </svg>
         {{ t('database.wizard.previous') }}
+      </button>
+      <button v-else-if="!isEditing" type="button" :class="btnGhost" :disabled="isLoading" @click="otherKind">
+        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+        </svg>
+        {{ t('enginePicker.otherKind') }}
       </button>
       <button v-else type="button" :class="btnGhost" :disabled="isLoading" @click="close">{{ t('common.cancel') }}</button>
       <span class="flex-1" />
